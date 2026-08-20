@@ -1,0 +1,9 @@
+User-agent: *
+Allow: /
+Allow: /stok/
+Allow: /blog
+Disallow: /wa
+Disallow: /s/
+Disallow: /customer-intake
+
+Sitemap: https://dr-racing.com/sitemap.xml
