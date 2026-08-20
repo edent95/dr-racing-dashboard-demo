@@ -9,9 +9,9 @@
  * login is required. Nothing here ever talks to Firebase.
  */
 
-import { buildDemoDashboardSeed } from './demoData';
+import { buildDemoDashboardSeed, DEMO_SUPER_ADMIN_NAME } from './demoData';
 
-const DEMO_SESSION = { name: 'Admin Director', role: 'Super Admin' };
+const DEMO_SESSION = { name: DEMO_SUPER_ADMIN_NAME, role: 'Super Admin' };
 
 const write = (key: string, value: unknown) => {
   window.localStorage.setItem(key, JSON.stringify(value));

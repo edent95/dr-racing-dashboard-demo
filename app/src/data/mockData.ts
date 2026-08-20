@@ -12,78 +12,78 @@ export const INITIAL_WHATSAPP_TRACKING_CLICKS: WhatsAppTrackingClick[] = [];
 export const INITIAL_ROLE_ACCOUNTS: RoleAccount[] = [
   {
     id: 'USR-005',
-    name: 'Admin Director',
-    email: 'admin-director@local.invalid',
+    name: 'DEMO SUPER ADMIN',
+    email: 'demo.superadmin@example.invalid',
     role: 'Super Admin',
     status: 'Active'
   },
   {
     id: 'USR-011',
-    name: 'AQISH',
-    email: 'aqish@local.invalid',
+    name: 'DEMO SALES 01',
+    email: 'demo.sales01@example.invalid',
     role: 'Sales',
     status: 'Active'
   },
   {
     id: 'USR-012',
-    name: 'BATRISYIA',
-    email: 'batrisyia@local.invalid',
+    name: 'DEMO SALES 02',
+    email: 'demo.sales02@example.invalid',
     role: 'Sales',
     status: 'Active'
   },
   {
     id: 'USR-013',
-    name: 'ALIAS',
-    email: 'alias@local.invalid',
+    name: 'DEMO SALES 03',
+    email: 'demo.sales03@example.invalid',
     role: 'Sales',
     status: 'Active'
   },
   {
     id: 'USR-014',
-    name: 'DZUL',
-    email: 'dzul@local.invalid',
+    name: 'DEMO SALES 04',
+    email: 'demo.sales04@example.invalid',
     role: 'Sales',
     status: 'Active'
   },
   {
     id: 'USR-015',
-    name: 'PIJAN',
-    email: 'pijan@local.invalid',
+    name: 'DEMO SALES 05',
+    email: 'demo.sales05@example.invalid',
     role: 'Sales',
     status: 'Active'
   },
   {
     id: 'USR-016',
-    name: 'EG',
-    email: 'eg@local.invalid',
+    name: 'DEMO SALES 06',
+    email: 'demo.sales06@example.invalid',
     role: 'Sales',
     status: 'Active'
   },
   {
     id: 'USR-017',
-    name: 'ZARIF',
-    email: 'zarif@local.invalid',
+    name: 'DEMO SALES 07',
+    email: 'demo.sales07@example.invalid',
     role: 'Sales',
     status: 'Active'
   },
   {
     id: 'USR-018',
-    name: 'NAJWA',
-    email: 'najwa@local.invalid',
+    name: 'DEMO SALES 08',
+    email: 'demo.sales08@example.invalid',
     role: 'Sales',
     status: 'Active'
   },
   {
     id: 'USR-019',
-    name: 'BOB',
-    email: 'bob@local.invalid',
+    name: 'DEMO SALES 09',
+    email: 'demo.sales09@example.invalid',
     role: 'Sales',
     status: 'Active'
   },
   {
     id: 'USR-020',
-    name: 'ALEEP',
-    email: 'aleep@local.invalid',
+    name: 'DEMO SALES 10',
+    email: 'demo.sales10@example.invalid',
     role: 'Sales',
     status: 'Active'
   }

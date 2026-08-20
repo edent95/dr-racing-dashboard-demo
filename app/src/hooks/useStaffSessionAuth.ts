@@ -17,7 +17,7 @@ export type StaffSession = {
 };
 
 export const DEFAULT_STAFF_SESSION: StaffSession = {
-  name: 'Admin Director',
+  name: 'DEMO SUPER ADMIN',
   role: 'Super Admin'
 };
 

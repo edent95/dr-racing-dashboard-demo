@@ -58,9 +58,13 @@ const monthKey = (offset: number) => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 };
 
-const SALES_NAMES = ['AQISH', 'BATRISYIA', 'ALIAS', 'DZUL', 'PIJAN', 'EG', 'ZARIF', 'NAJWA', 'BOB', 'ALEEP'];
-const ADMIN_NAME = 'AMIRA';
-const OPS_NAME = 'WEI SHEN';
+const SALES_NAMES = [
+  'DEMO SALES 01', 'DEMO SALES 02', 'DEMO SALES 03', 'DEMO SALES 04', 'DEMO SALES 05',
+  'DEMO SALES 06', 'DEMO SALES 07', 'DEMO SALES 08', 'DEMO SALES 09', 'DEMO SALES 10'
+] as const;
+export const DEMO_SUPER_ADMIN_NAME = 'DEMO SUPER ADMIN';
+const ADMIN_NAME = 'DEMO ADMIN';
+const OPS_NAME = 'DEMO OPERATIONS';
 
 const CUSTOMER_NAMES = [
   'Ahmad Danish Bin Roslan', 'Nur Aisyah Binti Kamal', 'Muhammad Haziq Bin Azlan', 'Siti Balqis Binti Omar',
@@ -260,7 +264,7 @@ function buildApplications(): LoanApplication[] {
         purchase_method: 'Loan',
         handler_name: handler,
         handler_role: 'Sales',
-        admin_owner_name: rand() > 0.5 ? ADMIN_NAME : 'Admin Director',
+        admin_owner_name: rand() > 0.5 ? ADMIN_NAME : DEMO_SUPER_ADMIN_NAME,
         status: plan.status,
         error_code: errorCode,
         error_codes: errorCode ? [errorCode] : [],
@@ -331,7 +335,7 @@ function buildApplications(): LoanApplication[] {
           commission_amount: randInt(150, 420),
           commission_paid_at: '',
           updated_at: daysAgo(randInt(0, 5)),
-          updated_by: 'Admin Director'
+          updated_by: DEMO_SUPER_ADMIN_NAME
         };
       }
 
@@ -400,8 +404,8 @@ function buildRawLeads(): RawCustomerLead[] {
 function buildRoleAccounts(): RoleAccount[] {
   return [
     ...INITIAL_ROLE_ACCOUNTS,
-    { id: 'USR-030', name: ADMIN_NAME, email: 'amira@local.invalid', role: 'Admin', status: 'Active' },
-    { id: 'USR-031', name: OPS_NAME, email: 'weishen@local.invalid', role: 'Operations Manager', status: 'Active' }
+    { id: 'USR-030', name: ADMIN_NAME, email: 'demo.admin@example.invalid', role: 'Admin', status: 'Active' },
+    { id: 'USR-031', name: OPS_NAME, email: 'demo.operations@example.invalid', role: 'Operations Manager', status: 'Active' }
   ];
 }
 
@@ -409,10 +413,10 @@ function buildCalendarNotes(): CalendarNote[] {
   const notes: ReadonlyArray<readonly [title: string, body: string, inDays: number, staff: string]> = [
     ['Follow up Maybank officer', 'Check status for 3 pending submissions.', 1, ADMIN_NAME],
     ['Stock delivery - 4x Y15 ZR', 'Confirm chassis numbers on arrival.', 2, OPS_NAME],
-    ['Call back approved customers', 'Two customers have accepted offers, arrange delivery slots.', 0, 'AQISH'],
-    ['Monthly marketing review', 'Compare TikTok vs Facebook cost per lead.', 5, 'Admin Director'],
+    ['Call back approved customers', 'Two customers have accepted offers, arrange delivery slots.', 0, SALES_NAMES[0]],
+    ['Monthly marketing review', 'Compare TikTok vs Facebook cost per lead.', 5, DEMO_SUPER_ADMIN_NAME],
     ['Renew road tax - shop van', 'Expires next week.', 6, OPS_NAME],
-    ['Team briefing', 'New reject-code SOP walkthrough.', 3, 'Admin Director']
+    ['Team briefing', 'New reject-code SOP walkthrough.', 3, DEMO_SUPER_ADMIN_NAME]
   ];
 
   return notes.map(([title, body, inDays, staff], index) => ({
@@ -421,7 +425,7 @@ function buildCalendarNotes(): CalendarNote[] {
     body,
     date_at: daysAhead(inDays),
     staff_name: staff,
-    staff_role: staff === 'Admin Director' ? 'Super Admin' : staff === ADMIN_NAME ? 'Admin' : staff === OPS_NAME ? 'Operations Manager' : 'Sales',
+    staff_role: staff === DEMO_SUPER_ADMIN_NAME ? 'Super Admin' : staff === ADMIN_NAME ? 'Admin' : staff === OPS_NAME ? 'Operations Manager' : 'Sales',
     created_at: daysAgo(randInt(1, 6))
   }));
 }
@@ -489,7 +493,7 @@ function buildApprovalRequests(): ApprovalRequest[] {
       id: 'DEMO-APPR-1',
       type: 'sales_discount_request',
       status: 'Pending',
-      requester_name: 'AQISH',
+      requester_name: SALES_NAMES[0],
       requester_role: 'Sales',
       approver_roles: ['Super Admin', 'Operations Manager'],
       target_type: 'customer',
@@ -504,7 +508,7 @@ function buildApprovalRequests(): ApprovalRequest[] {
       id: 'DEMO-APPR-2',
       type: 'staff_sick_leave',
       status: 'Approved',
-      requester_name: 'PIJAN',
+      requester_name: SALES_NAMES[4],
       requester_role: 'Sales',
       approver_roles: ['Super Admin', 'Operations Manager'],
       target_type: 'general',
@@ -514,7 +518,7 @@ function buildApprovalRequests(): ApprovalRequest[] {
       reason: 'Fever, clinic MC attached.',
       notes: '',
       submitted_at: daysAgo(4),
-      reviewed_by: 'Admin Director',
+      reviewed_by: DEMO_SUPER_ADMIN_NAME,
       reviewed_role: 'Super Admin',
       reviewed_at: daysAgo(3),
       review_note: 'Get well soon.'
@@ -535,7 +539,7 @@ function buildMarketingSpend(): ChannelMarketingSpend[] {
         amount: Math.round(base * (0.85 + rand() * 0.3)),
         notes: '',
         updated_at: daysAgo(offset * 30 + 1),
-        updated_by: 'Admin Director'
+        updated_by: DEMO_SUPER_ADMIN_NAME
       });
     });
   }
@@ -545,9 +549,9 @@ function buildMarketingSpend(): ChannelMarketingSpend[] {
 
 function buildWhatsAppTracking(): { links: WhatsAppTrackingLink[]; clicks: WhatsAppTrackingClick[] } {
   const links: WhatsAppTrackingLink[] = [
-    { id: 'DEMO-WA-1', label: 'TikTok bio link', sales_name: 'AQISH', phone_number: '60112345678', channel: 'TikTok', medium: 'Social media', campaign: 'tiktok-bio', message: 'Hi, saya berminat dengan motor Y15.', active: true, created_at: daysAgo(40) },
-    { id: 'DEMO-WA-2', label: 'Facebook ads CTA', sales_name: 'BATRISYIA', phone_number: '60123456789', channel: 'Facebook', medium: 'Paid ads', campaign: 'fb-august', message: 'Hi, nak tanya pasal loan motor.', active: true, created_at: daysAgo(35) },
-    { id: 'DEMO-WA-3', label: 'Google site button', sales_name: 'ZARIF', phone_number: '60134567890', channel: 'Google', medium: 'Website', campaign: 'site-cta', message: 'Hi, saya dari website.', active: true, created_at: daysAgo(28) }
+    { id: 'DEMO-WA-1', label: 'TikTok bio link', sales_name: SALES_NAMES[0], phone_number: '60112345678', channel: 'TikTok', medium: 'Social media', campaign: 'tiktok-bio', message: 'Hi, saya berminat dengan motor Y15.', active: true, created_at: daysAgo(40) },
+    { id: 'DEMO-WA-2', label: 'Facebook ads CTA', sales_name: SALES_NAMES[1], phone_number: '60123456789', channel: 'Facebook', medium: 'Paid ads', campaign: 'fb-august', message: 'Hi, nak tanya pasal loan motor.', active: true, created_at: daysAgo(35) },
+    { id: 'DEMO-WA-3', label: 'Google site button', sales_name: SALES_NAMES[6], phone_number: '60134567890', channel: 'Google', medium: 'Website', campaign: 'site-cta', message: 'Hi, saya dari website.', active: true, created_at: daysAgo(28) }
   ];
 
   const clicks: WhatsAppTrackingClick[] = [];
@@ -573,8 +577,8 @@ function buildWhatsAppTracking(): { links: WhatsAppTrackingLink[]; clicks: Whats
 
 function buildShortLinks(): CustomerIntakeShortLink[] {
   return [
-    { id: 'DEMO-SL-1', code: 'aqish-tt', full_url: 'https://dr-racing.example/customer-intake?utm_source=tiktok', source: 'TikTok', medium: 'Social media', staff_name: 'AQISH', staff_role: 'Sales', staff_utm: 'aqish', active: true, created_at: daysAgo(30) },
-    { id: 'DEMO-SL-2', code: 'batrisyia-fb', full_url: 'https://dr-racing.example/customer-intake?utm_source=facebook', source: 'Facebook', medium: 'Paid ads', staff_name: 'BATRISYIA', staff_role: 'Sales', staff_utm: 'batrisyia', active: true, created_at: daysAgo(25) }
+    { id: 'DEMO-SL-1', code: 'demo-sales01-tt', full_url: 'https://dr-racing.example/customer-intake?utm_source=tiktok', source: 'TikTok', medium: 'Social media', staff_name: SALES_NAMES[0], staff_role: 'Sales', staff_utm: 'demo-sales01', active: true, created_at: daysAgo(30) },
+    { id: 'DEMO-SL-2', code: 'demo-sales02-fb', full_url: 'https://dr-racing.example/customer-intake?utm_source=facebook', source: 'Facebook', medium: 'Paid ads', staff_name: SALES_NAMES[1], staff_role: 'Sales', staff_utm: 'demo-sales02', active: true, created_at: daysAgo(25) }
   ];
 }
 
@@ -585,7 +589,7 @@ function buildAuditLogs(applications: LoanApplication[]): AuditLogEntry[] {
   recent.forEach((app, index) => {
     logs.push({
       id: `DEMO-AUDIT-${index + 1}`,
-      staff_name: index % 3 === 0 ? 'Admin Director' : index % 3 === 1 ? ADMIN_NAME : app.handler_name,
+      staff_name: index % 3 === 0 ? DEMO_SUPER_ADMIN_NAME : index % 3 === 1 ? ADMIN_NAME : app.handler_name,
       staff_role: index % 3 === 0 ? 'Super Admin' : index % 3 === 1 ? 'Admin' : 'Sales',
       action: index % 2 === 0 ? 'UPDATE_STATUS' : 'CREATE_CUSTOMER',
       target_type: 'customer',

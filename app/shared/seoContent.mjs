@@ -21,14 +21,14 @@ export const BUSINESS_MAP_URL = 'https://maps.app.goo.gl/bMkT1k2ywqmzu4d27t';
 
 /** WhatsApp deep links, rotated per visit so leads spread evenly across the team. */
 export const AGENTS = [
-  { name: 'AQISH', url: 'https://wa.me/message/SZQL2XDQYG6RC1' },
-  { name: 'BOBBY', url: 'https://wa.me/message/CFU3S2GPXTUSH1' },
-  { name: 'PIJAN', url: 'https://wa.me/message/OKN3PJNDN776B1' },
-  { name: 'ALIFF', url: 'https://wa.me/message/VKMYIMBSACVXO1' },
-  { name: 'ALIAS', url: 'https://wa.me/message/XNY6PGHJYENAI1' },
-  { name: 'DZUL', url: 'https://wa.me/message/RI4ZGXBXWURRF1' },
-  { name: 'ZARIF', url: 'https://wa.me/message/CJ5MBHKHJDN4D1' },
-  { name: 'YAMI', url: 'https://wa.me/message/HXJOM4RRO4YHO1' }
+  { name: 'DEMO SALES 01', url: '#demo-contact' },
+  { name: 'DEMO SALES 02', url: '#demo-contact' },
+  { name: 'DEMO SALES 03', url: '#demo-contact' },
+  { name: 'DEMO SALES 04', url: '#demo-contact' },
+  { name: 'DEMO SALES 05', url: '#demo-contact' },
+  { name: 'DEMO SALES 06', url: '#demo-contact' },
+  { name: 'DEMO SALES 07', url: '#demo-contact' },
+  { name: 'DEMO SALES 08', url: '#demo-contact' }
 ];
 
 /**
