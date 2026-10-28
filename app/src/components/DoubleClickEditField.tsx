@@ -243,7 +243,7 @@ export default function DoubleClickEditField({
           }}
           tabIndex={-1}
           data-dce-anchor=""
-          className={`flex max-w-full flex-wrap gap-1.5 rounded-lg bg-slate-50 p-1.5 ring-1 ring-slate-100 ${inputClassName}`}
+          className={`flex max-w-full flex-wrap gap-1.5 rounded-control bg-slate-50 p-1.5 ring-1 ring-slate-100 ${inputClassName}`}
           aria-label={ariaLabel}
         >
           {options.map((option) => (
@@ -254,9 +254,9 @@ export default function DoubleClickEditField({
                 if (stopPropagation) event.stopPropagation();
                 commit(option.value);
               }}
-              className={`min-h-8 rounded-md px-2.5 py-1 text-[10px] font-bold transition-colors ${
+              className={`min-h-8 rounded-chip px-2.5 py-1 text-micro tracking-normal transition-colors ${
                 draftValue === option.value
-                  ? 'bg-red-800 text-white'
+                  ? 'bg-brand text-white'
                   : 'bg-white text-slate-500 ring-1 ring-slate-100 hover:bg-slate-50 hover:text-slate-900'
               }`}
             >
@@ -447,7 +447,7 @@ export default function DoubleClickEditField({
       {copyFeedback && (
         <span
           role="status"
-          className="pointer-events-none absolute -top-7 left-1/2 z-50 -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 text-[10px] font-bold text-white shadow-lg"
+          className="pointer-events-none absolute -top-7 left-1/2 z-50 -translate-x-1/2 whitespace-nowrap rounded-chip bg-slate-900 px-2 py-1 text-micro tracking-normal text-white shadow-e2"
         >
           {copyFeedback}
         </span>

@@ -49,16 +49,17 @@ export const CUSTOMER_DOCUMENT_REQUIREMENTS: Array<{
   }
 ];
 
-export function getBankRequestedDocumentKey(nextAction?: string): CustomerDocumentKey | undefined {
+/** Only the answers that name a checklist document (IC, Payslip, Bank Statement / Supporting, Vehicle Geran). */
+export function matchBankRequestedDocumentKey(nextAction?: string): CustomerDocumentKey | undefined {
   const normalizedAction = (nextAction || '').trim().toLowerCase();
 
   if (normalizedAction.includes('payslip')) {
     return 'payslip';
   }
-  if (normalizedAction.includes('bank statement')) {
+  if (normalizedAction.includes('bank statement') || normalizedAction.includes('supporting')) {
     return 'bank_statement';
   }
-  if (normalizedAction.includes('vehicle geran') || normalizedAction.includes('registration card')) {
+  if (normalizedAction.includes('geran') || normalizedAction.includes('registration card')) {
     return 'vehicle_geran';
   }
   if (/\bic\b/.test(normalizedAction)) {
@@ -66,6 +67,20 @@ export function getBankRequestedDocumentKey(nextAction?: string): CustomerDocume
   }
 
   return undefined;
+}
+
+/**
+ * The checklist item a bank document request opens. A staff-typed answer that names no
+ * checklist document ("EPF statement", "guarantor letter") is tracked as the Supporting Doc,
+ * so "+ Add new answer" in Pending Document / Follow Up Reject Bank can always be saved.
+ */
+export function getBankRequestedDocumentKey(nextAction?: string): CustomerDocumentKey | undefined {
+  const matchedKey = matchBankRequestedDocumentKey(nextAction);
+  if (matchedKey) {
+    return matchedKey;
+  }
+
+  return (nextAction || '').trim() ? 'bank_statement' : undefined;
 }
 
 export function getUploadedDocumentChecklistKey(
@@ -171,7 +186,13 @@ export function normalizeDocumentChecklist(
 export function getMissingDocumentLabels(
   application: Pick<LoanApplication, 'document_checklist' | 'payslip_documents'> & Partial<Pick<LoanApplication, 'purchase_method' | 'vehicle_condition'>>
 ) {
+  // A cash file needs no payslip or supporting document, even when the
+  // checklist still holds a "Missing" mark from when it was a loan. The
+  // drawer hides both rows for cash, so they must not block Documents Ready.
+  const isCash = application.purchase_method === 'Cash';
+
   return normalizeDocumentChecklist(application)
     .filter((item) => item.status === 'Missing')
+    .filter((item) => !isCash || (item.key !== 'payslip' && item.key !== 'bank_statement'))
     .map((item) => item.label);
 }

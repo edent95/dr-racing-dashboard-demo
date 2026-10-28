@@ -2,6 +2,41 @@ User-agent: *
 Allow: /
 Allow: /stok/
 Allow: /blog
+Allow: /kalkulator-ansuran-motor
+Disallow: /wa
+Disallow: /s/
+Disallow: /customer-intake
+
+# AI answer engines — pages now serve full server-rendered bodies, so let
+# them read the guides and stock pages. Same disallows as everyone else.
+User-agent: GPTBot
+Allow: /
+Disallow: /wa
+Disallow: /s/
+Disallow: /customer-intake
+
+User-agent: ClaudeBot
+Allow: /
+Disallow: /wa
+Disallow: /s/
+Disallow: /customer-intake
+
+# The crawlers that fetch pages to cite in live answers, as distinct from the
+# training crawlers above: ChatGPT search and Claude search.
+User-agent: OAI-SearchBot
+Allow: /
+Disallow: /wa
+Disallow: /s/
+Disallow: /customer-intake
+
+User-agent: Claude-SearchBot
+Allow: /
+Disallow: /wa
+Disallow: /s/
+Disallow: /customer-intake
+
+User-agent: PerplexityBot
+Allow: /
 Disallow: /wa
 Disallow: /s/
 Disallow: /customer-intake

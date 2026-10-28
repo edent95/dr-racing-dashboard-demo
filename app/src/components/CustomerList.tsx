@@ -5,31 +5,41 @@
 
 import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { AlertTriangle, Banknote, Car, Check, ChevronDown, ClipboardPaste, Database, Eye, EyeOff, Landmark, Link2, Plus, Trash2, Upload, X } from 'lucide-react';
+import { AlertTriangle, ArrowUpRight, Banknote, CalendarDays, Car, Check, ChevronDown, ClipboardPaste, Database, Eye, EyeOff, Landmark, Link2, MousePointerClick, Plus, Search, Share2, SlidersHorizontal, Trash2, Upload, UserRound, X, type LucideIcon } from 'lucide-react';
 import { BankApplication, BankApplicationStatus, BankDefinition, CustomerDocumentKey, CustomerEmploymentDetails, CustomerPersonalInfo, CustomerPreferences, CustomerRawMatch, CustomerRiskFlag, EmergencyContact, ErrorCodeDefinition, getLoanPendingAction, getLoanPendingWith, inferVehicleBrandFromModel, inferVehicleTagFromModel, LoanApplication, LoanPendingAction, LoanStatus, PayslipDocument, PurchaseMethod, RoleAccount, VehicleCatalogItem, VehicleCondition } from '../types';
 import BankIcon from './BankIcon';
 import DoubleClickEditField from './DoubleClickEditField';
-import MetricCards from './MetricCards';
-import { LoanApplicationCard } from './MobileAppShell';
+import FileDropZone from './FileDropZone';
+import MetricCards, { TOTAL_SALE_FILTER, TOTAL_SUBMITTED_FILTER } from './MetricCards';
 import SortableHeader, { compareSortValues, getNextSortState, SortDirection, SortState } from './SortableHeader';
 import StaffNameBadge from './StaffNameBadge';
 import StaffAvatar from './StaffAvatar';
 import ToggleOptionGroup from './ToggleOptionGroup';
 import ToggleSwitch from './ToggleSwitch';
-import { useDebouncedValue } from '../utils/tableUx';
+import StartYearMonthInput, { YearsMonthsDurationInput } from './StartYearMonthInput';
 import { formatMalaysiaPhoneForCopy, formatMalaysiaPhoneNumber as formatPhoneNumber, isBasicMalaysiaPhoneNumber as isBasicPhoneNumber } from '../utils/malaysiaPhone';
 import { getCustomerDocumentUploadLimit, getMissingDocumentLabels } from '../utils/documentChecklist';
 import { getApplicationRejectCodes } from '../utils/rejectCodes';
 import { deriveMalaysiaIcBirthDate } from '../utils/malaysiaIc';
 import { parseCustomerPasteText } from '../utils/customerPasteParser';
 import { matchesLoanApplicationFilter } from '../utils/loanFollowUpFilters';
+import { STAFF_LINK_QUEUE, isStaffLinkQueueHandler } from '../../shared/staffLinkQueue.mjs';
+import { getApplicationJourneyPosition } from '../utils/applicationJourneyStage';
+import { getRejectCodePlainTexts } from '../data/rejectCodePlainText';
+import { bankMatchesColumn, canSubmitToBankFromTable, getLoanTableBankColumns, type BankPageRequest, type LoanTableBankColumn } from '../utils/loanTableBankColumns';
+import { BANK_QUICK_ACTION_BUTTONS, BANK_QUICK_ACTION_STATUSES } from './bankQuickActions';
+import { useBrandedDialog } from './BrandedDialogProvider';
 import {
   createEmptyCustomerEmploymentDetails as createEmptyEmploymentDetails,
   createEmptyCustomerPersonalInfo as createEmptyPersonalInfo,
   createEmptyCustomerPreferences as createEmptyPreferences,
   createEmptyEmergencyContact,
+  formatYearsMonthsForBank,
   GENDER_OPTIONS,
+  getEffectiveNumberOfChildren,
+  getEmploymentDuration,
   getSalaryBankOptions,
+  hasChildrenQuestion,
   HOUSING_STATUS_OPTIONS,
   LOAN_TENURE_OPTIONS,
   MARITAL_STATUS_OPTIONS,
@@ -39,13 +49,11 @@ import {
 } from '../utils/customerApplicationForm';
 import { AppLanguage, getAppLocale, tr, trLoanStatus } from '../lib/i18n';
 import { buildPublicSiteUrl } from '../lib/publicUrls';
-import calendarIcon from '../assets/icons/content/calendar-transparent.png';
-import searchIcon from '../assets/icons/nav/search.png';
-import userIcon from '../assets/icons/nav/user.png';
-import allChannelsIcon from '../assets/icons/nav/allChannels.png';
-
-function InlineAssetIcon({ src, className = 'h-5 w-5' }: { src: string; className?: string }) {
-  return <img src={src} alt="" aria-hidden="true" className={`${className} object-contain`} />;
+import { newId } from '../utils/id';
+import { hasAdminWorkAccess } from '../utils/staffRoles';
+import { fieldLabel, fieldLabelWith, FROM_IC } from '../data/fieldLabels';
+function InlineAssetIcon({ icon: Icon, className = 'h-5 w-5' }: { icon: LucideIcon; className?: string }) {
+  return <Icon aria-hidden="true" className={className} strokeWidth={1.75} />;
 }
 
 const getPendingActionLabel = (action: LoanPendingAction) => {
@@ -194,11 +202,11 @@ function CustomerJourneyRail({ application }: { application: LoanApplication }) 
           return (
             <React.Fragment key={step}>
               <div className="flex min-w-0 flex-1 flex-col items-center gap-1">
-                <span className={`flex h-4 w-4 items-center justify-center rounded-full text-[8px] font-bold ring-2 ${nodeClass}`}>
+                <span className={`flex h-4 w-4 items-center justify-center rounded-full text-micro tracking-normal ring-2 ${nodeClass}`}>
                   {isComplete ? '✓' : index + 1}
                 </span>
                 <span
-                  className={`w-full truncate text-center text-[8px] font-bold ${isCurrent ? 'text-slate-700' : 'text-slate-400'}`}
+                  className={`w-full truncate text-center text-micro tracking-normal ${isCurrent ? 'text-slate-700' : 'text-slate-400'}`}
                   title={step}
                 >
                   {step}
@@ -211,12 +219,12 @@ function CustomerJourneyRail({ application }: { application: LoanApplication }) 
           );
         })}
       </div>
-      <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[9px] font-semibold">
+      <div className="mt-1 flex min-w-0 items-center gap-1.5 text-caption">
         <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${isJourneyClosed ? 'bg-slate-400' : 'bg-amber-500'}`} />
         <span className="truncate text-slate-600">{pendingOwner}</span>
         <span className="shrink-0 text-slate-300">·</span>
         <span className="truncate text-slate-400">{journeyAction}</span>
-        {!isCash && latestBank && <span className="shrink-0 rounded bg-slate-100 px-1 py-0.5 font-mono text-[8px] text-slate-500">R{latestBank.round_no}</span>}
+        {!isCash && latestBank && <span className="shrink-0 rounded bg-slate-100 px-1 py-0.5 font-mono text-micro tracking-normal text-slate-500">R{latestBank.round_no}</span>}
       </div>
     </div>
   );
@@ -228,6 +236,9 @@ interface CustomerListProps {
   canEditCustomers: boolean;
   canAddCustomer: boolean;
   canShareCustomerLinks: boolean;
+  // Admin's own choice to include other shops' unclaimed pool, shown only when
+  // Super Admin allows it (customers.crossShopUnclaimedPool).
+  crossShopPool?: { showAllShops: boolean; onChange: (showAllShops: boolean) => void };
   currentStaffName: string;
   currentStaffRole: RoleAccount['role'];
   defaultHandlerName: string;
@@ -257,7 +268,13 @@ interface CustomerListProps {
     }
   ) => void;
   onAddCustomer: (customer: CustomerAddDraft) => void;
-  onCreateCustomerIntakeShortLink: (fullUrl: string, source: string, medium: string) => string;
+  onCreateCustomerIntakeShortLink: (fullUrl: string, source: string, medium: string) => Promise<string>;
+  /** Present when this role may open Bank Database. */
+  onOpenBankDatabase?: () => void;
+  /** Submit a file to one bank from that bank's empty cell (Admin / Super Admin). */
+  onSubmitToBank?: (id: string, bankName: string) => Promise<boolean>;
+  /** A bank cell opens that application's bank page instead of Application Detail; a decision opens its form. */
+  onOpenBankPage?: (application: LoanApplication, target: Omit<BankPageRequest, 'id'>) => void;
 }
 
 type CustomerEditDraft = Pick<LoanApplication, 'applicant_name' | 'phone_no' | 'ic_no' | 'vehicle_plate' | 'vehicle_model' | 'handler_name' | 'handler_role'> & {
@@ -273,6 +290,8 @@ type CustomerAddDraft = CustomerEditDraft & {
   employment_details: CustomerEmploymentDetails;
   preferences: CustomerPreferences;
   payslip_documents: PayslipDocument[];
+  /** Saved as the application remark, e.g. the payslip PDF password (owner 2026-10-20). */
+  remarks: string;
 };
 
 type EditableCustomerCell = 'customer' | 'contact' | 'identity' | 'vehicle';
@@ -344,7 +363,7 @@ const CUSTOMER_CLICK_BURST_RESET_MS = 620;
 // row (~70px). Spacer offsets are computed from this estimate; if it is larger
 // than real rows (it was 172 before), the rendered slice stops covering the
 // viewport once the user scrolls, leaving a large blank area in the table.
-const CUSTOMER_ROW_ESTIMATED_HEIGHT = 64;
+const CUSTOMER_ROW_ESTIMATED_HEIGHT = 56;
 const CUSTOMER_TABLE_HEIGHT = 648;
 const CUSTOMER_OVERSCAN_ROWS = 8;
 const CUSTOMER_INITIAL_LOAD_COUNT = 80;
@@ -382,8 +401,8 @@ const CUSTOMER_LIST_COPY = {
   zh: {
     pageTitle: '贷款申请',
     pageDescription: '客户资料和贷款状态。',
-    pageDescriptionAdmin: '打开申请卡进入详情；申请详情单击复制、双击编辑。',
-    pageDescriptionReadonly: '当前负责人可编辑自己负责的资料；打开申请卡后，在详情单击复制、双击编辑。',
+    pageDescriptionAdmin: '申请详情里单击复制、双击编辑。',
+    pageDescriptionReadonly: '当前负责人可编辑自己负责的资料；点击任意一行打开详情，单击复制、双击编辑。',
     shareLink: '分享链接',
     addCustomer: '新增客户',
     allStaffData: '全部员工资料',
@@ -391,6 +410,9 @@ const CUSTOMER_LIST_COPY = {
     showAllEnabled: '已开启显示全部',
     assignedCustomers: (count: number) => `${count} 个负责客户`,
     showAll: '显示全部',
+    otherShopsPool: '其他店未认领',
+    otherShopsPoolOn: '包括其他店还没被认领的新申请',
+    otherShopsPoolOff: '只看本店未认领的新申请',
     allStaff: '全部员工',
     filterByStaff: '按员工筛选',
     staffActions: (count: number) => `${count} 个待办`,
@@ -407,25 +429,29 @@ const CUSTOMER_LIST_COPY = {
     copyShortLink: '复制短链接',
     shortLinkCopied: '短链接已复制',
     copyFailed: '复制失败',
+    shortLinkSaveFailed: '短链接保存失败，请检查网络后再试',
+    shortLinkPlaceholder: '按「复制短链接」后，链接会显示在这里',
     addNewCustomer: '新增客户',
     addNewCustomerHelp: '标 * 为必填。',
     missingRequired: (fields: string) => `还差必填项：${fields}`,
     personalInformation: '个人资料',
     customerName: '客户姓名',
-    phoneNumber: '联系电话',
-    icNumber: '身份证号',
+    phoneNumber: '电话号码',
+    icNumber: '身份证号码',
     email: '电邮',
     gender: '性别',
     maritalStatus: '婚姻状况',
     race: '种族',
-    bankName: '薪资银行',
+    bankName: '薪水银行',
     accountNumber: '银行户口号码',
     yearsAtResidence: '居住年数',
+    residenceStart: '在现址住了多久（年 / 月）',
+    numberOfChildren: '孩子数量',
     housingStatus: '住房状况',
     fullAddress: '完整地址',
     vehiclePurchase: '车辆与购买',
-    vehiclePlate: '车牌号',
-    vehicleModel: '申请车型',
+    vehiclePlate: '车牌',
+    vehicleModel: '车型',
     vehicleCondition: '新车 / 二手',
     purchaseMethod: '现金 / 贷款',
     documents: '客户文件',
@@ -441,6 +467,7 @@ const CUSTOMER_LIST_COPY = {
     companyName: '公司名称',
     position: '职位',
     yearsEmployed: '工作年数',
+    employmentStart: '开始上班（年 / 月）',
     officePhone: '公司电话',
     workHours: '工作时间',
     grossMonthlySalary: '每月总薪资',
@@ -452,11 +479,11 @@ const CUSTOMER_LIST_COPY = {
     statusPreferences: '状态与偏好',
     availableCalls: '方便接电话',
     salaryMethod: '薪资收取方式',
-    loanTenure: '贷款年期',
+    loanTenure: '贷款年期(年)',
     notSet: '未设置',
     cancel: '取消',
     createCustomer: '创建客户',
-    searchPlaceholder: '搜索客户、电话、身份证、车牌...',
+    searchPlaceholder: '搜索姓名、身份证、电话、车牌、银行...',
     gestureHint: '单击详情 · 双击复制 · 三击编辑 · 四击复制模板',
     totalItems: (count: number) => `共 ${count} 项`,
     allTime: '全部时间',
@@ -495,8 +522,8 @@ const CUSTOMER_LIST_COPY = {
   en: {
     pageTitle: 'Loan Applications',
     pageDescription: 'Customer details and loan status.',
-    pageDescriptionAdmin: 'Open an application card for details; in Application Detail, click to copy and double-click to edit.',
-    pageDescriptionReadonly: 'Assigned handlers can edit their own records from Application Detail: click to copy and double-click to edit.',
+    pageDescriptionAdmin: 'In Application Detail, click to copy and double-click to edit.',
+    pageDescriptionReadonly: 'Assigned handlers can edit their own records: click any row to open Application Detail, then click to copy and double-click to edit.',
     shareLink: 'Share Link',
     addCustomer: 'Add Customer',
     allStaffData: 'All Staff Data',
@@ -504,6 +531,9 @@ const CUSTOMER_LIST_COPY = {
     showAllEnabled: 'Show all enabled',
     assignedCustomers: (count: number) => `${count} assigned customers`,
     showAll: 'Show All',
+    otherShopsPool: "Other shops' unclaimed",
+    otherShopsPoolOn: "Including other shops' unclaimed new applications",
+    otherShopsPoolOff: 'Only your shop\'s unclaimed new applications',
     allStaff: 'All staff',
     filterByStaff: 'Filter by staff',
     staffActions: (count: number) => `${count} ${count === 1 ? 'action' : 'actions'}`,
@@ -520,25 +550,29 @@ const CUSTOMER_LIST_COPY = {
     copyShortLink: 'Copy Short Link',
     shortLinkCopied: 'Short link copied',
     copyFailed: 'Copy failed',
+    shortLinkSaveFailed: 'The short link could not be saved. Check your connection and try again',
+    shortLinkPlaceholder: 'Press Copy Short Link and the link appears here',
     addNewCustomer: 'Add New Customer',
     addNewCustomerHelp: 'Fields marked * are required.',
     missingRequired: (fields: string) => `Missing required: ${fields}`,
     personalInformation: 'Personal Information',
-    customerName: 'Customer Name',
-    phoneNumber: 'Phone Number',
-    icNumber: 'IC Number',
+    customerName: 'Customer name',
+    phoneNumber: 'Phone number',
+    icNumber: 'IC number',
     email: 'Email',
     gender: 'Gender',
     maritalStatus: 'Marital Status',
     race: 'Race',
-    bankName: 'Salary Bank',
-    accountNumber: 'Account Number',
+    bankName: 'Salary bank',
+    accountNumber: 'Bank account number',
     yearsAtResidence: 'Years at Residence',
+    residenceStart: 'Lived Here (Years / Months)',
+    numberOfChildren: 'Number of Children',
     housingStatus: 'Housing Status',
     fullAddress: 'Full Address',
     vehiclePurchase: 'Vehicle & Purchase',
-    vehiclePlate: 'Vehicle Plate',
-    vehicleModel: 'Vehicle Model',
+    vehiclePlate: 'Plate number',
+    vehicleModel: 'Vehicle model',
     vehicleCondition: 'New / Used',
     purchaseMethod: 'Cash / Loan',
     documents: 'Customer Documents',
@@ -554,6 +588,7 @@ const CUSTOMER_LIST_COPY = {
     companyName: 'Company Name',
     position: 'Position',
     yearsEmployed: 'Years Employed',
+    employmentStart: 'Started Working (Year / Month)',
     officePhone: 'Office Phone',
     workHours: 'Work Hours',
     grossMonthlySalary: 'Gross Monthly Salary',
@@ -565,11 +600,11 @@ const CUSTOMER_LIST_COPY = {
     statusPreferences: 'Status & Preferences',
     availableCalls: 'Available Calls',
     salaryMethod: 'Salary Paid By',
-    loanTenure: 'Loan Tenure',
+    loanTenure: 'Loan tenure (years)',
     notSet: 'Not set',
     cancel: 'Cancel',
     createCustomer: 'Create Customer',
-    searchPlaceholder: 'Search customer, phone, IC, plate...',
+    searchPlaceholder: 'Search name, IC, phone, plate, bank...',
     gestureHint: 'Click: detail · double: copy · triple: edit · 4x: template',
     totalItems: (count: number) => `${count} items`,
     allTime: 'All time',
@@ -608,8 +643,8 @@ const CUSTOMER_LIST_COPY = {
   ms: {
     pageTitle: 'Permohonan Pinjaman',
     pageDescription: 'Butiran pelanggan dan status pinjaman.',
-    pageDescriptionAdmin: 'Buka kad permohonan untuk butiran; dalam Butiran Permohonan, klik untuk menyalin dan klik dua kali untuk mengedit.',
-    pageDescriptionReadonly: 'Pengendali yang ditugaskan boleh mengedit rekod sendiri dari Butiran Permohonan: klik untuk menyalin dan klik dua kali untuk mengedit.',
+    pageDescriptionAdmin: 'Dalam Butiran Permohonan, klik untuk menyalin dan klik dua kali untuk mengedit.',
+    pageDescriptionReadonly: 'Pengendali yang ditugaskan boleh mengedit rekod sendiri: klik mana-mana baris untuk membuka Butiran Permohonan, kemudian klik untuk menyalin dan klik dua kali untuk mengedit.',
     shareLink: 'Kongsi Pautan',
     addCustomer: 'Tambah Pelanggan',
     allStaffData: 'Data Semua Kakitangan',
@@ -617,6 +652,9 @@ const CUSTOMER_LIST_COPY = {
     showAllEnabled: 'Paparan semua diaktifkan',
     assignedCustomers: (count: number) => `${count} pelanggan ditugaskan`,
     showAll: 'Tunjukkan Semua',
+    otherShopsPool: 'Belum dituntut kedai lain',
+    otherShopsPoolOn: 'Termasuk permohonan baharu belum dituntut kedai lain',
+    otherShopsPoolOff: 'Hanya permohonan baharu belum dituntut kedai anda',
     allStaff: 'Semua Kakitangan',
     filterByStaff: 'Tapis mengikut kakitangan',
     staffActions: (count: number) => `${count} tindakan`,
@@ -633,25 +671,29 @@ const CUSTOMER_LIST_COPY = {
     copyShortLink: 'Salin Pautan Pendek',
     shortLinkCopied: 'Pautan pendek disalin',
     copyFailed: 'Gagal menyalin',
+    shortLinkSaveFailed: 'Pautan pendek tidak dapat disimpan. Semak sambungan anda dan cuba lagi',
+    shortLinkPlaceholder: 'Tekan Salin Pautan Pendek dan pautan akan dipaparkan di sini',
     addNewCustomer: 'Tambah Pelanggan Baharu',
     addNewCustomerHelp: 'Medan bertanda * wajib diisi.',
     missingRequired: (fields: string) => `Maklumat wajib belum diisi: ${fields}`,
     personalInformation: 'Maklumat Peribadi',
-    customerName: 'Nama Pelanggan',
-    phoneNumber: 'Nombor Telefon',
+    customerName: 'Nama pelanggan',
+    phoneNumber: 'Nombor telefon',
     icNumber: 'Nombor IC',
     email: 'E-mel',
     gender: 'Jantina',
     maritalStatus: 'Status Perkahwinan',
     race: 'Bangsa',
-    bankName: 'Bank Gaji',
-    accountNumber: 'Nombor Akaun',
+    bankName: 'Bank gaji',
+    accountNumber: 'Nombor akaun bank',
     yearsAtResidence: 'Tempoh Menetap',
+    residenceStart: 'Tempoh Menetap (Tahun / Bulan)',
+    numberOfChildren: 'Bilangan Anak',
     housingStatus: 'Status Kediaman',
     fullAddress: 'Alamat Penuh',
     vehiclePurchase: 'Kenderaan & Pembelian',
-    vehiclePlate: 'Nombor Plat',
-    vehicleModel: 'Model Kenderaan',
+    vehiclePlate: 'No. plat',
+    vehicleModel: 'Model kenderaan',
     vehicleCondition: 'Baharu / Terpakai',
     purchaseMethod: 'Tunai / Pinjaman',
     documents: 'Dokumen Pelanggan',
@@ -667,6 +709,7 @@ const CUSTOMER_LIST_COPY = {
     companyName: 'Nama Syarikat',
     position: 'Jawatan',
     yearsEmployed: 'Tempoh Bekerja',
+    employmentStart: 'Mula Bekerja (Tahun / Bulan)',
     officePhone: 'Telefon Pejabat',
     workHours: 'Waktu Kerja',
     grossMonthlySalary: 'Gaji Bulanan Kasar',
@@ -678,11 +721,11 @@ const CUSTOMER_LIST_COPY = {
     statusPreferences: 'Status & Keutamaan',
     availableCalls: 'Masa Sesuai Dihubungi',
     salaryMethod: 'Kaedah Pembayaran Gaji',
-    loanTenure: 'Tempoh Pinjaman',
+    loanTenure: 'Tempoh pinjaman (tahun)',
     notSet: 'Belum ditetapkan',
     cancel: 'Batal',
     createCustomer: 'Cipta Pelanggan',
-    searchPlaceholder: 'Cari pelanggan, telefon, IC, nombor plat...',
+    searchPlaceholder: 'Cari nama, IC, telefon, nombor plat, bank...',
     gestureHint: 'Klik: butiran · dua kali: salin · tiga kali: edit · 4 kali: templat',
     totalItems: (count: number) => `${count} item`,
     allTime: 'Sepanjang Masa',
@@ -814,6 +857,68 @@ const formatSubmittedDate = (value: string) => {
   return `${day} ${month} ${year}`;
 };
 
+// Desktop Loan Applications follows the operations workbook: one column per
+// finance company (chosen in Bank Database), showing that company's latest round
+// in the workbook's words.
+const getBankTimestamp = (value?: string) => {
+  const timestamp = new Date(value || 0).getTime();
+  return Number.isFinite(timestamp) ? timestamp : 0;
+};
+
+const getLatestBankApplicationForColumn = (application: LoanApplication, column: LoanTableBankColumn) => (
+  (application.bank_applications || [])
+    .filter((bankApplication) => bankMatchesColumn(bankApplication.bank_name, column.key))
+    .sort((left, right) => (
+      (right.round_no || 0) - (left.round_no || 0) ||
+      getBankTimestamp(right.decision_at || right.approved_at || right.submitted_at) -
+        getBankTimestamp(left.decision_at || left.approved_at || left.submitted_at)
+    ))[0]
+);
+
+const getFirstBankSubmissionAt = (application: LoanApplication) => (
+  (application.bank_applications || [])
+    .filter((bankApplication) => bankApplication.status !== 'Draft' && getBankTimestamp(bankApplication.submitted_at) > 0)
+    .map((bankApplication) => bankApplication.submitted_at)
+    .sort((left, right) => getBankTimestamp(left) - getBankTimestamp(right))[0] || ''
+);
+
+const formatTableDate = (value: string) => {
+  const date = new Date(value);
+  if (!value || Number.isNaN(date.getTime())) return '';
+
+  return [
+    String(date.getDate()).padStart(2, '0'),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getFullYear()).slice(-2)
+  ].join('/');
+};
+
+// Same words as BANK_STATUS_LABELS in utils/originalLoanExport.ts (not imported
+// so the list does not pull the workbook zip library into the main bundle).
+const LOAN_TABLE_BANK_STATUS_LABEL: Record<BankApplicationStatus, string> = {
+  Draft: 'DRAFT',
+  Submitted: 'IN PROCESS',
+  'Pending Review': 'IN PROCESS',
+  'Need More Info': 'PENDING DOC',
+  Rejected: 'REJECT',
+  Approved: 'APPROVE',
+  Cancelled: 'CANCELLED'
+};
+
+const LOAN_TABLE_BANK_STATUS_CLASS: Record<BankApplicationStatus, string> = {
+  Draft: 'bg-slate-50 text-slate-400',
+  Submitted: 'bg-amber-50 text-amber-700',
+  'Pending Review': 'bg-indigo-50 text-indigo-700',
+  'Need More Info': 'bg-purple-50 text-purple-700',
+  Rejected: 'bg-rose-50 text-rose-600',
+  Approved: 'bg-emerald-50 text-emerald-700',
+  Cancelled: 'bg-slate-100 text-slate-500'
+};
+
+
+/** IC numbers are compared without dashes or spaces, so 900101-07-0001 matches 900101070001. */
+const normalizeIcQuery = (value: string) => value.replace(/[\s-]/g, '').toLowerCase();
+
 const isWithinCustomerTimeFilter = (
   submittedAt: string,
   filter: CustomerTimeFilter,
@@ -861,6 +966,47 @@ const isWithinCustomerTimeFilter = (
   }
 
   return submittedDate >= startOfLastMonth && submittedDate < startOfThisMonth;
+};
+
+/**
+ * The selected period for the cards: a heading ("Oct 2026", or "09 Sep - 08 Oct 2026")
+ * and a short range on each card ("01 Oct - 08 Oct"). All time has no range.
+ */
+const getCustomerTimeFilterPeriod = (
+  filter: CustomerTimeFilter,
+  customStartDate: string,
+  customEndDate: string,
+  allTimeLabel: string,
+  now = new Date()
+) => {
+  const locale = getAppLocale();
+  const dayMonth = (date: Date) => `${String(date.getDate()).padStart(2, '0')} ${date.toLocaleString(locale, { month: 'short' })}`;
+  const monthYear = (date: Date) => `${date.toLocaleString(locale, { month: 'short' })} ${date.getFullYear()}`;
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const daysAgo = (days: number) => new Date(now.getFullYear(), now.getMonth(), now.getDate() - days);
+  const span = (from: Date, to: Date) => ({
+    label: `${dayMonth(from)}${from.getTime() === to.getTime() ? '' : ` - ${dayMonth(to)}`} ${to.getFullYear()}`,
+    range: from.getTime() === to.getTime() ? dayMonth(from) : `${dayMonth(from)} - ${dayMonth(to)}`
+  });
+
+  if (filter === 'all') return { label: allTimeLabel, range: '' };
+  if (filter === 'today') return span(today, today);
+  if (filter === 'last_7_days') return span(daysAgo(7), today);
+  if (filter === 'last_30_days') return span(daysAgo(29), today);
+  if (filter === 'this_month') {
+    return { label: monthYear(today), range: span(new Date(today.getFullYear(), today.getMonth(), 1), today).range };
+  }
+  if (filter === 'last_month') {
+    const first = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+    return { label: monthYear(first), range: span(first, new Date(today.getFullYear(), today.getMonth(), 0)).range };
+  }
+
+  const { start, end } = getDateInputRange(customStartDate, customEndDate);
+  const lastDay = end ? new Date(end.getFullYear(), end.getMonth(), end.getDate() - 1) : undefined;
+  if (start && lastDay) return span(start, lastDay);
+  if (start) return { label: `${dayMonth(start)} ${start.getFullYear()} -`, range: `${dayMonth(start)} -` };
+  if (lastDay) return { label: `- ${dayMonth(lastDay)} ${lastDay.getFullYear()}`, range: `- ${dayMonth(lastDay)}` };
+  return { label: allTimeLabel, range: '' };
 };
 
 type CustomerSortKey =
@@ -998,15 +1144,15 @@ function BankApplicationIndicator({
           id={tooltipId}
           role="tooltip"
           data-testid={`loan-applications-bank-tooltip-${applicationId}`}
-          className="pointer-events-none fixed z-[100] rounded-lg border border-slate-200 bg-white p-3 text-left text-[11px] font-semibold text-slate-600 shadow-xl shadow-slate-200/70"
+          className="pointer-events-none fixed z-[100] rounded-control border border-slate-200 bg-white p-3 text-left text-caption text-slate-600 shadow-e3 shadow-slate-200/70"
           style={tooltipPosition}
         >
-          <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-400">
+          <span className="block text-micro uppercase text-slate-400">
             {bankApplication.bank_name} {tr('已拒绝', 'rejected', 'ditolak')}
           </span>
           <span className="mt-1 block leading-relaxed">{rejectedReason}</span>
           {bankApplication.reject_code && (
-            <span className="mt-2 inline-flex rounded-md bg-slate-100 px-2 py-0.5 font-mono text-[10px] font-bold text-slate-500">
+            <span className="mt-2 inline-flex rounded-chip bg-slate-100 px-2 py-0.5 font-mono text-micro tracking-normal text-slate-500">
               {bankApplication.reject_code}
             </span>
           )}
@@ -1036,6 +1182,12 @@ const isBasicIcNumber = (value: string) => {
 };
 
 const cleanSubmissionDigits = (value?: string) => (value || '').replace(/\D/g, '');
+
+// A start year/month (staff forms since 2026-10-13) gives "2 TAHUN 3 BULAN"; older files keep the stored years.
+const formatSubmissionDuration = (value?: string, startYear?: string, startMonth?: string) => {
+  const duration = getEmploymentDuration(startYear, startMonth);
+  return duration ? formatYearsMonthsForBank(duration) : formatSubmissionYears(value);
+};
 
 const formatSubmissionYears = (value?: string) => {
   const trimmed = (value || '').trim();
@@ -1207,7 +1359,8 @@ const createEmptyCustomerAddDraft = (handlerName: string, handlerRole: string): 
   emergency_contacts: [createEmptyEmergencyContact(), createEmptyEmergencyContact()],
   employment_details: createEmptyEmploymentDetails(),
   preferences: createEmptyPreferences(),
-  payslip_documents: []
+  payslip_documents: [],
+  remarks: ''
 });
 
 function CustomerList({
@@ -1216,6 +1369,7 @@ function CustomerList({
   canEditCustomers,
   canAddCustomer,
   canShareCustomerLinks,
+  crossShopPool,
   currentStaffName,
   currentStaffRole,
   defaultHandlerName,
@@ -1232,15 +1386,31 @@ function CustomerList({
   onUpdateCustomer,
   onUpdateLoanApplication,
   onAddCustomer,
-  onCreateCustomerIntakeShortLink
+  onCreateCustomerIntakeShortLink,
+  onOpenBankDatabase,
+  onSubmitToBank,
+  onOpenBankPage
 }: CustomerListProps) {
   const copy = CUSTOMER_LIST_COPY[language];
   const defaultHandlerRoleLabel = getRoleDisplayLabel(defaultHandlerRole, language);
-  const [searchTerm, setSearchTerm] = useState('');
+  // One search box over every field, applied on Search / Enter; Advanced search holds the time range.
+  const [searchDraft, setSearchDraft] = useState('');
+  const [appliedSearch, setAppliedSearch] = useState('');
+  const [isAdvancedSearchOpen, setIsAdvancedSearchOpen] = useState(false);
+  const updateSearchDraft = (value: string) => {
+    setSearchDraft(value);
+    // Emptying the box shows every row again without another click on Search.
+    if (!value.trim()) setAppliedSearch('');
+  };
+  const clearSearch = () => {
+    setSearchDraft('');
+    setAppliedSearch('');
+  };
   const [selectedStatusTab, setSelectedStatusTab] = useState<string>('ALL');
-  const [selectedTimeFilter, setSelectedTimeFilter] = useState<CustomerTimeFilter>('last_30_days');
+  const [selectedTimeFilter, setSelectedTimeFilter] = useState<CustomerTimeFilter>('this_month');
   const [selectedStaffFilter, setSelectedStaffFilter] = useState('all');
-  const [showCompletedJourneys, setShowCompletedJourneys] = useState(false);
+  // Completed files stay in the table by default (meeting 2026-10-13); "Hide completed" is opt-in.
+  const [showCompletedJourneys, setShowCompletedJourneys] = useState(true);
   const [customStartDate, setCustomStartDate] = useState('');
   const [customEndDate, setCustomEndDate] = useState('');
   const [isAddingCustomer, setIsAddingCustomer] = useState(false);
@@ -1251,6 +1421,7 @@ function CustomerList({
   const [shareUtmDraft, setShareUtmDraft] = useState<CustomerIntakeUtmDraft>(() => readCustomerIntakeUtmDefaults(defaultHandlerName));
   const [shareCopyMessage, setShareCopyMessage] = useState('');
   const [lastShortCustomerIntakeLink, setLastShortCustomerIntakeLink] = useState('');
+  const [isCreatingShortCustomerIntakeLink, setIsCreatingShortCustomerIntakeLink] = useState(false);
   const [editingCustomerId, setEditingCustomerId] = useState<string | null>(null);
   const [editingCell, setEditingCell] = useState<{ customerId: string; field: EditableCustomerCell } | null>(null);
   const [tableCopyMessage, setTableCopyMessage] = useState('');
@@ -1313,6 +1484,12 @@ function CustomerList({
     { value: 'last_month' as CustomerTimeFilter, label: tr('上个月', 'Last month', 'Bulan Lepas') },
     { value: 'custom' as CustomerTimeFilter, label: tr('自定义', 'Custom', 'Tersuai') }
   ]), [copy.allTime, language]);
+  const selectedPeriod = useMemo(
+    () => getCustomerTimeFilterPeriod(selectedTimeFilter, customStartDate, customEndDate, copy.allTime),
+    // language: month names follow the UI language.
+    [copy.allTime, customEndDate, customStartDate, language, selectedTimeFilter]
+  );
+  const selectedTimeFilterLabel = customerTimeFilterOptions.find((option) => option.value === selectedTimeFilter)?.label ?? copy.allTime;
   const staffLoanActionCounts = useMemo(() => {
     const todayEnd = new Date();
     todayEnd.setHours(23, 59, 59, 999);
@@ -1404,7 +1581,7 @@ function CustomerList({
       data-testid={testId}
       aria-label={copy.staffActions(count)}
       title={copy.staffActions(count)}
-      className={`inline-flex min-w-5 shrink-0 items-center justify-center rounded-full px-1.5 py-0.5 text-[10px] font-extrabold ${
+      className={`inline-flex min-w-5 shrink-0 items-center justify-center rounded-full px-1.5 py-0.5 text-micro tracking-normal ${
         count > 0 ? 'bg-rose-50 text-rose-600' : 'bg-slate-100 text-slate-400'
       }`}
     >
@@ -1415,18 +1592,26 @@ function CustomerList({
     {
       value: 'all',
       label: copy.allStaff,
-      leading: <InlineAssetIcon src={userIcon} className="h-5 w-5" />,
+      leading: <InlineAssetIcon icon={UserRound} className="h-5 w-5" />,
       trailing: renderStaffActionCount(staffLoanActionCounts.all, 'loan-staff-action-count-all')
     },
     ...(applications.some((application) => application.handler_name === 'SEO')
       ? [{
           value: 'SEO',
           label: tr('SEO · 待分配', 'SEO · Pending assignment', 'SEO · Menunggu penugasan'),
-          leading: <InlineAssetIcon src={searchIcon} className="h-5 w-5" />,
+          leading: <InlineAssetIcon icon={Search} className="h-5 w-5" />,
           trailing: renderStaffActionCount(
             staffLoanActionCounts.byStaff.get('SEO') || 0,
             'loan-staff-action-count-seo'
           )
+        }]
+      : []),
+    ...(applications.some((application) => isStaffLinkQueueHandler(application.handler_name))
+      ? [{
+          value: STAFF_LINK_QUEUE,
+          label: tr('待分配（原员工链接）', 'Unassigned (former staff link)', 'Belum ditugaskan (pautan kakitangan lama)'),
+          leading: <InlineAssetIcon icon={Link2} className="h-5 w-5" />,
+          trailing: renderStaffActionCount(0, 'loan-staff-action-count-staff-link-queue')
         }]
       : []),
     ...roleAccounts
@@ -1472,6 +1657,23 @@ function CustomerList({
     ))
   ), [customEndDate, customStartDate, selectedTimeFilter, staffFilteredApplications]);
 
+  // Total Submit / Total Sale count by when the event happened (first bank
+  // submission / delivery) inside the period, not by application date.
+  const periodSubmittedApplications = useMemo(() => staffFilteredApplications.filter((application) => {
+    const submittedAt = getFirstBankSubmissionAt(application);
+    return Boolean(submittedAt) && isWithinCustomerTimeFilter(submittedAt, selectedTimeFilter, customStartDate, customEndDate);
+  }), [customEndDate, customStartDate, selectedTimeFilter, staffFilteredApplications]);
+  const periodSoldApplications = useMemo(() => staffFilteredApplications.filter((application) => {
+    const deliveredAt = application.deal_finance?.delivery_at || '';
+    return Boolean(deliveredAt) && isWithinCustomerTimeFilter(deliveredAt, selectedTimeFilter, customStartDate, customEndDate);
+  }), [customEndDate, customStartDate, selectedTimeFilter, staffFilteredApplications]);
+  const isPeriodStatusFilter = selectedStatusTab === TOTAL_SUBMITTED_FILTER || selectedStatusTab === TOTAL_SALE_FILTER;
+  const statusBaseApplications = selectedStatusTab === TOTAL_SUBMITTED_FILTER
+    ? periodSubmittedApplications
+    : selectedStatusTab === TOTAL_SALE_FILTER
+      ? periodSoldApplications
+      : timeFilteredApplications;
+
   useEffect(() => {
     if (!showAllApplications) {
       setSelectedStaffFilter('all');
@@ -1501,16 +1703,16 @@ function CustomerList({
     }
   }, []);
 
-  const debouncedSearchTerm = useDebouncedValue(searchTerm);
   const completedJourneyCount = useMemo(() => (
-    timeFilteredApplications.filter((application) => (
-      matchesLoanApplicationFilter(application, selectedStatusTab)
+    statusBaseApplications.filter((application) => (
+      (isPeriodStatusFilter || matchesLoanApplicationFilter(application, selectedStatusTab))
       && isApplicationJourneyComplete(application)
     )).length
-  ), [selectedStatusTab, timeFilteredApplications]);
+  ), [isPeriodStatusFilter, selectedStatusTab, statusBaseApplications]);
 
   const customers = useMemo(() => {
-    const query = debouncedSearchTerm.trim().toLowerCase();
+    const query = appliedSearch.trim().toLowerCase();
+    const icQuery = normalizeIcQuery(query);
 
     const getSortValue = (application: LoanApplication) => {
       if (sortState.key === 'submitted_at') {
@@ -1528,13 +1730,14 @@ function CustomerList({
       return String(application[sortState.key] || '').toLowerCase();
     };
 
-    return timeFilteredApplications
+    return statusBaseApplications
       .filter((application) => {
-        if (!showCompletedJourneys && isApplicationJourneyComplete(application)) {
+        // A sale is a completed journey, so the period cards always list completed rows.
+        if (!isPeriodStatusFilter && !showCompletedJourneys && isApplicationJourneyComplete(application)) {
           return false;
         }
 
-        const matchesStatus = matchesLoanApplicationFilter(application, selectedStatusTab);
+        const matchesStatus = isPeriodStatusFilter || matchesLoanApplicationFilter(application, selectedStatusTab);
 
         if (!matchesStatus) {
           return false;
@@ -1551,6 +1754,7 @@ function CustomerList({
           (application.personal_info?.full_address || '').toLowerCase().includes(query) ||
           (application.personal_info?.resident_address || '').toLowerCase().includes(query) ||
           application.ic_no.toLowerCase().includes(query) ||
+          (icQuery.length > 0 && normalizeIcQuery(application.ic_no).includes(icQuery)) ||
           application.vehicle_plate.toLowerCase().includes(query) ||
           application.vehicle_model.toLowerCase().includes(query) ||
           (application.vehicle_condition || '').toLowerCase().includes(query) ||
@@ -1577,7 +1781,7 @@ function CustomerList({
         );
       })
       .sort((a, b) => compareSortValues(getSortValue(a), getSortValue(b), sortState.direction));
-  }, [errorCodeIssueMap, debouncedSearchTerm, selectedStatusTab, showCompletedJourneys, sortState, timeFilteredApplications]);
+  }, [errorCodeIssueMap, appliedSearch, isPeriodStatusFilter, selectedStatusTab, showCompletedJourneys, sortState, statusBaseApplications]);
 
   useEffect(() => {
     setTableScrollTop(0);
@@ -1585,7 +1789,7 @@ function CustomerList({
     if (tableScrollRef.current) {
       tableScrollRef.current.scrollTop = 0;
     }
-  }, [debouncedSearchTerm, selectedStaffFilter, selectedStatusTab, showCompletedJourneys, sortState.key, sortState.direction, timeFilteredApplications.length]);
+  }, [appliedSearch, selectedStaffFilter, selectedStatusTab, showCompletedJourneys, sortState.key, sortState.direction, timeFilteredApplications.length]);
 
   useEffect(() => {
     setLoadedCustomerCount((current) => Math.min(current, Math.max(customers.length, CUSTOMER_INITIAL_LOAD_COUNT)));
@@ -1615,6 +1819,76 @@ function CustomerList({
     };
   }, [loadedCustomers, tableScrollTop]);
   const visibleCustomers = virtualWindow.visibleCustomers;
+  const loanTableBankColumns = useMemo(
+    () => getLoanTableBankColumns(bankDefinitions, customers),
+    [bankDefinitions, customers]
+  );
+  const loanTableColumnCount = 5 + loanTableBankColumns.length;
+  const banksMissingFromDatabase = loanTableBankColumns.filter((column) => !column.inBankDatabase).map((column) => column.label);
+  const { showConfirm } = useBrandedDialog();
+  const [submittingBankCell, setSubmittingBankCell] = useState('');
+  // Double-clicking a bank waiting on the bank's reply opens the five decisions next to the cell.
+  const [bankDecisionMenu, setBankDecisionMenu] = useState<{
+    application: LoanApplication;
+    bankApplicationId: string;
+    bankLabel: string;
+    top: number;
+    left: number;
+  } | null>(null);
+  const bankCellClickTimerRef = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(bankCellClickTimerRef.current), []);
+  useEffect(() => {
+    if (!bankDecisionMenu) return undefined;
+    const close = () => setBankDecisionMenu(null);
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') close();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('resize', close);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('resize', close);
+    };
+  }, [bankDecisionMenu]);
+  const handleSubmitToBankCell = async (customer: LoanApplication, column: LoanTableBankColumn) => {
+    if (!onSubmitToBank || submittingBankCell) return;
+    const missingDocuments = getMissingDocumentLabels(customer);
+    if (missingDocuments.length > 0) {
+      const openApplication = await showConfirm({
+        eyebrow: tr('银行申请', 'Bank Application', 'Permohonan Bank'),
+        title: tr('还不能提交银行', 'Not ready for the bank', 'Belum boleh dihantar ke bank'),
+        message: tr(
+          `${customer.applicant_name} 还缺文件：${missingDocuments.join('、')}。先在申请详情里上传，再提交到 ${column.label}。`,
+          `${customer.applicant_name} is still missing: ${missingDocuments.join(', ')}. Upload them in the application first, then submit to ${column.label}.`,
+          `${customer.applicant_name} masih kurang: ${missingDocuments.join(', ')}. Muat naik dalam permohonan dahulu, kemudian hantar ke ${column.label}.`
+        ),
+        tone: 'warning',
+        confirmLabel: tr('打开申请', 'Open application', 'Buka permohonan')
+      });
+      if (openApplication) onSelectCustomer(customer);
+      return;
+    }
+    const confirmed = await showConfirm({
+      eyebrow: tr('银行申请', 'Bank Application', 'Permohonan Bank'),
+      title: tr('提交银行', 'Submit to Bank', 'Hantar ke Bank'),
+      message: tr(
+        `确认把 ${customer.applicant_name} 的申请提交到 ${column.label}？`,
+        `Submit ${customer.applicant_name}'s application to ${column.label}?`,
+        `Hantar permohonan ${customer.applicant_name} kepada ${column.label}?`
+      ),
+      tone: 'warning',
+      confirmLabel: tr('提交银行', 'Submit to Bank', 'Hantar ke Bank')
+    });
+    if (!confirmed) return;
+    setSubmittingBankCell(`${customer.id}:${column.key}`);
+    try {
+      await onSubmitToBank(customer.id, column.label);
+    } finally {
+      setSubmittingBankCell('');
+    }
+  };
+  const loanTableHeaderCellClass = 'whitespace-nowrap border-b border-r border-slate-200 px-2.5 font-bold last:border-r-0';
+  const loanTableBodyCellClass = 'whitespace-nowrap border-b border-r border-slate-200 px-2.5 py-2 align-middle last:border-r-0';
   const hasMoreCustomersToLoad = loadedCustomers.length < customers.length;
   const tableResultText = hasMoreCustomersToLoad
     ? tr(`已显示 ${loadedCustomers.length} / ${customers.length} 项`, `Showing ${loadedCustomers.length} / ${customers.length} items`, `Menunjukkan ${loadedCustomers.length} / ${customers.length} item`)
@@ -1829,12 +2103,13 @@ function CustomerList({
       `JANTINA : ${translateGender(personalInfo.gender)}`,
       `BANGSA : ${personalInfo.race || ''}`,
       `STATUS PERKAHWINAN : ${translateMaritalStatus(personalInfo.marital_status)}`,
+      ...(hasChildrenQuestion(personalInfo.marital_status) ? [`BILANGAN ANAK : ${getEffectiveNumberOfChildren(personalInfo)}`] : []),
       `NAMA BANK : ${personalInfo.bank_name}`,
       `NOMBOR AKAUN : ${cleanSubmissionDigits(personalInfo.account_number)}`,
       `EMAIL : ${personalInfo.email}`,
       `ALAMAT TETAP (IC) : ${personalInfo.full_address}`,
       `ALAMAT KEDIAMAN : ${personalInfo.resident_address || ''}`,
-      `MENETAP BERAPA TAHUN : ${formatSubmissionYears(personalInfo.years_at_residence)}`,
+      `MENETAP BERAPA TAHUN : ${formatSubmissionDuration(personalInfo.years_at_residence, personalInfo.residence_start_year, personalInfo.residence_start_month)}`,
       `STATUS KEDIAMAN : ${translateHousingStatus(personalInfo.housing_status)}`,
       '',
       'EMERGENCY CONTACT 1',
@@ -1857,7 +2132,7 @@ function CustomerList({
       `JAWATAN ANDA : ${employmentDetails.position}`,
       `GAJI KASAR BULANAN : ${employmentDetails.gross_monthly_salary || ''}`,
       `GAJI BERSIH BULANAN : ${employmentDetails.net_monthly_salary || ''}`,
-      `KERJA BERAPA TAHUN : ${formatSubmissionYears(employmentDetails.years_employed)}`,
+      `KERJA BERAPA TAHUN : ${formatSubmissionDuration(employmentDetails.years_employed, employmentDetails.employment_start_year, employmentDetails.employment_start_month)}`,
       `ALAMAT PENUH SYARIKAT : ${employmentDetails.company_address}`,
       `NOMBOR TELEFON PEJABAT : ${formatMalaysiaPhoneForCopy(employmentDetails.office_phone_no)}`,
       `JAM  : ${formatSubmissionWorkHours(employmentDetails.work_hours)}`,
@@ -2006,23 +2281,37 @@ function CustomerList({
   };
 
   const updateNewCustomerPersonalInfo = <K extends keyof CustomerPersonalInfo>(field: K, value: CustomerPersonalInfo[K]) => {
-    setNewCustomerDraft((current) => ({
-      ...current,
-      personal_info: {
-        ...current.personal_info,
-        [field]: value
-      }
-    }));
+    setNewCustomerDraft((current) => {
+      const personalInfo = { ...current.personal_info, [field]: value };
+      const residenceDuration = field === 'residence_start_year' || field === 'residence_start_month'
+        ? getEmploymentDuration(personalInfo.residence_start_year, personalInfo.residence_start_month)
+        : null;
+      return {
+        ...current,
+        personal_info: {
+          ...personalInfo,
+          ...(residenceDuration ? { years_at_residence: String(residenceDuration.years) } : {}),
+          ...((field === 'residence_start_year' || field === 'residence_start_month') && !personalInfo.residence_start_year && !personalInfo.residence_start_month ? { years_at_residence: '' } : {}),
+          ...(field === 'marital_status' && !hasChildrenQuestion(String(value)) ? { number_of_children: '' } : {})
+        }
+      };
+    });
   };
 
   const updateNewCustomerEmploymentDetails = <K extends keyof CustomerEmploymentDetails>(field: K, value: CustomerEmploymentDetails[K]) => {
-    setNewCustomerDraft((current) => ({
-      ...current,
-      employment_details: {
-        ...current.employment_details,
-        [field]: value
-      }
-    }));
+    setNewCustomerDraft((current) => {
+      const employmentDetails = { ...current.employment_details, [field]: value };
+      const employmentDuration = field === 'employment_start_year' || field === 'employment_start_month'
+        ? getEmploymentDuration(employmentDetails.employment_start_year, employmentDetails.employment_start_month)
+        : null;
+      return {
+        ...current,
+        employment_details: {
+          ...employmentDetails,
+          ...(employmentDuration ? { years_employed: String(employmentDuration.years) } : {})
+        }
+      };
+    });
   };
 
   const updateNewCustomerEmergencyContact = <K extends keyof EmergencyContact>(index: number, field: K, value: EmergencyContact[K]) => {
@@ -2114,6 +2403,16 @@ function CustomerList({
           `Label tanpa medan borang yang sepadan telah dilangkau: ${parsed.skipped_labels.join(', ')}.`
         )
       : '';
+    // Lines the parser could not place (an unknown heading, a note) are named, not
+    // glued onto a field, so staff can copy them in by hand.
+    const unknownLines = parsed.unknown_lines.map((line) => `「${line.slice(0, 60)}」`).join(' ');
+    const unknownMessage = parsed.unknown_lines.length > 0
+      ? tr(
+          `没认出、没填的行：${unknownLines},请手动检查。`,
+          `Lines not recognised and not filled: ${unknownLines}. Check them by hand.`,
+          `Baris tidak dikenali dan tidak diisi: ${unknownLines}. Sila semak secara manual.`
+        )
+      : '';
     const warningMessage = parsed.warnings.length > 0
       ? tr(
           '工作时长使用月份单位，已取数字填入 Years Employed，请员工确认。',
@@ -2130,6 +2429,7 @@ function CustomerList({
           `${parsed.matched_fields.length} medan diisi secara automatik. Semak sebelum mencipta pelanggan.`
         ),
         skippedMessage,
+        unknownMessage,
         warningMessage
       ].filter(Boolean).join(' ')
     });
@@ -2174,7 +2474,7 @@ function CustomerList({
     try {
       const uploadedAt = new Date().toISOString();
       const prepared = await Promise.all(files.map(async (file, index): Promise<PayslipDocument> => ({
-        id: `DOC-DRAFT-${documentKey}-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`,
+        id: newId(`DOC-DRAFT-${documentKey}`),
         document_key: documentKey,
         file_name: file.name,
         file_type: file.type,
@@ -2218,7 +2518,8 @@ function CustomerList({
 
   const handleAddCustomer = () => {
     const isCashPurchase = newCustomerDraft.purchase_method === 'Cash';
-    const isSalaryPaidByBank = !isCashPurchase && newCustomerDraft.preferences.salary_payment_method === 'Bank';
+    // Every loan keeps a bank account, cash salary too (owner 2026-10-20).
+    const keepsBankAccount = !isCashPurchase;
     const allowedDocumentKeys = new Set<CustomerDocumentKey>(getNewCustomerDocumentKeys(
       newCustomerDraft.purchase_method,
       newCustomerDraft.vehicle_condition
@@ -2243,11 +2544,14 @@ function CustomerList({
         gender: isCashPurchase ? '' : newCustomerDraft.personal_info.gender?.trim() || '',
         race: isCashPurchase ? '' : newCustomerDraft.personal_info.race?.trim() || '',
         marital_status: isCashPurchase ? '' : newCustomerDraft.personal_info.marital_status.trim(),
-        bank_name: isSalaryPaidByBank ? newCustomerDraft.personal_info.bank_name.trim() : '',
-        account_number: isSalaryPaidByBank ? newCustomerDraft.personal_info.account_number.trim() : '',
+        number_of_children: isCashPurchase ? '' : getEffectiveNumberOfChildren(newCustomerDraft.personal_info),
+        bank_name: keepsBankAccount ? newCustomerDraft.personal_info.bank_name.trim() : '',
+        account_number: keepsBankAccount ? newCustomerDraft.personal_info.account_number.trim() : '',
         full_address: newCustomerDraft.personal_info.full_address.trim(),
         resident_address: newCustomerDraft.personal_info.resident_address?.trim() || '',
         years_at_residence: isCashPurchase ? '' : newCustomerDraft.personal_info.years_at_residence.trim(),
+        residence_start_year: isCashPurchase ? '' : newCustomerDraft.personal_info.residence_start_year || '',
+        residence_start_month: isCashPurchase ? '' : newCustomerDraft.personal_info.residence_start_month || '',
         housing_status: isCashPurchase ? '' : newCustomerDraft.personal_info.housing_status.trim()
       },
       emergency_contacts: (isCashPurchase ? [] : newCustomerDraft.emergency_contacts).map((contact) => ({
@@ -2261,6 +2565,8 @@ function CustomerList({
         company_name: newCustomerDraft.employment_details.company_name.trim(),
         position: newCustomerDraft.employment_details.position.trim(),
         years_employed: newCustomerDraft.employment_details.years_employed.trim(),
+        employment_start_year: newCustomerDraft.employment_details.employment_start_year || '',
+        employment_start_month: newCustomerDraft.employment_details.employment_start_month || '',
         company_address: newCustomerDraft.employment_details.company_address.trim(),
         office_phone_no: newCustomerDraft.employment_details.office_phone_no.trim(),
         gross_monthly_salary: newCustomerDraft.employment_details.gross_monthly_salary?.trim() || '',
@@ -2275,7 +2581,8 @@ function CustomerList({
       },
       payslip_documents: newCustomerDraft.payslip_documents.filter((document) => (
         allowedDocumentKeys.has(document.document_key || 'payslip')
-      ))
+      )),
+      remarks: newCustomerDraft.remarks.trim()
     };
 
     if (!customer.applicant_name || !isBasicPhoneNumber(customer.phone_no) || !isBasicIcNumber(customer.ic_no) || !customer.vehicle_model || !customer.purchase_method) {
@@ -2316,8 +2623,19 @@ function CustomerList({
   };
 
   const copyShortCustomerIntakeLink = async (anchorElement?: HTMLElement | null) => {
+    if (isCreatingShortCustomerIntakeLink) return;
     const medium = getCustomerIntakeMedium(shareUtmDraft.source);
-    const shortLink = onCreateCustomerIntakeShortLink(customerIntakeLink, sanitizeTrackingValue(shareUtmDraft.source), medium);
+    let shortLink = '';
+    setIsCreatingShortCustomerIntakeLink(true);
+    try {
+      shortLink = await onCreateCustomerIntakeShortLink(customerIntakeLink, sanitizeTrackingValue(shareUtmDraft.source), medium);
+    } catch (error) {
+      console.warn('Customer intake short link save failed.', error);
+      setShareCopyMessage(copy.shortLinkSaveFailed);
+      return;
+    } finally {
+      setIsCreatingShortCustomerIntakeLink(false);
+    }
 
     setLastShortCustomerIntakeLink(shortLink);
     try {
@@ -2328,9 +2646,9 @@ function CustomerList({
     }
   };
 
-  const editInputClass = 'w-full select-text rounded-lg border border-slate-100 bg-white px-2.5 py-2 text-xs font-semibold text-slate-700 outline-none focus:ring-1 focus:ring-indigo-100';
-  const newCustomerLabelClass = 'text-[9px] font-bold uppercase tracking-wider text-slate-400';
-  const addSectionSummaryClass = 'flex cursor-pointer select-none list-none items-center justify-between border-b border-slate-100 pb-2 text-sm font-bold text-slate-900 [&::-webkit-details-marker]:hidden';
+  const editInputClass = 'w-full select-text rounded-control border border-slate-100 bg-white px-2.5 py-2 text-footnote text-slate-700 outline-none focus:ring-1 focus:ring-indigo-100';
+  const newCustomerLabelClass = 'text-micro uppercase text-slate-400';
+  const addSectionSummaryClass = 'flex cursor-pointer select-none list-none items-center justify-between border-b border-slate-100 pb-2 text-headline text-slate-900 [&::-webkit-details-marker]:hidden';
 
   const handleAddSectionToggle = (key: AddCustomerSectionKey) => (event: React.SyntheticEvent<HTMLDetailsElement>) => {
     const isOpen = event.currentTarget.open;
@@ -2398,7 +2716,7 @@ function CustomerList({
       </datalist>
       {copyFeedback && (
         <div
-          className="pointer-events-none fixed z-50 flex items-center gap-2 rounded-lg border border-emerald-100 bg-white px-3 py-2 text-xs font-bold text-slate-800 shadow-xl shadow-slate-200/70"
+          className="pointer-events-none fixed z-50 flex items-center gap-2 rounded-control border border-emerald-100 bg-white px-3 py-2 text-footnote font-bold text-slate-800 shadow-e3 shadow-slate-200/70"
           style={{
             left: copyFeedback.left,
             top: copyFeedback.top,
@@ -2414,8 +2732,8 @@ function CustomerList({
 
       <section className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div className="space-y-1">
-          <h2 className="text-xl font-bold tracking-tight text-slate-900">{copy.pageTitle}</h2>
-          <p className="max-w-2xl text-xs font-light leading-relaxed text-slate-500">
+          <h2 className="text-title-2 text-slate-900">{copy.pageTitle}</h2>
+          <p className="max-w-2xl text-footnote font-normal leading-relaxed text-slate-500">
             {copy.pageDescription} {canEditCustomers ? copy.pageDescriptionAdmin : copy.pageDescriptionReadonly}
           </p>
         </div>
@@ -2425,9 +2743,9 @@ function CustomerList({
             <button
               type="button"
               onClick={(event) => void copyShortCustomerIntakeLink(event.currentTarget)}
-              className="inline-flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-2 text-xs font-bold text-slate-700 ring-1 ring-slate-100 transition-colors hover:bg-slate-50"
+              className="inline-flex items-center justify-center gap-2 rounded-control bg-white px-4 py-2 text-footnote font-bold text-slate-700 ring-1 ring-slate-100 transition-colors hover:bg-slate-50"
             >
-              <InlineAssetIcon src={allChannelsIcon} />
+              <InlineAssetIcon icon={Share2} />
               {copy.shareLink}
             </button>
           )}
@@ -2435,7 +2753,7 @@ function CustomerList({
             <button
               type="button"
               onClick={() => setIsAddingCustomer((current) => !current)}
-              className="inline-flex items-center justify-center gap-2 rounded-lg bg-red-800 px-4 py-2 text-xs font-bold text-white transition-colors hover:bg-red-900"
+              className="inline-flex items-center justify-center gap-2 rounded-control bg-brand px-4 py-2 text-footnote font-bold text-white transition-colors hover:bg-brand-deep"
             >
               <Plus className="h-4 w-4 text-white/90" aria-hidden="true" />
               {copy.addCustomer}
@@ -2453,15 +2771,15 @@ function CustomerList({
               />
             </div>
           )}
-          {currentStaffRole === 'Super Admin' && <div className="w-full rounded-xl border border-slate-100 bg-white px-3 py-2 shadow-sm lg:w-[330px]">
+          {currentStaffRole === 'Super Admin' && <div className="w-full rounded-card border border-slate-100 bg-white px-3 py-2 shadow-e1 lg:w-[330px]">
             <div className="flex items-center justify-between gap-3">
               <div className="flex min-w-0 items-center gap-3">
-                <InlineAssetIcon src={userIcon} className="h-10 w-10 shrink-0" />
+                <InlineAssetIcon icon={UserRound} className="h-7 w-7 shrink-0" />
                 <div className="min-w-0 leading-tight">
-                  <p className="truncate text-xs font-bold text-slate-900">
+                  <p className="truncate text-footnote font-bold text-slate-900">
                     {showAllApplications ? copy.allStaffData : copy.staffData(defaultHandlerName)}
                   </p>
-                  <p className="mt-0.5 text-[11px] font-semibold text-slate-400">
+                  <p className="mt-0.5 text-caption text-slate-400">
                     {showAllApplications ? copy.showAllEnabled : copy.assignedCustomers(applications.length)}
                   </p>
                 </div>
@@ -2477,22 +2795,34 @@ function CustomerList({
               />
             </div>
           </div>}
+          {crossShopPool && (
+            <div className="w-full rounded-card border border-slate-100 bg-white px-3 py-2 shadow-e1 lg:w-[330px]">
+              <ToggleSwitch
+                id="customer-cross-shop-pool-toggle"
+                checked={crossShopPool.showAllShops}
+                onChange={(checked) => crossShopPool.onChange(checked)}
+                label={copy.otherShopsPool}
+                description={crossShopPool.showAllShops ? copy.otherShopsPoolOn : copy.otherShopsPoolOff}
+                className="w-full bg-slate-50 ring-1 ring-slate-100"
+              />
+            </div>
+          )}
         </div>
       </section>
 
       {canShareCustomerLinks && isSharingCustomerLink && (
-        <section className="rounded-xl border border-blue-100 bg-white p-5 shadow-sm">
+        <section className="rounded-card border border-blue-100 bg-white p-5 shadow-e1">
           <div className="mb-4 flex items-center justify-between gap-3">
             <div>
-              <h3 className="text-sm font-bold text-slate-900">{copy.shareCustomerIntakeLink}</h3>
-              <p className="mt-1 text-xs text-slate-400">
+              <h3 className="text-headline text-slate-900">{copy.shareCustomerIntakeLink}</h3>
+              <p className="mt-1 text-footnote text-slate-400">
                 {copy.shareCustomerHelp}
               </p>
             </div>
             <button
               type="button"
               onClick={() => setIsSharingCustomerLink(false)}
-              className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-50 hover:text-slate-600"
+              className="rounded-control p-2 text-slate-400 transition-colors hover:bg-slate-50 hover:text-slate-600"
               aria-label="Close share link form"
             >
               <X className="h-4 w-4" />
@@ -2501,7 +2831,7 @@ function CustomerList({
 
           <div className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_220px]">
             <label className="flex flex-col gap-1.5">
-              <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400">{copy.customerCameFrom}</span>
+              <span className="text-micro uppercase text-slate-400">{copy.customerCameFrom}</span>
               <input
                 list="customer-source-options"
                 value={shareUtmDraft.source}
@@ -2520,28 +2850,28 @@ function CustomerList({
                 <option value="Referral" />
               </datalist>
             </label>
-            <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
-              <p className="text-[9px] font-bold uppercase tracking-wider text-slate-400">{copy.autoTracking}</p>
-              <p className="mt-1 text-xs font-bold text-slate-700">{getCustomerIntakeMedium(shareUtmDraft.source)}</p>
-              <p className="mt-0.5 truncate text-[10px] font-semibold text-slate-400" title={defaultHandlerName}>
+            <div className="rounded-control border border-slate-100 bg-slate-50 px-3 py-2">
+              <p className="text-micro uppercase text-slate-400">{copy.autoTracking}</p>
+              <p className="mt-1 text-footnote font-bold text-slate-700">{getCustomerIntakeMedium(shareUtmDraft.source)}</p>
+              <p className="mt-0.5 truncate text-caption text-slate-400" title={defaultHandlerName}>
                 {copy.staff}: {defaultHandlerName}
               </p>
             </div>
           </div>
 
-          <div className="mt-3 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
-            <p className="mb-1 text-[9px] font-bold uppercase tracking-wider text-slate-400">{copy.customerIntakeUrl}</p>
-            <p className="break-all font-mono text-[11px] text-slate-600">{customerIntakeLink}</p>
-            {lastShortCustomerIntakeLink && (
-              <>
-                <p className="mb-1 mt-3 text-[9px] font-bold uppercase tracking-wider text-slate-400">{copy.shortLink}</p>
-                <p className="break-all font-mono text-[11px] font-bold text-blue-600">{lastShortCustomerIntakeLink}</p>
-              </>
+          <div className="mt-3 rounded-control border border-slate-100 bg-slate-50 px-3 py-2">
+            {/* Only the saved short link is shown: the raw form URL carries no
+                link code, so a submission from it could not be traced. */}
+            <p className="mb-1 text-micro uppercase text-slate-400">{copy.shortLink}</p>
+            {lastShortCustomerIntakeLink ? (
+              <p className="break-all font-mono text-caption font-semibold text-blue-600">{lastShortCustomerIntakeLink}</p>
+            ) : (
+              <p className="text-caption text-slate-400">{copy.shortLinkPlaceholder}</p>
             )}
           </div>
 
           <div className="mt-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-            <p className="text-[11px] font-semibold text-slate-400">
+            <p className="text-caption text-slate-400">
               {shareCopyMessage || `${copy.handler}: ${defaultHandlerName} / ${defaultHandlerRoleLabel}`}
             </p>
             <div className="flex gap-2">
@@ -2549,15 +2879,15 @@ function CustomerList({
                 type="button"
                 onClick={saveShareUtmDefault}
                 disabled={!canShareCustomerIntakeLink}
-                className="rounded-lg bg-slate-50 px-4 py-2 text-xs font-bold text-slate-500 transition-colors hover:bg-slate-100 disabled:bg-slate-100 disabled:text-slate-300"
+                className="rounded-control bg-slate-50 px-4 py-2 text-footnote font-bold text-slate-500 transition-colors hover:bg-slate-100 disabled:bg-slate-100 disabled:text-slate-300"
               >
                 {copy.saveDefaultSource}
               </button>
               <button
                 type="button"
                 onClick={(event) => void copyShortCustomerIntakeLink(event.currentTarget)}
-                disabled={!canShareCustomerIntakeLink}
-                className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-xs font-bold text-white transition-colors hover:bg-blue-700 disabled:bg-slate-200 disabled:text-slate-400"
+                disabled={!canShareCustomerIntakeLink || isCreatingShortCustomerIntakeLink}
+                className="inline-flex items-center gap-2 rounded-control bg-blue-600 px-4 py-2 text-footnote font-bold text-white transition-colors hover:bg-blue-700 disabled:bg-slate-200 disabled:text-slate-400"
               >
                 <Link2 className="h-4 w-4" />
                 {copy.copyShortLink}
@@ -2568,32 +2898,32 @@ function CustomerList({
       )}
 
       {canAddCustomer && isAddingCustomer && (
-        <section className="rounded-xl border border-indigo-100 bg-white p-5 shadow-sm">
+        <section className="rounded-card border border-indigo-100 bg-white p-5 shadow-e1">
           <div className="mb-4 flex items-center justify-between">
             <div>
-              <h3 className="text-sm font-bold text-slate-900">{copy.addNewCustomer}</h3>
-              <p className="mt-1 text-xs text-slate-400">{copy.addNewCustomerHelp}</p>
+              <h3 className="text-headline text-slate-900">{copy.addNewCustomer}</h3>
+              <p className="mt-1 text-footnote text-slate-400">{copy.addNewCustomerHelp}</p>
             </div>
             <button
               type="button"
               onClick={resetNewCustomerDraft}
-              className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-50 hover:text-slate-600"
+              className="rounded-control p-2 text-slate-400 transition-colors hover:bg-slate-50 hover:text-slate-600"
               aria-label="Close add customer form"
             >
               <X className="h-4 w-4" />
             </button>
           </div>
 
-          <section className="mb-5 rounded-xl border border-blue-100 bg-blue-50/40 p-4">
+          <section className="mb-5 rounded-card border border-blue-100 bg-blue-50/40 p-4">
             <div className="flex items-start gap-3">
-              <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white text-blue-600 ring-1 ring-blue-100">
+              <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-control bg-white text-blue-600 ring-1 ring-blue-100">
                 <ClipboardPaste className="h-4 w-4" />
               </span>
               <div className="min-w-0 flex-1">
-                <h4 className="text-sm font-bold text-slate-900">
+                <h4 className="text-headline text-slate-900">
                   {tr('粘贴客户资料自动填表', 'Paste Customer Details to Auto-fill', 'Tampal Butiran Pelanggan untuk Isi Automatik')}
                 </h4>
-                <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                <p className="mt-1 text-footnote leading-relaxed text-slate-500">
                   {tr(
                     '粘贴 YAMI / WhatsApp 的完整资料，系统会依马来文标签和区段填入下方表单。',
                     'Paste the full YAMI or WhatsApp details. Malay labels and sections will be mapped into the form below.',
@@ -2619,14 +2949,14 @@ function CustomerList({
                     'Tampal butiran penuh daripada NAMA PENUH hingga LOAN BERAPA TAHUN di sini…'
                   )}
                   aria-label="Paste customer details for auto-fill"
-                  className="mt-3 min-h-32 w-full resize-y rounded-lg border border-blue-100 bg-white px-3 py-2.5 font-mono text-xs leading-relaxed text-slate-700 outline-none focus:ring-2 focus:ring-blue-100"
+                  className="mt-3 min-h-32 w-full resize-y rounded-control border border-blue-100 bg-white px-3 py-2.5 font-mono text-footnote leading-relaxed text-slate-700 outline-none focus:ring-2 focus:ring-blue-100"
                 />
                 <div className="mt-3 flex flex-wrap items-center gap-2">
                   <button
                     type="button"
                     onClick={() => applyPastedCustomerDetails(customerPasteText)}
                     disabled={!customerPasteText.trim()}
-                    className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-xs font-bold text-white transition-colors hover:bg-blue-700 disabled:bg-slate-200 disabled:text-slate-400"
+                    className="inline-flex items-center gap-2 rounded-control bg-blue-600 px-3 py-2 text-footnote font-bold text-white transition-colors hover:bg-blue-700 disabled:bg-slate-200 disabled:text-slate-400"
                   >
                     <ClipboardPaste className="h-3.5 w-3.5" />
                     {tr('检测并填入表单', 'Detect & Fill Form', 'Kesan & Isi Borang')}
@@ -2638,7 +2968,7 @@ function CustomerList({
                         setCustomerPasteText('');
                         setCustomerPasteFeedback(null);
                       }}
-                      className="rounded-lg px-3 py-2 text-xs font-bold text-slate-500 transition-colors hover:bg-white hover:text-slate-700"
+                      className="rounded-control px-3 py-2 text-footnote font-bold text-slate-500 transition-colors hover:bg-white hover:text-slate-700"
                     >
                       {tr('清除粘贴内容', 'Clear pasted text', 'Kosongkan teks')}
                     </button>
@@ -2647,7 +2977,7 @@ function CustomerList({
                 {customerPasteFeedback && (
                   <p
                     role={customerPasteFeedback.tone === 'error' ? 'alert' : 'status'}
-                    className={`mt-3 rounded-lg px-3 py-2 text-xs font-semibold leading-relaxed ${
+                    className={`mt-3 rounded-control px-3 py-2 text-footnote leading-relaxed ${
                       customerPasteFeedback.tone === 'error'
                         ? 'bg-rose-50 text-rose-700'
                         : 'bg-emerald-50 text-emerald-700'
@@ -2661,7 +2991,7 @@ function CustomerList({
           </section>
 
           <section id="new-customer-purchase-method-field" className="space-y-3">
-            <h4 className="text-sm font-bold text-slate-900">
+            <h4 className="text-headline text-slate-900">
               {tr('购买方式', 'Purchase Method', 'Kaedah Pembelian')}{requiredMark}
             </h4>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -2698,16 +3028,16 @@ function CustomerList({
                       ...current,
                       purchase_method: value
                     }))}
-                    className={`flex items-start gap-3 rounded-xl border p-4 text-left transition-colors ${
+                    className={`flex items-start gap-3 rounded-card border p-4 text-left transition-colors ${
                       selected
-                        ? 'border-red-200 bg-red-50 text-red-900 ring-1 ring-red-100'
+                        ? 'border-brand-100 bg-brand-50 text-brand-ink ring-1 ring-brand-100'
                         : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
                     }`}
                   >
-                    <Icon className={`mt-0.5 h-5 w-5 shrink-0 ${selected ? 'text-red-700' : 'text-slate-400'}`} />
+                    <Icon className={`mt-0.5 h-5 w-5 shrink-0 ${selected ? 'text-brand-ink' : 'text-slate-400'}`} />
                     <span>
-                      <span className="block text-sm font-bold">{label}</span>
-                      <span className="mt-1 block text-xs font-medium leading-relaxed text-slate-500">{helper}</span>
+                      <span className="block text-headline">{label}</span>
+                      <span className="mt-1 block text-footnote font-medium leading-relaxed text-slate-500">{helper}</span>
                     </span>
                   </button>
                 );
@@ -2745,7 +3075,7 @@ function CustomerList({
                     inputMode="tel"
                   />
                   {newCustomerDraft.phone_no && !newCustomerPhoneValid && (
-                    <span className="text-[10px] font-semibold text-rose-500">
+                    <span className="text-caption text-rose-500">
                       {tr('电话号码格式不正确', 'Invalid phone number', 'Format nombor telefon tidak sah')}
                     </span>
                   )}
@@ -2761,13 +3091,13 @@ function CustomerList({
                     inputMode="numeric"
                   />
                   {newCustomerDraft.ic_no && !newCustomerIcValid && (
-                    <span className="text-[10px] font-semibold text-rose-500">
+                    <span className="text-caption text-rose-500">
                       {tr('IC 的出生日期或格式不正确', 'Invalid IC birth date or format', 'Tarikh lahir atau format IC tidak sah')}
                     </span>
                   )}
                 </label>
                 <label className="flex flex-col gap-1.5">
-                  <span className={newCustomerLabelClass}>{tr('出生日期（IC 自动识别）', 'Date of Birth (auto-detected from IC)', 'Tarikh Lahir (dikesan daripada IC)')}</span>
+                  <span className={newCustomerLabelClass}>{fieldLabelWith('dateOfBirth', FROM_IC)}</span>
                   <input
                     value={deriveMalaysiaIcBirthDate(newCustomerDraft.ic_no)}
                     readOnly
@@ -2797,7 +3127,8 @@ function CustomerList({
                             ]}
                             onChange={(value) => updateNewCustomerPersonalInfo('gender', value)}
                             ariaLabel="New customer gender"
-                            className="rounded-lg bg-white p-1 ring-1 ring-slate-100"
+                            className="w-full"
+                            optionClassName="!px-2.5 !py-2 !font-normal"
                           />
                         </label>
                         <label className="flex flex-col gap-1.5">
@@ -2810,7 +3141,8 @@ function CustomerList({
                             ]}
                             onChange={(value) => updateNewCustomerPersonalInfo('race', value)}
                             ariaLabel="New customer race"
-                            className="rounded-lg bg-white p-1 ring-1 ring-slate-100"
+                            className="w-full"
+                            optionClassName="!px-2.5 !py-2 !font-normal"
                           />
                         </label>
                     <label className="flex flex-col gap-1.5">
@@ -2823,19 +3155,32 @@ function CustomerList({
                         ]}
                         onChange={(value) => updateNewCustomerPersonalInfo('marital_status', value)}
                         ariaLabel="New customer marital status"
-                        className="rounded-lg bg-white p-1 ring-1 ring-slate-100"
+                        className="w-full"
+                        optionClassName="!px-2.5 !py-2 !font-normal"
                       />
                     </label>
-                    <label className="flex flex-col gap-1.5">
-                      <span className={newCustomerLabelClass}>{copy.yearsAtResidence}</span>
-                      <input
-                        value={newCustomerDraft.personal_info.years_at_residence}
-                        onChange={(event) => updateNewCustomerPersonalInfo('years_at_residence', event.target.value.replace(/\D/g, ''))}
-                        placeholder="Years"
-                        className={editInputClass}
-                        inputMode="numeric"
-                      />
-                    </label>
+                    {hasChildrenQuestion(newCustomerDraft.personal_info.marital_status) && (
+                      <label className="flex flex-col gap-1.5">
+                        <span className={newCustomerLabelClass}>{copy.numberOfChildren}</span>
+                        <input
+                          value={newCustomerDraft.personal_info.number_of_children || ''}
+                          onChange={(event) => updateNewCustomerPersonalInfo('number_of_children', event.target.value.replace(/\D/g, '').slice(0, 2))}
+                          placeholder="0"
+                          aria-label="New customer number of children"
+                          className={editInputClass}
+                          inputMode="numeric"
+                        />
+                      </label>
+                    )}
+                    <YearsMonthsDurationInput
+                      label={copy.residenceStart}
+                      year={newCustomerDraft.personal_info.residence_start_year || ''}
+                      month={newCustomerDraft.personal_info.residence_start_month || ''}
+                      fallbackYears={newCustomerDraft.personal_info.years_at_residence}
+                      onChange={(field, value) => updateNewCustomerPersonalInfo(field === 'year' ? 'residence_start_year' : 'residence_start_month', value)}
+                      labelClassName={newCustomerLabelClass}
+                      ariaPrefix="New customer residence"
+                    />
                         <label className="flex flex-col gap-1.5">
                           <span className={newCustomerLabelClass}>{copy.housingStatus}</span>
                           <ToggleOptionGroup
@@ -2846,7 +3191,8 @@ function CustomerList({
                             ]}
                             onChange={(value) => updateNewCustomerPersonalInfo('housing_status', value)}
                             ariaLabel="New customer housing status"
-                            className="rounded-lg bg-white p-1 ring-1 ring-slate-100"
+                            className="w-full"
+                            optionClassName="!px-2.5 !py-2 !font-normal"
                           />
                         </label>
                       </>
@@ -2867,7 +3213,7 @@ function CustomerList({
                         <button
                           type="button"
                           onClick={() => updateNewCustomerPersonalInfo('resident_address', newCustomerDraft.personal_info.full_address)}
-                          className="rounded-md bg-slate-100 px-2 py-1 text-[10px] font-bold text-slate-600 transition-colors hover:bg-slate-200 hover:text-slate-900"
+                          className="rounded-chip bg-slate-100 px-2 py-1 text-micro tracking-normal text-slate-600 transition-colors hover:bg-slate-200 hover:text-slate-900"
                         >
                           {tr('与永久地址（IC）相同', 'Same as Permanent Address (IC)', 'Sama seperti Alamat Tetap (IC)')}
                         </button>
@@ -2903,10 +3249,10 @@ function CustomerList({
                     />
                   </label>
                   <div className="flex gap-1">
-                    <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-slate-500">
+                    <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-micro uppercase text-slate-500">
                       {inferVehicleBrandFromModel(newCustomerDraft.vehicle_model, vehicleCatalog)}
                     </span>
-                    <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-slate-500">
+                    <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-micro uppercase text-slate-500">
                       {inferVehicleTagFromModel(newCustomerDraft.vehicle_model, vehicleCatalog)}
                     </span>
                   </div>
@@ -2930,7 +3276,8 @@ function CustomerList({
                     }))}
                     onChange={(value) => updateNewCustomerDraft('vehicle_condition', value as VehicleCondition)}
                     ariaLabel="New customer vehicle condition"
-                    className="rounded-lg bg-white p-1 ring-1 ring-slate-100"
+                    className="w-full"
+                    optionClassName="!px-2.5 !py-2 !font-normal"
                   />
                 </label>
                 {isNewCustomerCashPurchase && (
@@ -2947,6 +3294,23 @@ function CustomerList({
                       className={editInputClass}
                       inputMode="decimal"
                       aria-label="New customer total cash price"
+                    />
+                  </label>
+                )}
+                {/* Loan Tenure sits with the vehicle (meeting 2026-10-13), like Application Detail. */}
+                {isNewCustomerLoanPurchase && (
+                  <label className="flex flex-col gap-1.5 md:col-span-2">
+                    <span className={newCustomerLabelClass}>{copy.loanTenure}</span>
+                    <ToggleOptionGroup
+                      value={newCustomerDraft.preferences.loan_tenure}
+                      options={[
+                        { value: '', label: copy.notSet },
+                        ...LOAN_TENURE_OPTIONS.map((year) => ({ value: year, label: `${year} years` }))
+                      ]}
+                      onChange={(value) => updateNewCustomerPreferences('loan_tenure', value)}
+                      ariaLabel="New customer loan tenure"
+                      className="w-full"
+                      optionClassName="!px-2.5 !py-2 !font-normal"
                     />
                   </label>
                 )}
@@ -2993,13 +3357,19 @@ function CustomerList({
                   const limitReached = documents.length >= uploadLimit;
 
                   return (
-                    <div key={documentKey} className="rounded-xl border border-slate-100 bg-slate-50/60 p-4">
+                    <FileDropZone
+                      key={documentKey}
+                      testId={`new-customer-document-drop-${documentKey}`}
+                      className="rounded-card border border-slate-100 bg-slate-50/60 p-4"
+                      disabled={limitReached || isPreparingCustomerDocument}
+                      onFiles={(files) => { void handleNewCustomerDocumentUpload(documentKey, files); }}
+                    >
                       <div className="flex items-center justify-between gap-3">
                         <div>
-                          <p className="text-xs font-bold text-slate-800">{label}</p>
-                          <p className="mt-1 text-[10px] text-slate-400">{copy.documentUploadHelp} · {documents.length}/{uploadLimit}</p>
+                          <p className="text-footnote font-bold text-slate-800">{label}</p>
+                          <p className="mt-1 text-micro tracking-normal text-slate-400">{copy.documentUploadHelp} · {documents.length}/{uploadLimit}</p>
                         </div>
-                        <label className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-[10px] font-bold ring-1 ring-indigo-100 transition-colors ${limitReached || isPreparingCustomerDocument ? 'cursor-not-allowed text-slate-400 opacity-50' : 'cursor-pointer text-indigo-600 hover:bg-indigo-50'}`}>
+                        <label className={`inline-flex shrink-0 items-center gap-1.5 rounded-control bg-white px-3 py-2 text-micro tracking-normal ring-1 ring-indigo-100 transition-colors ${limitReached || isPreparingCustomerDocument ? 'cursor-not-allowed text-slate-400 opacity-50' : 'cursor-pointer text-indigo-600 hover:bg-indigo-50'}`}>
                           <Upload className="h-3.5 w-3.5" />
                           {limitReached ? tr('已达上限', 'Limit reached', 'Had dicapai') : copy.uploadDocument}
                           <input
@@ -3025,19 +3395,19 @@ function CustomerList({
 
                       <div className="mt-3 space-y-2">
                         {documents.length === 0 ? (
-                          <p className="rounded-lg bg-white px-3 py-2 text-[10px] font-semibold text-slate-400">
+                          <p className="rounded-control bg-white px-3 py-2 text-caption text-slate-400">
                             {tr('尚未上传', 'No file uploaded', 'Tiada fail dimuat naik')}
                           </p>
                         ) : documents.map((document) => (
-                          <div key={document.id} className="flex items-center justify-between gap-3 rounded-lg bg-white px-3 py-2 ring-1 ring-slate-100">
+                          <div key={document.id} className="flex items-center justify-between gap-3 rounded-control bg-white px-3 py-2 ring-1 ring-slate-100">
                             <div className="min-w-0">
-                              <p className="truncate text-[11px] font-bold text-slate-700" title={document.file_name}>{document.file_name}</p>
-                              <p className="mt-0.5 text-[9px] text-slate-400">{formatDocumentFileSize(document.file_size)}</p>
+                              <p className="truncate text-caption font-semibold text-slate-700" title={document.file_name}>{document.file_name}</p>
+                              <p className="mt-0.5 text-micro tracking-normal text-slate-400">{formatDocumentFileSize(document.file_size)}</p>
                             </div>
                             <button
                               type="button"
                               onClick={() => removeNewCustomerDocument(document.id)}
-                              className="shrink-0 rounded-md p-1.5 text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-600"
+                              className="shrink-0 rounded-chip p-1.5 text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-600"
                               aria-label={`Remove ${document.file_name}`}
                             >
                               <Trash2 className="h-3.5 w-3.5" />
@@ -3045,12 +3415,12 @@ function CustomerList({
                           </div>
                         ))}
                       </div>
-                    </div>
+                    </FileDropZone>
                   );
                   })}
               </div>
               {customerDocumentError && (
-                <p className="text-[10px] font-semibold text-rose-500">{customerDocumentError}</p>
+                <p className="text-caption text-rose-500">{customerDocumentError}</p>
               )}
             </details>
 
@@ -3067,7 +3437,6 @@ function CustomerList({
                   { label: copy.position, field: 'position' as const, value: newCustomerDraft.employment_details.position },
                   { label: copy.grossMonthlySalary, field: 'gross_monthly_salary' as const, value: newCustomerDraft.employment_details.gross_monthly_salary || '', decimal: true },
                   { label: copy.netMonthlySalary, field: 'net_monthly_salary' as const, value: newCustomerDraft.employment_details.net_monthly_salary || '', decimal: true },
-                  { label: copy.yearsEmployed, field: 'years_employed' as const, value: newCustomerDraft.employment_details.years_employed, numeric: true },
                   { label: copy.officePhone, field: 'office_phone_no' as const, value: newCustomerDraft.employment_details.office_phone_no }
                 ].map((item) => (
                   <label key={item.field} className="flex flex-col gap-1.5">
@@ -3076,14 +3445,23 @@ function CustomerList({
                       value={item.value}
                       onChange={(event) => updateNewCustomerEmploymentDetails(
                         item.field,
-                        item.decimal ? normalizeDecimalInput(event.target.value) : item.numeric ? event.target.value.replace(/\D/g, '') : event.target.value
+                        item.decimal ? normalizeDecimalInput(event.target.value) : event.target.value
                       )}
                       placeholder={item.label}
                       className={editInputClass}
-                      inputMode={item.decimal ? 'decimal' : item.numeric ? 'numeric' : undefined}
+                      inputMode={item.decimal ? 'decimal' : undefined}
                     />
                   </label>
                 ))}
+                <StartYearMonthInput
+                  label={copy.employmentStart}
+                  year={newCustomerDraft.employment_details.employment_start_year || ''}
+                  month={newCustomerDraft.employment_details.employment_start_month || ''}
+                  fallbackYears={newCustomerDraft.employment_details.years_employed}
+                  onChange={(field, value) => updateNewCustomerEmploymentDetails(field === 'year' ? 'employment_start_year' : 'employment_start_month', value)}
+                  labelClassName={newCustomerLabelClass}
+                  ariaPrefix="New customer employment start"
+                />
                 <label className="flex flex-col gap-1.5 md:col-span-3">
                   <span className={newCustomerLabelClass}>{copy.companyAddress}</span>
                   <textarea
@@ -3103,12 +3481,12 @@ function CustomerList({
               </summary>
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                 {newCustomerDraft.emergency_contacts.map((contact, index) => (
-                  <div key={`new-emergency-contact-${index}`} className="space-y-3 rounded-lg border border-slate-100 bg-slate-50/50 p-3">
-                    <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{copy.emergencyContact(index + 1)}</p>
+                  <div key={`new-emergency-contact-${index}`} className="space-y-3 rounded-control border border-slate-100 bg-slate-50/50 p-3">
+                    <p className="text-micro uppercase text-slate-400">{copy.emergencyContact(index + 1)}</p>
                     <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
                       <label className="flex flex-col gap-1.5">
-                        <span className={newCustomerLabelClass}>{copy.customerName}</span>
-                        <input value={contact.full_name} onChange={(event) => updateNewCustomerEmergencyContact(index, 'full_name', event.target.value)} placeholder={copy.customerName} className={editInputClass} />
+                        <span className={newCustomerLabelClass}>{tr('姓名', 'Full name', 'Nama penuh')}</span>
+                        <input value={contact.full_name} onChange={(event) => updateNewCustomerEmergencyContact(index, 'full_name', event.target.value)} placeholder={tr('姓名', 'Full name', 'Nama penuh')} className={editInputClass} />
                       </label>
                       <label className="flex flex-col gap-1.5">
                         <span className={newCustomerLabelClass}>{copy.relationship}</span>
@@ -3149,16 +3527,14 @@ function CustomerList({
                     ]}
                     onChange={(value) => setNewCustomerDraft((current) => ({
                       ...current,
-                      personal_info: value === 'Bank'
-                        ? current.personal_info
-                        : { ...current.personal_info, bank_name: '', account_number: '' },
                       preferences: { ...current.preferences, salary_payment_method: value }
                     }))}
                     ariaLabel="New customer salary paid by"
-                    className="rounded-lg bg-white p-1 ring-1 ring-slate-100"
+                    className="w-full"
+                    optionClassName="!px-2.5 !py-2 !font-normal"
                   />
                 </div>
-                {newCustomerDraft.preferences.salary_payment_method === 'Bank' && (
+                {/* Every loan needs a bank account, cash salary too (owner 2026-10-20). */}
                   <>
                     <label className="flex flex-col gap-1.5">
                       <span className={newCustomerLabelClass}>{copy.bankName}</span>
@@ -3167,14 +3543,14 @@ function CustomerList({
                         list={payslipBankListId}
                         autoComplete="off"
                         onChange={(event) => updateNewCustomerPersonalInfo('bank_name', event.target.value)}
-                        placeholder={tr('选择或输入薪资银行', 'Select or type the salary bank', 'Pilih atau taip bank gaji')}
+                        placeholder={tr('选择或输入银行', 'Select or type the bank', 'Pilih atau taip bank')}
                         className={editInputClass}
                       />
-                      <span className="text-[10px] font-medium text-slate-400">
+                      <span className="text-micro tracking-normal font-medium text-slate-400">
                         {tr(
-                          '下拉选项包括之前输入的薪资银行。',
-                          'Suggestions include salary banks entered for previous customers.',
-                          'Cadangan termasuk bank gaji yang dimasukkan untuk pelanggan terdahulu.'
+                          '工资收现金也要填。下拉选项包括之前输入的银行。',
+                          'Needed even for cash salary. Suggestions include banks entered for previous customers.',
+                          'Wajib walaupun gaji tunai. Cadangan termasuk bank yang dimasukkan untuk pelanggan terdahulu.'
                         )}
                       </span>
                     </label>
@@ -3189,29 +3565,29 @@ function CustomerList({
                       />
                     </label>
                   </>
-                )}
-                <label className="flex flex-col gap-1.5">
-                  <span className={newCustomerLabelClass}>{copy.loanTenure}</span>
-                  <ToggleOptionGroup
-                    value={newCustomerDraft.preferences.loan_tenure}
-                    options={[
-                      { value: '', label: copy.notSet },
-                      ...LOAN_TENURE_OPTIONS.map((year) => ({ value: year, label: `${year} years` }))
-                    ]}
-                    onChange={(value) => updateNewCustomerPreferences('loan_tenure', value)}
-                    ariaLabel="New customer loan tenure"
-                    className="rounded-lg bg-white p-1 ring-1 ring-slate-100"
-                  />
-                </label>
               </div>
             </details>
               </>
             )}
           </div>
 
+          {newCustomerDraft.purchase_method && (
+            <label className="mt-4 flex flex-col gap-1.5">
+              <span className={newCustomerLabelClass}>{tr('备注', 'Remark', 'Catatan')}</span>
+              <textarea
+                value={newCustomerDraft.remarks}
+                onChange={(event) => setNewCustomerDraft((current) => ({ ...current, remarks: event.target.value.slice(0, 1000) }))}
+                maxLength={1000}
+                placeholder={tr('例如:工资单 PDF 密码 123456', 'For example: payslip PDF password 123456', 'Contoh: kata laluan PDF slip gaji 123456')}
+                aria-label="New customer remark"
+                className={`${editInputClass} min-h-20`}
+              />
+            </label>
+          )}
+
           <div className="mt-4 flex items-center justify-end gap-3">
             {newCustomerMissingItems.length > 0 && (
-              <div className="flex flex-wrap items-center justify-end gap-1.5 text-[10px] font-semibold text-rose-500">
+              <div className="flex flex-wrap items-center justify-end gap-1.5 text-caption text-rose-500">
                 <span>{tr('缺少必填项：', 'Missing required:', 'Maklumat wajib belum diisi:')}</span>
                 {newCustomerMissingItems.map((item) => (
                   <button
@@ -3219,7 +3595,7 @@ function CustomerList({
                     type="button"
                     onClick={() => navigateToMissingCustomerField(item)}
                     aria-label={`Go to missing field ${item.label}`}
-                    className="rounded-md bg-rose-50 px-2 py-1 font-bold text-rose-600 ring-1 ring-rose-100 transition-colors hover:bg-rose-100 hover:text-rose-700 focus:outline-none focus:ring-2 focus:ring-rose-300"
+                    className="rounded-chip bg-rose-50 px-2 py-1 font-bold text-rose-600 ring-1 ring-rose-100 transition-colors hover:bg-rose-100 hover:text-rose-700 focus:outline-none focus:ring-2 focus:ring-rose-300"
                   >
                     {item.label}
                   </button>
@@ -3229,7 +3605,7 @@ function CustomerList({
             <button
               type="button"
               onClick={resetNewCustomerDraft}
-              className="rounded-lg bg-slate-50 px-4 py-2 text-xs font-bold text-slate-500 transition-colors hover:bg-slate-100"
+              className="rounded-control bg-slate-50 px-4 py-2 text-footnote font-bold text-slate-500 transition-colors hover:bg-slate-100"
             >
               {copy.cancel}
             </button>
@@ -3237,7 +3613,7 @@ function CustomerList({
               type="button"
               onClick={handleAddCustomer}
               disabled={isPreparingCustomerDocument || newCustomerMissingFields.length > 0}
-              className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-bold text-white transition-colors hover:bg-indigo-700 disabled:bg-slate-200 disabled:text-slate-400"
+              className="rounded-control bg-indigo-600 px-4 py-2 text-footnote font-bold text-white transition-colors hover:bg-indigo-700 disabled:bg-slate-200 disabled:text-slate-400"
             >
               {copy.createCustomer}
             </button>
@@ -3251,80 +3627,73 @@ function CustomerList({
         applications={timeFilteredApplications}
         language={language}
         selectedStatus={selectedStatusTab}
+        periodTotals={{ submitted: periodSubmittedApplications.length, sold: periodSoldApplications.length }}
+        periodLabel={selectedPeriod.label}
+        periodRange={selectedPeriod.range}
         onSelectStatus={setSelectedStatusTab}
       />
 
-      <section className="rounded-xl border border-slate-100 bg-white shadow-sm">
+      <section className="rounded-card border border-slate-100 bg-white shadow-e1">
         <div className="flex flex-col gap-4 border-b border-slate-100/60 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex flex-col gap-3 md:flex-row md:items-center">
-            <div className="relative self-start md:self-auto">
+          <form
+            role="search"
+            aria-label={tr('搜索贷款申请', 'Search loan applications', 'Cari permohonan pinjaman')}
+            className="flex flex-wrap items-center gap-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              setAppliedSearch(searchDraft);
+            }}
+          >
+            <label className="relative">
+              <span className="sr-only">{copy.searchPlaceholder}</span>
               <span className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400">
-                <InlineAssetIcon src={searchIcon} className="h-5 w-5" />
+                <InlineAssetIcon icon={Search} className="h-5 w-5" />
               </span>
               <input
                 id="customer-search-input"
-                type="text"
-                value={searchTerm}
-                onChange={(event) => setSearchTerm(event.target.value)}
+                type="search"
+                value={searchDraft}
+                onChange={(event) => updateSearchDraft(event.target.value)}
                 placeholder={copy.searchPlaceholder}
-                className="w-80 rounded-lg border border-slate-100 bg-white py-2 pl-9 pr-4 text-xs outline-none transition-all focus:bg-slate-50 focus:ring-1 focus:ring-indigo-100"
+                className="w-80 rounded-control border border-slate-100 bg-white py-2 pl-9 pr-4 text-footnote outline-none transition-all focus:bg-slate-50 focus:ring-1 focus:ring-indigo-100"
               />
-            </div>
-            <div className="flex min-w-0 flex-col gap-2 self-start md:self-auto">
-              <div className="flex max-w-full items-center gap-1 overflow-x-auto rounded-lg border border-slate-100 bg-slate-50/70 p-1 scrollbar-none">
-                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-white text-slate-400 ring-1 ring-slate-100">
-                  <InlineAssetIcon src={calendarIcon} className="h-4 w-4" />
-                </span>
-                {customerTimeFilterOptions.map((option) => {
-                  const isActive = selectedTimeFilter === option.value;
-
-                  return (
-                    <button
-                      key={option.value}
-                      type="button"
-                      onClick={() => setSelectedTimeFilter(option.value)}
-                      className={`h-7 shrink-0 rounded-md px-2.5 text-xs font-bold transition-colors ${
-                        isActive
-                          ? 'bg-red-800 text-white shadow-sm'
-                          : 'text-slate-500 hover:bg-white hover:text-slate-800'
-                      }`}
-                    >
-                      {option.label}
-                    </button>
-                  );
-                })}
-              </div>
-
-              {selectedTimeFilter === 'custom' && (
-                <div className="flex flex-wrap items-center gap-2">
-                  <label className="flex items-center gap-2 rounded-lg border border-slate-100 bg-white px-2.5 py-1.5">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{copy.startDate}</span>
-                    <input
-                      type="date"
-                      value={customStartDate}
-                      onChange={(event) => {
-                        setCustomStartDate(event.target.value);
-                        setSelectedTimeFilter('custom');
-                      }}
-                      className="bg-transparent text-xs font-semibold text-slate-700 outline-none"
-                    />
-                  </label>
-                  <label className="flex items-center gap-2 rounded-lg border border-slate-100 bg-white px-2.5 py-1.5">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{copy.endDate}</span>
-                    <input
-                      type="date"
-                      value={customEndDate}
-                      onChange={(event) => {
-                        setCustomEndDate(event.target.value);
-                        setSelectedTimeFilter('custom');
-                      }}
-                      className="bg-transparent text-xs font-semibold text-slate-700 outline-none"
-                    />
-                  </label>
-                </div>
-              )}
-            </div>
-          </div>
+            </label>
+            <button
+              type="submit"
+              className="inline-flex h-9 items-center gap-1.5 rounded-control bg-brand px-4 text-footnote font-bold text-white transition-colors hover:bg-brand-deep"
+            >
+              <Search className="h-4 w-4 text-white/90" aria-hidden="true" />
+              {tr('搜索', 'Search', 'Cari')}
+            </button>
+            {appliedSearch.trim() && (
+              <button
+                type="button"
+                onClick={clearSearch}
+                className="inline-flex h-9 items-center gap-1 rounded-control px-2.5 text-caption font-semibold text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-800"
+              >
+                <X className="h-3.5 w-3.5" aria-hidden="true" />
+                {tr('清除', 'Clear', 'Kosongkan')}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setIsAdvancedSearchOpen((current) => !current)}
+              aria-expanded={isAdvancedSearchOpen}
+              aria-controls="customer-advanced-search"
+              className={`inline-flex h-9 items-center gap-1.5 rounded-control border px-3 text-footnote font-bold transition-colors ${
+                isAdvancedSearchOpen
+                  ? 'border-slate-200 bg-slate-100 text-slate-800'
+                  : 'border-slate-100 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-800'
+              }`}
+            >
+              <SlidersHorizontal className="h-4 w-4" aria-hidden="true" />
+              {tr('高级搜索', 'Advanced search', 'Carian lanjutan')}
+              <span className="rounded-full bg-white px-1.5 py-0.5 text-micro font-semibold text-slate-500 ring-1 ring-slate-100">
+                {selectedTimeFilterLabel}
+              </span>
+              <ChevronDown className={`h-3.5 w-3.5 transition-transform ${isAdvancedSearchOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
+            </button>
+          </form>
 
           <div className="flex items-center gap-3">
             {(completedJourneyCount > 0 || showCompletedJourneys) && (
@@ -3332,7 +3701,7 @@ function CustomerList({
                 type="button"
                 onClick={() => setShowCompletedJourneys((current) => !current)}
                 aria-pressed={showCompletedJourneys}
-                className={`inline-flex h-8 items-center gap-1.5 rounded-lg border px-3 text-[11px] font-bold transition-colors ${
+                className={`inline-flex h-8 items-center gap-1.5 rounded-control border px-3 text-caption font-semibold transition-colors ${
                   showCompletedJourneys
                     ? 'border-slate-200 bg-slate-100 text-slate-700 hover:bg-slate-200'
                     : 'border-slate-100 bg-white text-slate-500 hover:bg-slate-50 hover:text-slate-800'
@@ -3344,603 +3713,441 @@ function CustomerList({
                 {showCompletedJourneys
                   ? tr('隐藏已完成', 'Hide completed', 'Sembunyikan selesai')
                   : tr('显示已完成', 'Show completed', 'Tunjukkan selesai')}
-                <span className="rounded-full bg-white px-1.5 py-0.5 text-[9px] text-slate-500 ring-1 ring-slate-100">
+                <span className="rounded-full bg-white px-1.5 py-0.5 text-micro tracking-normal text-slate-500 ring-1 ring-slate-100">
                   {completedJourneyCount}
                 </span>
               </button>
             )}
-            <div className="text-[11px] font-medium text-slate-400">
+            <div className="text-caption font-medium text-slate-400">
               {tableCopyMessage || tableResultText}
             </div>
           </div>
         </div>
 
-      </section>
+        {isAdvancedSearchOpen && (
+          <div id="customer-advanced-search" className="flex flex-col gap-3 border-b border-slate-100/60 bg-slate-50/40 px-5 py-4 md:flex-row md:items-start">
+                <div className="flex min-w-0 flex-col gap-2 self-start md:self-auto">
+                  <div className="flex max-w-full items-center gap-1 overflow-x-auto rounded-control border border-slate-100 bg-slate-50/70 p-1 scrollbar-none">
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-chip bg-white text-slate-400 ring-1 ring-slate-100">
+                      <InlineAssetIcon icon={CalendarDays} className="h-4 w-4" />
+                    </span>
+                    {customerTimeFilterOptions.map((option) => {
+                      const isActive = selectedTimeFilter === option.value;
 
-      <section
-        className="grid grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-3"
-        data-testid="loan-application-card-grid"
-      >
-        {loadedCustomers.map((customer) => (
-          <div
-            key={customer.id}
-            id={`customer-row-${customer.id}`}
-            data-testid={`loan-application-card-${customer.id}`}
-          >
-            <LoanApplicationCard
-              application={customer}
-              bankDefinitions={bankDefinitions}
-              roleAccounts={roleAccounts}
-              onOpen={() => onSelectCustomer(customer)}
-            />
-          </div>
-        ))}
+                      return (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => setSelectedTimeFilter(option.value)}
+                          className={`h-7 shrink-0 rounded-chip px-2.5 text-footnote font-bold transition-colors ${
+                            isActive
+                              ? 'bg-brand text-white shadow-e1'
+                              : 'text-slate-500 hover:bg-white hover:text-slate-800'
+                          }`}
+                        >
+                          {option.label}
+                        </button>
+                      );
+                    })}
+                  </div>
 
-        {customers.length === 0 && (
-          <div className="col-span-full rounded-xl border border-slate-100 bg-white py-14 text-center text-sm text-slate-400 shadow-sm">
-            {copy.noCustomers}
+                  {selectedTimeFilter === 'custom' && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <label className="flex items-center gap-2 rounded-control border border-slate-100 bg-white px-2.5 py-1.5">
+                        <span className="text-micro uppercase text-slate-400">{copy.startDate}</span>
+                        <input
+                          type="date"
+                          value={customStartDate}
+                          onChange={(event) => {
+                            setCustomStartDate(event.target.value);
+                            setSelectedTimeFilter('custom');
+                          }}
+                          className="bg-transparent text-footnote text-slate-700 outline-none"
+                        />
+                      </label>
+                      <label className="flex items-center gap-2 rounded-control border border-slate-100 bg-white px-2.5 py-1.5">
+                        <span className="text-micro uppercase text-slate-400">{copy.endDate}</span>
+                        <input
+                          type="date"
+                          value={customEndDate}
+                          onChange={(event) => {
+                            setCustomEndDate(event.target.value);
+                            setSelectedTimeFilter('custom');
+                          }}
+                          className="bg-transparent text-footnote text-slate-700 outline-none"
+                        />
+                      </label>
+                    </div>
+                  )}
+                </div>
           </div>
         )}
+
       </section>
 
-      {hasMoreCustomersToLoad && (
-        <button
-          type="button"
-          onClick={() => setLoadedCustomerCount((current) => Math.min(current + CUSTOMER_LOAD_MORE_COUNT, customers.length))}
-          className="mx-auto flex min-h-10 items-center justify-center rounded-lg border border-slate-100 bg-white px-5 text-xs font-bold text-slate-600 shadow-sm transition-colors hover:bg-slate-50"
-        >
-          {tr(`加载更多 · ${loadedCustomers.length}/${customers.length}`, `Load more · ${loadedCustomers.length}/${customers.length}`, `Muatkan lagi · ${loadedCustomers.length}/${customers.length}`)}
-        </button>
+      {bankDecisionMenu && createPortal(
+        <>
+          <div className="fixed inset-0 z-[70]" aria-hidden="true" onClick={() => setBankDecisionMenu(null)} />
+          <div
+            role="menu"
+            aria-label={`Bank decision for ${bankDecisionMenu.application.applicant_name} at ${bankDecisionMenu.bankLabel}`}
+            data-testid={`loan-applications-bank-decisions-${bankDecisionMenu.application.id}`}
+            className="fixed z-[71] flex w-60 flex-col gap-1.5 rounded-card bg-white p-2 shadow-e3 ring-1 ring-slate-200"
+            style={{ top: bankDecisionMenu.top, left: bankDecisionMenu.left }}
+          >
+            <p className="px-1 text-micro font-bold uppercase tracking-wide text-slate-500">
+              {bankDecisionMenu.bankLabel} · {bankDecisionMenu.application.applicant_name}
+            </p>
+            {BANK_QUICK_ACTION_BUTTONS.map((button) => (
+              <button
+                key={button.action}
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  const menu = bankDecisionMenu;
+                  setBankDecisionMenu(null);
+                  onOpenBankPage?.(menu.application, { bankApplicationId: menu.bankApplicationId, action: button.action });
+                }}
+                className={`inline-flex h-8 items-center gap-1.5 rounded-control px-2.5 text-caption font-semibold text-white transition-colors ${button.className}`}
+              >
+                <button.icon className="h-3.5 w-3.5" aria-hidden="true" />
+                {tr(...button.label)}
+              </button>
+            ))}
+          </div>
+        </>,
+        document.body
       )}
 
-      {false && <section className="rounded-xl border border-slate-100 bg-white shadow-sm">
-        <p className="border-b border-slate-200 bg-slate-200/80 px-4 py-1.5 text-[10px] font-bold text-slate-700">
-          {copy.gestureHint}
-        </p>
+      {banksMissingFromDatabase.length > 0 && (
+        <div
+          data-testid="loan-applications-missing-banks"
+          role="note"
+          className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-card border border-amber-200 bg-amber-50 px-4 py-2.5 text-footnote text-amber-800"
+        >
+          <AlertTriangle aria-hidden="true" className="h-4 w-4 shrink-0" />
+          <span className="min-w-0 flex-1">
+            {tr(
+              `${banksMissingFromDatabase.join('、')} 还不在银行数据库里。请加进银行数据库，才能设置图标、选择是否在表格显示。`,
+              `${banksMissingFromDatabase.join(', ')} ${banksMissingFromDatabase.length === 1 ? 'is' : 'are'} not in Bank Database yet. Add ${banksMissingFromDatabase.length === 1 ? 'it' : 'them'} there to set the icon and choose whether the column shows.`,
+              `${banksMissingFromDatabase.join(', ')} belum ada dalam Pangkalan Data Bank. Tambahkan di sana untuk menetapkan ikon dan memilih sama ada lajur ditunjukkan.`
+            )}
+          </span>
+          {onOpenBankDatabase && (
+            <button
+              type="button"
+              onClick={onOpenBankDatabase}
+              className="shrink-0 rounded-control bg-white px-3 py-1.5 text-footnote font-semibold text-amber-800 ring-1 ring-amber-200 transition-colors hover:bg-amber-100"
+            >
+              {tr('打开银行数据库', 'Open Bank Database', 'Buka Pangkalan Data Bank')}
+            </button>
+          )}
+        </div>
+      )}
 
-        <div>
-          <div
-            ref={tableScrollRef}
-            data-testid="loan-applications-table-viewport"
-            className="overflow-x-hidden overflow-y-auto"
-            style={{ maxHeight: CUSTOMER_TABLE_HEIGHT }}
-            onScroll={handleTableScroll}
-          >
+      <div
+        data-testid="loan-applications-click-guide"
+        className="flex flex-wrap items-center gap-x-4 gap-y-1.5 px-1 text-caption text-slate-500"
+      >
+        <MousePointerClick aria-hidden="true" className="h-4 w-4 shrink-0 text-slate-400" />
+        <span>
+          <strong className="font-semibold text-slate-700">{tr('单击客户资料', 'Click customer details', 'Klik butiran pelanggan')}</strong>
+          {tr('（日期到车型）→ 申请详情', ' (date to model) → Application Detail', ' (tarikh hingga model) → Butiran Permohonan')}
+        </span>
+        {loanTableBankColumns.length > 0 && onOpenBankPage && (
+          <span>
+            <strong className="font-semibold text-slate-700">{tr('单击银行格', 'Click a bank cell', 'Klik sel bank')}</strong>
+            {tr(' → 银行页面', ' → bank page', ' → halaman bank')}
+          </span>
+        )}
+        {loanTableBankColumns.length > 0 && onOpenBankPage && hasAdminWorkAccess(currentStaffRole) && (
+          <>
+            <span>
+              <strong className="font-semibold text-slate-700">{tr('双击 IN PROCESS 银行格', 'Double-click an IN PROCESS bank cell', 'Klik dua kali sel bank IN PROCESS')}</strong>
+              {tr(' → 更新银行结果', ' → record the bank decision', ' → rekod keputusan bank')}
+            </span>
+            {onSubmitToBank && (
+              <span>
+                <strong className="font-semibold text-slate-700">{tr('鼠标移到空白银行格', 'Point at an empty bank cell', 'Tuding sel bank kosong')}</strong>
+                {tr(' → 提交银行', ' → SUBMIT to that bank', ' → HANTAR ke bank itu')}
+              </span>
+            )}
+          </>
+        )}
+      </div>
+
+      <section className="overflow-hidden rounded-card border border-slate-200 bg-white shadow-e1">
+        <div
+          ref={tableScrollRef}
+          data-testid="loan-applications-table-viewport"
+          className="overflow-auto"
+          style={{ maxHeight: CUSTOMER_TABLE_HEIGHT }}
+          onScroll={handleTableScroll}
+        >
           <table
-            data-dce-copy-on-double-click=""
             data-testid="loan-applications-table"
-            className="w-full table-fixed select-none text-left"
+            className="workbook-grid w-full min-w-max border-separate border-spacing-0 text-left text-footnote"
           >
-            <colgroup>
-              <col className="w-[7.5%]" />
-              <col className="w-[8.5%]" />
-              <col className="w-[10%]" />
-              <col className="w-[11%]" />
-              <col className="w-[13%]" />
-              <col className="w-[9%]" />
-              <col className="w-[14%]" />
-              <col className="w-[20%]" />
-              <col className="w-[7%]" />
-            </colgroup>
-            <thead className="sticky top-0 z-10 border-b border-slate-300 bg-slate-200/95 text-[10px] font-bold uppercase tracking-wider text-slate-700 backdrop-blur">
-              <tr>
-                <th data-testid="loan-applications-submitted-header" className="px-1.5 py-2.5 whitespace-nowrap">
+            <thead className="sticky top-0 z-10 bg-slate-50 text-micro text-slate-500">
+              <tr className="h-11">
+                <th data-testid="loan-applications-submitted-header" className={`${loanTableHeaderCellClass} w-[92px] !whitespace-normal leading-tight`}>
                   <SortableHeader
                     sortKey="submitted_at"
-                    label={copy.table.submitted}
+                    label={tr('申请日期', 'Application Date', 'Tarikh Permohonan')}
                     sortState={sortState}
                     onSort={handleSort}
                     defaultDirection="desc"
-                    className="text-[9px] [column-gap:2px]"
                   />
                 </th>
-                <th className="px-2.5 py-2.5 whitespace-nowrap">
-                  <SortableHeader sortKey="applicant_name" label={copy.table.customer} sortState={sortState} onSort={handleSort} />
+                <th className={`${loanTableHeaderCellClass} w-[92px] !whitespace-normal leading-tight`}>
+                  {tr('提交日期', 'Submission Date', 'Tarikh Hantar')}
                 </th>
-                <th className="px-2.5 py-2.5 whitespace-nowrap">
-                  <SortableHeader sortKey="phone_no" label={copy.table.contact} sortState={sortState} onSort={handleSort} />
-                </th>
-                <th className="px-2.5 py-2.5 whitespace-nowrap">
-                  <SortableHeader sortKey="ic_no" label={copy.table.icPlate} sortState={sortState} onSort={handleSort} />
-                </th>
-                <th className="px-2.5 py-2.5 whitespace-nowrap">
-                  <SortableHeader sortKey="vehicle_model" label={copy.table.vehicle} sortState={sortState} onSort={handleSort} />
-                </th>
-                <th className="px-1.5 py-2.5 text-center whitespace-nowrap">
+                <th className={loanTableHeaderCellClass}>
                   <SortableHeader
-                    sortKey="bank_count"
-                    label={<Landmark className="h-4 w-4" />}
+                    sortKey="applicant_name"
+                    label={fieldLabel('customerName')}
                     sortState={sortState}
                     onSort={handleSort}
-                    defaultDirection="desc"
-                    align="center"
                   />
                 </th>
-                <th className="px-2.5 py-2.5 whitespace-nowrap">
-                  <SortableHeader sortKey="handler_name" label={copy.table.staff} sortState={sortState} onSort={handleSort} />
+                <th className={loanTableHeaderCellClass}>
+                  <SortableHeader
+                    sortKey="ic_no"
+                    label={fieldLabel('icNumber')}
+                    sortState={sortState}
+                    onSort={handleSort}
+                  />
                 </th>
-                <th className="px-2.5 py-2.5 text-center whitespace-nowrap">
-                  <SortableHeader sortKey="status" label={copy.table.approval} sortState={sortState} onSort={handleSort} align="center" />
+                <th className={loanTableHeaderCellClass}>
+                  <SortableHeader
+                    sortKey="vehicle_model"
+                    label={fieldLabel('vehicleModel')}
+                    sortState={sortState}
+                    onSort={handleSort}
+                  />
                 </th>
-                <th className="px-2.5 py-2.5 whitespace-nowrap">
-                  {copy.table.remarks}
-                </th>
+                {loanTableBankColumns.map((column) => (
+                  <th
+                    key={column.key}
+                    data-in-bank-database={column.inBankDatabase ? 'true' : 'false'}
+                    title={column.inBankDatabase ? undefined : tr('不在银行数据库里', 'Not in Bank Database', 'Tiada dalam Pangkalan Data Bank')}
+                    className={`${loanTableHeaderCellClass} min-w-[116px]`}
+                  >
+                    <span className="flex items-center justify-center gap-1.5">
+                      <BankIcon
+                        bankName={column.label}
+                        bankDefinitions={bankDefinitions}
+                        size="xs"
+                        className="!h-5 !w-5"
+                      />
+                      {column.label}
+                      {!column.inBankDatabase && (
+                        <AlertTriangle aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+                      )}
+                    </span>
+                  </th>
+                ))}
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-50 text-sm">
+            <tbody>
               {virtualWindow.topSpacerHeight > 0 && (
                 <tr aria-hidden="true">
-                  <td colSpan={9} className="p-0" style={{ height: virtualWindow.topSpacerHeight }} />
+                  <td colSpan={loanTableColumnCount} className="p-0" style={{ height: virtualWindow.topSpacerHeight }} />
                 </tr>
               )}
 
               {visibleCustomers.map((customer) => {
-                const approvedNotAcceptedCount = (customer.bank_applications || []).filter((bankApplication) => (
-                  bankApplication.status === 'Approved' && bankApplication.offer_status === 'Not Accepted'
-                )).length;
-                const latestBankApplication = [...(customer.bank_applications || [])]
-                  .sort((a, b) => {
-                    const aTime = new Date(a.submitted_at || a.decision_at || a.approved_at || 0).getTime();
-                    const bTime = new Date(b.submitted_at || b.decision_at || b.approved_at || 0).getTime();
-                    return (Number.isFinite(bTime) ? bTime : 0) - (Number.isFinite(aTime) ? aTime : 0) || (b.round_no || 0) - (a.round_no || 0);
-                  })[0];
-                const isEditing = editingCustomerId === customer.id;
-                const canEditCustomerRow = canEditCustomers || customer.handler_name === currentStaffName;
-                const seoApplication = isSeoApplication(customer);
-                const seoAwaitingAssignment = seoApplication && customer.handler_name === 'SEO';
-                const riskFlags = riskFlagsByApplicationId[customer.id] || [];
-                const rawMatches = rawMatchesByApplicationId[customer.id] || [];
-                const pendingWith = getLoanPendingWith(customer);
-                const isHandlerPending = pendingWith === 'Handler';
-                const isAdminPending = pendingWith === 'Admin' || pendingWith === 'Bank';
-                const adminOwnerName = customer.admin_owner_name || tr('未分配', 'Unassigned', 'Belum ditetapkan');
-                const pendingGlowClass = 'border-amber-300 bg-amber-50/90 ring-2 ring-amber-200 shadow-[0_0_12px_rgba(245,158,11,0.38)]';
-                const idleAssignmentClass = 'border-slate-100 bg-slate-50/70';
+                const journey = getApplicationJourneyPosition(customer);
+                const submissionAt = getFirstBankSubmissionAt(customer);
+
                 return (
                   <tr
                     key={customer.id}
                     id={`customer-row-${customer.id}`}
-                    onClick={(event) => handleCustomerRowClick(event, customer, isEditing)}
-                    className={`${isEditing ? 'bg-indigo-50/30' : 'cursor-pointer hover:bg-indigo-50/30'} transition-colors`}
+                    data-testid={`loan-applications-row-${customer.id}`}
+                    data-journey-stage={journey.stage}
+                    data-journey-complete={journey.closed ? 'true' : 'false'}
+                    data-pending-with={getLoanPendingWith(customer)}
+                    tabIndex={0}
+                    aria-label={tr(`查看 ${customer.applicant_name} 的申请`, `Open application for ${customer.applicant_name}`, `Buka permohonan ${customer.applicant_name}`)}
+                    onClick={() => onSelectCustomer(customer)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        onSelectCustomer(customer);
+                      }
+                    }}
+                    className="h-14 cursor-pointer focus-visible:outline-none"
                   >
-                    <td className="px-1.5 py-2 align-top font-mono text-[10px] text-slate-400">
-                      <span className="block whitespace-nowrap" title={customer.submitted_at}>
-                        {formatSubmittedDate(customer.submitted_at)}
-                      </span>
+                    <td className={`${loanTableBodyCellClass} font-mono tabular-nums text-slate-700`} title={customer.submitted_at}>
+                      {formatTableDate(customer.submitted_at) || '—'}
                     </td>
-                    <td
-                      className="px-2.5 py-2 align-top"
-                      title={[customer.personal_info?.email, customer.id].filter(Boolean).join('\n')}
-                      onClick={(event) => {
-                        if (editingCell?.customerId !== customer.id || editingCell.field !== 'customer') {
-                          handleCustomerCellClick(event, customer, {
-                            copyValue: customer.applicant_name,
-                            copyLabel: 'Customer',
-                            editField: 'customer'
-                          });
-                        }
-                      }}
-                    >
-                      {isEditing || (editingCell?.customerId === customer.id && editingCell.field === 'customer') ? (
-                        <input
-                          autoFocus
-                          value={editDraft.applicant_name}
-                          onClick={(event) => handleActiveEditableCellClick(event, customer)}
-                          onChange={(event) => updateDraft('applicant_name', event.target.value)}
-                          onBlur={() => saveEditingCustomer(customer.id)}
-                          onKeyDown={(event) => handleEditableCellKeyDown(event, customer.id)}
-                          className={editInputClass}
-                          aria-label={`Edit customer name for ${customer.id}`}
-                        />
-                      ) : (
-                        <div className="flex min-w-0 items-center gap-2">
-                          <p className="truncate font-bold text-slate-800" title={customer.applicant_name}>
+                    <td className={`${loanTableBodyCellClass} font-mono tabular-nums text-slate-500`} title={submissionAt || undefined}>
+                      {formatTableDate(submissionAt) || <span className="text-slate-300">—</span>}
+                    </td>
+                    <td className={loanTableBodyCellClass}>
+                      <div className="min-w-0">
+                        <p className="flex min-w-0 items-center gap-1.5">
+                          <span className="max-w-[250px] truncate font-semibold text-slate-800" title={customer.applicant_name}>
                             {customer.applicant_name}
-                          </p>
-                          {seoApplication && (
-                            <span
-                              className="inline-flex shrink-0 rounded-md bg-amber-50 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-amber-700 ring-1 ring-amber-100"
-                              title={tr('官网 SEO 申请', 'Website SEO application', 'Permohonan SEO laman web')}
-                            >
+                          </span>
+                          {isSeoApplication(customer) && (
+                            <span className="shrink-0 rounded-chip bg-amber-50 px-1 py-0.5 text-micro uppercase text-amber-700">
                               SEO
                             </span>
                           )}
-                          {riskFlags.length > 0 && (
-                            <span
-                              className="group relative inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-amber-50 text-amber-600 ring-1 ring-amber-100"
-                              title={riskFlags.map((flag) => flag.message).join('\n')}
-                            >
-                              <AlertTriangle className="h-3.5 w-3.5" />
-                              <span className="pointer-events-none absolute left-0 top-7 z-30 hidden w-72 rounded-lg border border-amber-100 bg-white p-3 text-left text-[11px] font-semibold text-slate-600 shadow-xl shadow-slate-200/70 group-hover:block">
-                                <span className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-amber-600">{tr('风险提醒', 'Risk Warning', "Amaran Risiko")}</span>
-                                {riskFlags.map((flag) => (
-                                  <span key={`${flag.field}-${flag.value}`} className="mt-1 block leading-relaxed">
-                                    {tr(`${flag.label}：与 ${flag.matching_applicant_names.join(', ')} 重复`, `${flag.label}: duplicated with ${flag.matching_applicant_names.join(', ')}`, `${flag.label}: pendua dengan ${flag.matching_applicant_names.join(', ')}`)}
-                                  </span>
-                                ))}
-                              </span>
-                            </span>
-                          )}
-                          {rawMatches.length > 0 && (
-                            <span
-                              className="group relative inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-blue-50 text-blue-600 ring-1 ring-blue-100"
-                              title={rawMatches.map((match) => `${match.raw_customer_name} (${match.raw_customer_channel})`).join('\n')}
-                            >
-                              <Database className="h-3.5 w-3.5" />
-                              <span className="pointer-events-none absolute left-0 top-7 z-30 hidden w-72 rounded-lg border border-blue-100 bg-white p-3 text-left text-[11px] font-semibold text-slate-600 shadow-xl shadow-slate-200/70 group-hover:block">
-                                <span className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-blue-600">{copy.rawCustomerMatch}</span>
-                                {rawMatches.slice(0, 4).map((match) => (
-                                  <span key={`${match.raw_customer_id}-${match.customer_id}`} className="mt-1 block leading-relaxed">
-                                    {tr(`${match.raw_customer_name} 来自 ${match.raw_customer_channel}：${match.matched_fields.join(', ')}`, `${match.raw_customer_name} from ${match.raw_customer_channel}: ${match.matched_fields.join(', ')}`, `${match.raw_customer_name} daripada ${match.raw_customer_channel}: ${match.matched_fields.join(', ')}`)}
-                                  </span>
-                                ))}
-                                {rawMatches.length > 4 && (
-                                  <span className="mt-1 block text-[10px] text-slate-400">{tr(`还有 ${rawMatches.length - 4} 个潜在客户`, `+${rawMatches.length - 4} more leads`, `+${rawMatches.length - 4} lagi prospek`)}</span>
-                                )}
-                              </span>
-                            </span>
-                          )}
-                        </div>
-                      )}
-                      {!isEditing && !(editingCell?.customerId === customer.id && editingCell.field === 'customer') && (
-                        <p className="mt-0.5 truncate font-mono text-[9px] text-slate-400">{customer.id}</p>
-                      )}
-                    </td>
-                    <td
-                      className="px-2.5 py-2 align-top font-mono text-xs text-slate-600"
-                      onClick={(event) => {
-                        if (editingCell?.customerId !== customer.id || editingCell.field !== 'contact') {
-                          handleCustomerCellClick(event, customer, {
-                            copyValue: formatMalaysiaPhoneForCopy(customer.phone_no),
-                            copyLabel: 'Contact',
-                            editField: 'contact'
-                          });
-                        }
-                      }}
-                    >
-                      {isEditing || (editingCell?.customerId === customer.id && editingCell.field === 'contact') ? (
-                        <input
-                          autoFocus
-                          value={editDraft.phone_no}
-                          onClick={(event) => handleActiveEditableCellClick(event, customer)}
-                          onChange={(event) => updateDraft('phone_no', formatPhoneNumber(event.target.value))}
-                          onBlur={() => saveEditingCustomer(customer.id)}
-                          onKeyDown={(event) => handleEditableCellKeyDown(event, customer.id)}
-                          className={editInputClass}
-                          aria-label={`Edit phone for ${customer.id}`}
-                        />
-                      ) : (
-                        <span className="block truncate whitespace-nowrap" title={customer.phone_no}>
-                          {customer.phone_no}
-                        </span>
-                      )}
-                    </td>
-                    <td
-                      className="px-2.5 py-2 align-top"
-                      onClick={(event) => {
-                        if (editingCell?.customerId !== customer.id || editingCell.field !== 'identity') {
-                          handleCustomerCellClick(event, customer, {
-                            copyValue: [customer.ic_no, customer.vehicle_plate].filter(Boolean).join('\n'),
-                            copyLabel: 'IC / Plate',
-                            editField: 'identity'
-                          });
-                        }
-                      }}
-                    >
-                      {isEditing || (editingCell?.customerId === customer.id && editingCell.field === 'identity') ? (
-                        <div
-                          className="space-y-2"
-                          onBlur={(event) => handleEditableCellBlur(event, customer.id)}
-                          onKeyDown={(event) => handleEditableCellKeyDown(event, customer.id)}
-                        >
-                          <input
-                            autoFocus
-                            value={editDraft.ic_no}
-                            onClick={(event) => handleActiveEditableCellClick(event, customer)}
-                            onChange={(event) => updateDraft('ic_no', formatIcNumber(event.target.value))}
-                            className={editInputClass}
-                            aria-label={`Edit IC for ${customer.id}`}
-                          />
-                          <input
-                            value={editDraft.vehicle_plate}
-                            onClick={(event) => handleActiveEditableCellClick(event, customer)}
-                            onChange={(event) => updateDraft('vehicle_plate', event.target.value.toUpperCase())}
-                            className={editInputClass}
-                            aria-label={`Edit vehicle plate for ${customer.id}`}
-                          />
-                        </div>
-                      ) : (
-                        <>
-                          <p className="truncate whitespace-nowrap font-mono text-xs text-slate-600" title={customer.ic_no}>
-                            {customer.ic_no}
-                          </p>
-                          <p className="mt-0.5 truncate whitespace-nowrap font-mono text-[10px] font-semibold text-slate-800" title={customer.vehicle_plate}>
-                            {customer.vehicle_plate}
-                          </p>
-                        </>
-                      )}
-                    </td>
-                    <td
-                      className="px-2.5 py-2 align-top"
-                      onClick={(event) => {
-                        if (editingCell?.customerId !== customer.id || editingCell.field !== 'vehicle') {
-                          handleCustomerCellClick(event, customer, {
-                            copyValue: customer.vehicle_model,
-                            copyLabel: 'Vehicle',
-                            editField: 'vehicle'
-                          });
-                        }
-                      }}
-                    >
-                      {isEditing || (editingCell?.customerId === customer.id && editingCell.field === 'vehicle') ? (
-                        <div
-                          className="space-y-2"
-                          onBlur={(event) => handleEditableCellBlur(event, customer.id)}
-                          onKeyDown={(event) => handleEditableCellKeyDown(event, customer.id)}
-                        >
-                          <input
-                            autoFocus
-                            value={editDraft.vehicle_model}
-                            list={vehicleModelListId}
-                            autoComplete="off"
-                            onClick={(event) => handleActiveEditableCellClick(event, customer)}
-                            onChange={(event) => updateDraft('vehicle_model', event.target.value)}
-                            className={editInputClass}
-                            aria-label={`Edit vehicle model for ${customer.id}`}
-                          />
-                          <div className="flex min-w-0 flex-wrap gap-1">
-                            <span className="inline-flex max-w-[120px] truncate rounded-full bg-slate-100 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-slate-500">
-                              {inferVehicleBrandFromModel(editDraft.vehicle_model, vehicleCatalog)}
-                            </span>
-                            <span className="inline-flex max-w-[120px] truncate rounded-full bg-slate-100 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-slate-500">
-                              {inferVehicleTagFromModel(editDraft.vehicle_model, vehicleCatalog)}
-                            </span>
-                          </div>
-                          <div className="grid grid-cols-2 gap-1">
-                            <ToggleOptionGroup
-                              value={editDraft.vehicle_condition}
-                              options={[
-                                { value: '', label: 'New / Used' },
-                                ...VEHICLE_CONDITION_OPTIONS.filter(Boolean).map((option) => ({ value: option, label: option }))
-                              ]}
-                              onChange={(value) => updateDraft('vehicle_condition', value as VehicleCondition)}
-                              onOptionClick={(event) => handleActiveEditableCellClick(event, customer)}
-                              className="w-full rounded-md bg-white ring-1 ring-slate-100"
-                              optionClassName="!min-h-6 !rounded-md !px-1.5 !py-0.5 !text-[9px] !font-semibold !leading-none"
-                              ariaLabel={`Edit vehicle condition for ${customer.id}`}
-                            />
-                            <ToggleOptionGroup
-                              value={editDraft.purchase_method}
-                              options={[
-                                { value: '', label: 'Cash / Loan' },
-                                ...PURCHASE_METHOD_OPTIONS.filter(Boolean).map((option) => ({ value: option, label: option }))
-                              ]}
-                              onChange={(value) => updateDraft('purchase_method', value as PurchaseMethod)}
-                              onOptionClick={(event) => handleActiveEditableCellClick(event, customer)}
-                              className="w-full rounded-md bg-white ring-1 ring-slate-100"
-                              optionClassName="!min-h-6 !rounded-md !px-1.5 !py-0.5 !text-[9px] !font-semibold !leading-none"
-                              ariaLabel={`Edit purchase method for ${customer.id}`}
-                            />
-                          </div>
-                          <div className="flex items-center justify-end gap-1 pt-0.5">
-                            <button
-                              type="button"
-                              onPointerDown={(event) => {
-                                event.preventDefault();
-                                event.stopPropagation();
-                                cancelEditingCustomer();
-                              }}
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                if (event.detail === 0) {
-                                  cancelEditingCustomer();
-                                }
-                              }}
-                              className="inline-flex min-h-6 items-center gap-1 rounded-md bg-slate-100 px-2 py-1 text-[9px] font-semibold text-slate-500 transition-colors hover:bg-slate-200 hover:text-slate-700"
-                              aria-label={`Cancel vehicle changes for ${customer.id}`}
-                            >
-                              <X className="h-3 w-3" aria-hidden="true" />
-                              {tr('取消', 'Cancel', 'Batal')}
-                            </button>
-                            <button
-                              type="button"
-                              onPointerDown={(event) => {
-                                event.preventDefault();
-                                event.stopPropagation();
-                                saveEditingCustomer(customer.id);
-                              }}
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                if (event.detail === 0) {
-                                  saveEditingCustomer(customer.id);
-                                }
-                              }}
-                              className="inline-flex min-h-6 items-center gap-1 rounded-md bg-red-800 px-2 py-1 text-[9px] font-bold text-white transition-colors hover:bg-red-900"
-                              aria-label={`Save vehicle changes for ${customer.id}`}
-                            >
-                              <Check className="h-3 w-3" aria-hidden="true" />
-                              {tr('保存', 'Save', 'Simpan')}
-                            </button>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="flex min-w-0 items-center gap-2" title={[customer.vehicle_model, customer.vehicle_brand, customer.vehicle_tag].filter(Boolean).join(' · ')}>
-                          <Car className="h-4 w-4 shrink-0 text-slate-300" />
-                          <div className="min-w-0 flex-1">
-                            <span className="block truncate text-xs font-semibold text-slate-700" title={customer.vehicle_model}>
-                              {customer.vehicle_model}
-                            </span>
-                            <div className="mt-0.5 flex min-w-0 gap-1 overflow-hidden">
-                              {customer.vehicle_condition && (
-                                <span className="inline-flex shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-emerald-600">
-                                  {customer.vehicle_condition}
-                                </span>
-                              )}
-                              {customer.purchase_method && (
-                                <span className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide ${
-                                  customer.purchase_method === 'Cash'
-                                    ? 'bg-amber-50 text-amber-700'
-                                    : 'bg-indigo-50 text-indigo-600'
-                                }`} title={customer.purchase_method}>
-                                  {customer.purchase_method === 'Cash'
-                                    ? <Banknote className="h-3 w-3" aria-hidden="true" />
-                                    : <Landmark className="h-3 w-3" aria-hidden="true" />}
-                                  {customer.purchase_method === 'Cash' ? tr('现金', 'Cash', 'Tunai') : tr('贷款', 'Loan', 'Pinjaman')}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                    </td>
-                    <td className="px-1.5 py-2 align-top" title={approvedNotAcceptedCount > 0 ? `${approvedNotAcceptedCount} approved not accepted` : undefined}>
-                      <div
-                        data-testid={`loan-applications-bank-summary-${customer.id}`}
-                        className="grid grid-cols-[40px_28px] items-center justify-center gap-1 overflow-visible"
-                      >
-                        <p className="truncate whitespace-nowrap text-[10px] font-bold text-slate-700">
-                          {copy.banks((customer.bank_applications || []).length)}
                         </p>
-                        {latestBankApplication && (
-                          <div className="flex w-7 justify-center overflow-visible">
-                            <BankApplicationIndicator
-                              key={latestBankApplication.id}
-                              applicationId={customer.id}
-                              bankApplication={latestBankApplication}
-                              bankDefinitions={bankDefinitions}
-                            />
-                          </div>
+                        {customer.vehicle_plate && (
+                          <p className="mt-0.5 font-mono text-micro tracking-normal text-slate-400">{customer.vehicle_plate}</p>
                         )}
                       </div>
                     </td>
-                    <td className="px-2 py-2 align-top">
-                      <div data-testid={`loan-staff-assignments-${customer.id}`} className="grid grid-cols-2 gap-1.5">
-                        <div
-                          data-testid={`loan-staff-handler-${customer.id}`}
-                          data-pending={isHandlerPending ? 'true' : 'false'}
-                          title={`${tr('经手人', 'Handler', 'Pengendali')}: ${customer.handler_name}${isHandlerPending ? ` · ${tr('待处理', 'Pending', 'Menunggu')}` : ''}`}
-                          className={`relative rounded-lg border px-1.5 py-1 transition-shadow ${isHandlerPending ? pendingGlowClass : idleAssignmentClass}`}
-                        >
-                          <div className="mb-0.5 flex items-center justify-between gap-1">
-                            <span className="text-[8px] font-bold uppercase tracking-wider text-slate-500">{tr('经手人', 'Handler', 'Pengendali')}</span>
-                            {isHandlerPending && (
-                              <span title={tr('待处理', 'Pending', 'Menunggu')} aria-label={tr('待处理', 'Pending', 'Menunggu')} className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-amber-500 text-[8px] font-extrabold uppercase text-white">
-                                P
-                              </span>
-                            )}
-                          </div>
-                          {isEditing ? (
-                            <div className="space-y-1">
-                              <input
-                                value={editDraft.handler_name}
-                                onClick={(event) => event.stopPropagation()}
-                                onChange={(event) => updateDraft('handler_name', event.target.value)}
-                                className={editInputClass}
-                                aria-label={`Edit handling staff for ${customer.id}`}
-                              />
-                              <input
-                                value={editDraft.handler_role}
-                                onClick={(event) => event.stopPropagation()}
-                                onChange={(event) => updateDraft('handler_role', event.target.value)}
-                                className={editInputClass}
-                                aria-label={`Edit handling role for ${customer.id}`}
-                              />
-                            </div>
-                          ) : canEditCustomers ? (
-                            <div onClick={(event) => event.stopPropagation()} onDoubleClick={(event) => event.stopPropagation()}>
-                              <ToggleOptionGroup
-                                value={customer.handler_name}
-                                onChange={(handlerName) => {
-                                  const selectedAccount = roleAccounts.find((account) => account.status === 'Active' && account.name === handlerName);
-                                  onUpdateLoanApplication(customer.id, {
-                                    handler_name: handlerName,
-                                    handler_role: selectedAccount?.role || customer.handler_role
-                                  });
-                                }}
-                                options={[
-                                  ...(seoAwaitingAssignment ? activeSalesHandlerOptions : activeHandlerOptions),
-                                  ...(!(seoAwaitingAssignment ? activeSalesHandlerOptions : activeHandlerOptions).some((option) => option.value === customer.handler_name) && customer.handler_name
-                                    ? [{
-                                        value: customer.handler_name,
-                                        label: seoAwaitingAssignment
-                                          ? tr('SEO · 选择 Sales', 'SEO · Assign Sales', 'SEO · Tetapkan Jualan')
-                                          : customer.handler_name
-                                      }]
-                                    : [])
-                                ]}
-                                className={`w-full min-w-0 ${seoAwaitingAssignment ? 'rounded-lg bg-amber-50 ring-1 ring-amber-100' : ''}`}
-                                optionClassName={`min-h-8 px-2 py-1 ${seoAwaitingAssignment ? 'text-amber-700' : ''}`}
-                                activationClicks={seoAwaitingAssignment ? 1 : 3}
-                                plainWhenCollapsed={!seoAwaitingAssignment}
-                                ariaLabel={`${copy.handler}: ${customer.applicant_name}`}
-                              />
-                            </div>
-                          ) : (
-                            <StaffNameBadge
-                              name={customer.handler_name}
-                              role={getRoleDisplayLabel(customer.handler_role, language)}
-                              roleAccounts={roleAccounts}
-                              avatarClassName="h-5 w-5"
-                              nameClassName="truncate text-[9px] font-bold text-slate-700"
-                              roleClassName="hidden"
-                            />
-                          )}
-                        </div>
+                    <td className={`${loanTableBodyCellClass} font-mono tabular-nums text-slate-600`}>
+                      {customer.ic_no}
+                    </td>
+                    <td className={loanTableBodyCellClass}>
+                      <span className="flex items-center gap-1.5">
+                        <span className="max-w-[140px] truncate font-medium text-slate-700" title={customer.vehicle_model}>
+                          {customer.vehicle_model}
+                        </span>
+                        {customer.purchase_method === 'Cash' && (
+                          <span className="shrink-0 rounded-chip bg-amber-50 px-1.5 py-0.5 text-micro uppercase text-amber-700">
+                            {tr('现金', 'Cash', 'Tunai')}
+                          </span>
+                        )}
+                      </span>
+                    </td>
+                    {loanTableBankColumns.map((column) => {
+                      const bankApplication = getLatestBankApplicationForColumn(customer, column);
+                      const reasons = bankApplication?.status === 'Rejected'
+                        ? getRejectCodePlainTexts(bankApplication.reject_code, errorCodeIssueMap, language)
+                        : [];
+                      const reasonText = bankApplication?.status === 'Rejected'
+                        ? reasons.map((reason) => reason.text || reason.code).join(' · ') || bankApplication.reject_reason
+                        : bankApplication?.status === 'Need More Info'
+                          ? bankApplication.status_reason || bankApplication.reason_category
+                          : '';
+                      const tooltip = bankApplication
+                        ? [
+                            `${bankApplication.bank_name} · ${LOAN_TABLE_BANK_STATUS_LABEL[bankApplication.status]}`,
+                            ...reasons.map((reason) => `${reason.code}${reason.text ? ` — ${reason.text}` : ''}`),
+                            reasons.length === 0 ? reasonText : ''
+                          ].filter(Boolean).join('\n')
+                        : undefined;
 
-                        <div
-                          data-testid={`loan-staff-admin-${customer.id}`}
-                          data-pending={isAdminPending ? 'true' : 'false'}
-                          title={`${tr('Admin 负责人', 'Admin Owner', 'Pemilik Admin')}: ${adminOwnerName}${isAdminPending ? ` · ${tr('待处理', 'Pending', 'Menunggu')}` : ''}`}
-                          className={`relative rounded-lg border px-1.5 py-1 transition-shadow ${isAdminPending ? pendingGlowClass : idleAssignmentClass}`}
+                      const opensBankPage = Boolean(onOpenBankPage)
+                        && customer.purchase_method === 'Loan'
+                        && getLoanPendingAction(customer) !== 'Complete Application';
+                      const takesBankDecision = opensBankPage
+                        && hasAdminWorkAccess(currentStaffRole)
+                        && Boolean(bankApplication && BANK_QUICK_ACTION_STATUSES.includes(bankApplication.status));
+
+                      return (
+                        <td
+                          key={column.key}
+                          data-testid={`loan-applications-bank-${customer.id}-${column.key}`}
+                          data-opens-bank-page={opensBankPage || undefined}
+                          className={`group/cell ${loanTableBodyCellClass} ${opensBankPage ? 'cursor-pointer hover:bg-indigo-50/60' : ''}`}
+                          title={tooltip}
+                          onClick={opensBankPage ? (event) => {
+                            event.stopPropagation();
+                            window.clearTimeout(bankCellClickTimerRef.current);
+                            const target = { bankName: column.label, bankApplicationId: bankApplication?.id };
+                            if (!takesBankDecision) {
+                              onOpenBankPage?.(customer, target);
+                              return;
+                            }
+                            // Wait for a possible second click: a double-click opens the decisions instead.
+                            bankCellClickTimerRef.current = window.setTimeout(() => onOpenBankPage?.(customer, target), 250);
+                          } : undefined}
+                          onMouseDown={takesBankDecision ? (event) => {
+                            // A double-click opens the decisions; it should not select the status text.
+                            if (event.detail > 1) event.preventDefault();
+                          } : undefined}
+                          onDoubleClick={takesBankDecision && bankApplication ? (event) => {
+                            event.stopPropagation();
+                            window.clearTimeout(bankCellClickTimerRef.current);
+                            const rect = event.currentTarget.getBoundingClientRect();
+                            // Open upwards when the cell is too close to the bottom of the window.
+                            const menuHeight = 236;
+                            setBankDecisionMenu({
+                              application: customer,
+                              bankApplicationId: bankApplication.id,
+                              bankLabel: column.label,
+                              top: rect.bottom + 4 + menuHeight > window.innerHeight
+                                ? Math.max(8, rect.top - menuHeight - 4)
+                                : rect.bottom + 4,
+                              left: Math.max(8, Math.min(rect.left, window.innerWidth - 248))
+                            });
+                          } : undefined}
                         >
-                          <div className="mb-0.5 flex items-center justify-between gap-1">
-                            <span className="text-[8px] font-bold uppercase tracking-wider text-slate-500">{tr('Admin 负责人', 'Admin Owner', 'Pemilik Admin')}</span>
-                            {isAdminPending && (
-                              <span title={tr('待处理', 'Pending', 'Menunggu')} aria-label={tr('待处理', 'Pending', 'Menunggu')} className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-amber-500 text-[8px] font-extrabold uppercase text-white">
-                                P
+                          {bankApplication ? (
+                            <div className="flex flex-col items-center gap-0.5">
+                              <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-micro font-bold tracking-wide ${LOAN_TABLE_BANK_STATUS_CLASS[bankApplication.status]}`}>
+                                <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-current" />
+                                {LOAN_TABLE_BANK_STATUS_LABEL[bankApplication.status]}
                               </span>
-                            )}
-                          </div>
-                          <StaffNameBadge
-                            name={adminOwnerName}
-                            role={getRoleDisplayLabel('Admin', language)}
-                            roleAccounts={roleAccounts}
-                            avatarClassName="h-5 w-5"
-                            nameClassName={`truncate text-[9px] font-bold ${customer.admin_owner_name ? 'text-slate-700' : 'text-slate-400'}`}
-                            roleClassName="hidden"
-                          />
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-2.5 py-2 align-top">
-                      <CustomerJourneyRail application={customer} />
-                    </td>
-                    <td className="px-2.5 py-2 align-top">
-                      <DoubleClickEditField
-                        type="text"
-                        value={customer.remarks}
-                        onCommit={(value) => onUpdateLoanApplication(customer.id, { remarks: value })}
-                        copyOnly={!canEditCustomerRow}
-                        placeholder={copy.remarksPlaceholder}
-                        emptyText={copy.remarksEmpty}
-                        displayClassName="block min-h-6 w-full truncate rounded-lg bg-slate-50 px-2 py-1 text-left text-[10px] text-slate-500 transition-colors hover:bg-indigo-50 hover:text-indigo-600"
-                        inputClassName="w-full rounded-lg border border-indigo-100 bg-white px-3 py-2 text-xs text-slate-600 outline-none ring-2 ring-indigo-50"
-                        ariaLabel={`${canEditCustomerRow ? 'Update' : 'Copy'} remarks for ${customer.id}`}
-                      />
-                    </td>
+                              {reasonText && (
+                                <span
+                                  data-testid={`loan-applications-bank-reason-${customer.id}-${column.key}`}
+                                  className="max-w-[140px] truncate text-micro tracking-normal text-slate-500"
+                                >
+                                  {reasonText}
+                                </span>
+                              )}
+                            </div>
+                          ) : column.inBankDatabase && onSubmitToBank && canSubmitToBankFromTable(customer, currentStaffRole) ? (() => {
+                            const missingDocuments = getMissingDocumentLabels(customer);
+                            const isSubmittingCell = submittingBankCell === `${customer.id}:${column.key}`;
+                            return (
+                              <button
+                                type="button"
+                                data-testid={`loan-applications-submit-bank-${customer.id}-${column.key}`}
+                                disabled={Boolean(submittingBankCell)}
+                                title={missingDocuments.length > 0
+                                  ? tr(`还缺文件：${missingDocuments.join('、')}`, `Documents still missing: ${missingDocuments.join(', ')}`, `Dokumen masih kurang: ${missingDocuments.join(', ')}`)
+                                  : tr(`提交到 ${column.label}`, `Submit to ${column.label}`, `Hantar ke ${column.label}`)}
+                                aria-label={`Submit ${customer.applicant_name} to ${column.label}`}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  void handleSubmitToBankCell(customer, column);
+                                }}
+                                onKeyDown={(event) => event.stopPropagation()}
+                                className={`mx-auto inline-flex h-7 items-center gap-1 rounded-full px-2.5 text-micro font-bold tracking-wide ring-1 transition-opacity ${
+                                  isSubmittingCell ? 'opacity-100' : 'opacity-0 focus-visible:opacity-100 group-hover/cell:opacity-100'
+                                } ${
+                                  missingDocuments.length > 0
+                                    ? 'bg-amber-50 text-amber-700 ring-amber-200 hover:bg-amber-100'
+                                    : 'bg-white text-indigo-700 ring-indigo-200 hover:bg-indigo-50'
+                                }`}
+                              >
+                                {missingDocuments.length > 0
+                                  ? <AlertTriangle aria-hidden="true" className="h-3.5 w-3.5" />
+                                  : <ArrowUpRight aria-hidden="true" className="h-3.5 w-3.5" />}
+                                {isSubmittingCell
+                                  ? tr('提交中…', 'Submitting…', 'Menghantar…')
+                                  : missingDocuments.length > 0
+                                    ? tr('缺文件', 'DOCS MISSING', 'DOKUMEN KURANG')
+                                    : tr('提交', 'SUBMIT', 'HANTAR')}
+                              </button>
+                            );
+                          })() : null}
+                        </td>
+                      );
+                    })}
                   </tr>
                 );
               })}
 
               {virtualWindow.bottomSpacerHeight > 0 && (
                 <tr aria-hidden="true">
-                  <td colSpan={9} className="p-0" style={{ height: virtualWindow.bottomSpacerHeight }} />
+                  <td colSpan={loanTableColumnCount} className="p-0" style={{ height: virtualWindow.bottomSpacerHeight }} />
                 </tr>
               )}
 
               {hasMoreCustomersToLoad && (
                 <tr aria-hidden="true">
-                  <td colSpan={9} className="bg-white px-6 py-4 text-center text-[11px] font-bold text-slate-400">
+                  <td colSpan={loanTableColumnCount} className="bg-white px-6 py-3 text-center text-caption font-semibold text-slate-400">
                     {tr(`继续往下滚动加载更多 · ${loadedCustomers.length}/${customers.length}`, `Scroll down to load more · ${loadedCustomers.length}/${customers.length}`, `Tatal ke bawah untuk memuatkan lagi · ${loadedCustomers.length}/${customers.length}`)}
                   </td>
                 </tr>
@@ -3948,16 +4155,15 @@ function CustomerList({
 
               {customers.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="py-14 text-center text-sm text-slate-400">
+                  <td colSpan={loanTableColumnCount} className="py-14 text-center text-body text-slate-400">
                     {copy.noCustomers}
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
-          </div>
         </div>
-      </section>}
+      </section>
     </div>
   );
 }

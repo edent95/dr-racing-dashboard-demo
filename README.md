@@ -37,3 +37,11 @@ npm run build:demo   # rebuilds into ../demo with VITE_DEMO_MODE=true
 `app/src/demo/bootstrap.ts`, which seeds the sample dataset, signs the visitor in,
 and shows the PUBLIC DEMO banner. A normal build (without the flag) contains none
 of this behavior.
+
+## Source sync
+
+`app/` is synced from the private DrRacing repo (last sync: 2026-10-28, `edent95/DrRacing@a929a36`).
+After copying `src`, `shared`, `public`, `index.html`, `vite.config.ts`, `package*.json` and
+`tsconfig.json`, re-apply the demo-only edits: the `VITE_DEMO_MODE` block in `src/main.tsx`,
+`DEMO SUPER ADMIN` / `DEMO SALES NN` in `src/data/mockData.ts` and `src/hooks/useStaffSessionAuth.ts`,
+`WHATSAPP_URL = '#demo-contact'` in `shared/seoContent.mjs`, and the demo-only `scripts` in `package.json`.

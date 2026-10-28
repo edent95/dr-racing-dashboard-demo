@@ -1,3 +1,4 @@
+import { malaysiaDate } from '../../shared/malaysiaDate.mjs';
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -83,7 +84,7 @@ const triggerCsvDownload = (csv: string, filename: string) => {
 };
 
 export const downloadCsv = (rows: PlainRow[], baseFilename: string) => {
-  const stamp = new Date().toISOString().slice(0, 10);
+  const stamp = malaysiaDate();
   triggerCsvDownload(buildCsv(rows), `${baseFilename}_${stamp}.csv`);
 };
 

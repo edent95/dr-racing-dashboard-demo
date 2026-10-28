@@ -3,21 +3,21 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { getAuth, type Auth } from 'firebase/auth';
+import { connectAuthEmulator, getAuth } from 'firebase/auth';
 import { getFirebaseApp } from './firebase';
+import { firebaseEmulatorHosts, useFirebaseEmulators } from './firebaseEmulators';
 
-let firebaseAuth: Auth | null = null;
+let authEmulatorConnected = false;
 
+// getAuth(app) is already memoized per app inside the Firebase SDK.
 export function getFirebaseAuth() {
   const app = getFirebaseApp();
+  if (!app) return null;
 
-  if (!app) {
-    return null;
+  const auth = getAuth(app);
+  if (useFirebaseEmulators && !authEmulatorConnected) {
+    connectAuthEmulator(auth, `http://${firebaseEmulatorHosts.auth.host}:${firebaseEmulatorHosts.auth.port}`, { disableWarnings: true });
+    authEmulatorConnected = true;
   }
-
-  if (!firebaseAuth) {
-    firebaseAuth = getAuth(app);
-  }
-
-  return firebaseAuth;
+  return auth;
 }

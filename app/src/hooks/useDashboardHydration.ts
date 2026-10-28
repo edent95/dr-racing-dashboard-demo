@@ -10,7 +10,6 @@ import {
   INITIAL_WHATSAPP_TRACKING_CLICKS,
   INITIAL_WHATSAPP_TRACKING_LINKS
 } from '../data/mockData';
-import { buildDefaultRolePermissionSettings, normalizeRolePermissionSettings } from '../data/rolePermissions';
 import { buildDefaultRoleNavAccessSettings, normalizeRoleNavAccessSettings } from '../data/roleNavAccess';
 import { buildDefaultVehicleCategories, normalizeVehicleCategories } from '../data/vehicleCategories';
 import { normalizeVehicleBrandLogos } from '../data/vehicleBrandLogos';
@@ -40,9 +39,7 @@ import {
   type MarketingTagRelationship,
   type NotificationItem,
   type RawCustomerLead,
-  type RewardTeam,
   type RoleAccount,
-  type RolePermissionSetting,
   type RoleNavAccessSetting,
   type StaffDefaultAvatar,
   type TagNormalizationRule,
@@ -53,6 +50,7 @@ import {
 } from '../types';
 import type { DashboardState } from '../services/dashboardRepository';
 import { invalidateOperationalDataCacheForResetEpoch } from '../lib/firebaseCacheCleanup';
+import { reconcileDashboardCacheOwnerForStoredSession } from './useStaffSessionAuth';
 
 type SyncStatus = 'loading' | 'cached' | 'firebase' | 'local' | 'error';
 
@@ -84,7 +82,6 @@ export type DashboardHydrationState = {
   rawCustomerLeads: RawCustomerLead[];
   errorCodeDefinitions: ErrorCodeDefinition[];
   roleAccounts: RoleAccount[];
-  rolePermissions: RolePermissionSetting[];
   roleNavAccess: RoleNavAccessSetting[];
   defaultAvatarLibrary: StaffDefaultAvatar[];
   whatsAppTrackingLinks: WhatsAppTrackingLink[];
@@ -92,7 +89,6 @@ export type DashboardHydrationState = {
   whatsAppDefaultMessage: string;
   customerIntakeShortLinks: CustomerIntakeShortLink[];
   customMissions: CustomMission[];
-  rewardTeams: RewardTeam[];
   approvalRequests: ApprovalRequest[];
   calendarNotes: CalendarNote[];
   notifications: NotificationItem[];
@@ -238,7 +234,6 @@ function applyDashboardState(state: DashboardHydrationState, setters: DashboardH
   setters.setRawCustomerLeads(state.rawCustomerLeads);
   setters.setErrorCodeDefinitions(state.errorCodeDefinitions);
   setters.setRoleAccounts(state.roleAccounts);
-  setters.setRolePermissions(state.rolePermissions);
   setters.setRoleNavAccess(state.roleNavAccess);
   setters.setDefaultAvatarLibrary(state.defaultAvatarLibrary);
   setters.setWhatsAppTrackingLinks(state.whatsAppTrackingLinks);
@@ -246,7 +241,6 @@ function applyDashboardState(state: DashboardHydrationState, setters: DashboardH
   setters.setWhatsAppDefaultMessage(state.whatsAppDefaultMessage);
   setters.setCustomerIntakeShortLinks(state.customerIntakeShortLinks);
   setters.setCustomMissions(state.customMissions);
-  setters.setRewardTeams(state.rewardTeams);
   setters.setApprovalRequests(state.approvalRequests);
   setters.setCalendarNotes(state.calendarNotes);
   setters.setNotifications(state.notifications);
@@ -364,12 +358,6 @@ async function loadLocalDashboardState(
     (value) => hydrateRoleAccounts(value as RoleAccount[]),
     warnLocalCacheReadFailed
   ));
-  const nextRolePermissions = readJsonCache(
-    'role_permissions',
-    buildDefaultRolePermissionSettings(),
-    (value) => normalizeRolePermissionSettings(value as RolePermissionSetting[]),
-    warnLocalCacheReadFailed
-  );
   const nextVehicleCategories = readJsonCache(
     'vehicle_categories',
     buildDefaultVehicleCategories(),
@@ -422,12 +410,6 @@ async function loadLocalDashboardState(
     (value) => value as CustomMission[],
     warnLocalCacheReadFailed
   );
-  const nextRewardTeams = readJsonCache(
-    'reward_teams',
-    [] as RewardTeam[],
-    (value) => value as RewardTeam[],
-    warnLocalCacheReadFailed
-  );
   const nextApprovalRequests = readJsonCache(
     'approval_requests',
     [] as ApprovalRequest[],
@@ -472,7 +454,6 @@ async function loadLocalDashboardState(
       rawCustomerLeads: nextRawCustomerLeads,
       errorCodeDefinitions: nextErrorCodeDefinitions,
       roleAccounts: nextRoleAccounts,
-      rolePermissions: nextRolePermissions,
       roleNavAccess: nextRoleNavAccess,
       vehicleCategories: nextVehicleCategories,
       vehicleBrandLogos: nextVehicleBrandLogos,
@@ -482,7 +463,6 @@ async function loadLocalDashboardState(
       whatsAppDefaultMessage: nextWhatsAppDefaultMessage,
       customerIntakeShortLinks: nextCustomerIntakeShortLinks,
       customMissions: nextCustomMissions,
-      rewardTeams: nextRewardTeams,
       approvalRequests: nextApprovalRequests,
       calendarNotes: nextCalendarNotes,
       notifications: nextNotifications,
@@ -534,11 +514,11 @@ async function applyPublicDashboardConfig(
       }
     }
 
-    if (publicConfig.whatsAppTrackingLinks.length > 0) {
-      setters.setWhatsAppTrackingLinks(publicConfig.whatsAppTrackingLinks);
-      if (persistLocal) {
-        writeLocalDashboardValue('whatsAppTrackingLinks', publicConfig.whatsAppTrackingLinks);
-      }
+    // The public document is authoritative here: an empty list means every
+    // link was removed, so it must replace the cached links too.
+    setters.setWhatsAppTrackingLinks(publicConfig.whatsAppTrackingLinks);
+    if (persistLocal) {
+      writeLocalDashboardValue('whatsAppTrackingLinks', publicConfig.whatsAppTrackingLinks);
     }
 
     if (publicConfig.whatsAppDefaultMessage?.trim()) {
@@ -697,6 +677,16 @@ export function useDashboardHydration(options: UseDashboardHydrationOptions) {
         return;
       }
 
+      // With Firebase the localStorage cache is a copy of one staff member's
+      // scoped data. Clear it before it is applied unless it belongs to the
+      // stored staff session (sign-in writes the owner before it re-hydrates).
+      // Local mode (no Firebase) keeps localStorage as its only database, and
+      // e2e specs switch staff by rewriting `dr_racing_current_staff`, so there
+      // the owner is only checked at an interactive sign-in (handleLogin).
+      if (firebaseConfigured) {
+        reconcileDashboardCacheOwnerForStoredSession();
+      }
+
       const localLoadResult = await loadLocalDashboardState(currentOptions);
       let localState = localLoadResult.state;
 
@@ -770,7 +760,6 @@ export function useDashboardHydration(options: UseDashboardHydrationOptions) {
               whatsAppTrackingClicks: [],
               customerIntakeShortLinks: [],
               customMissions: [],
-              rewardTeams: [],
               approvalRequests: [],
               calendarNotes: [],
               notifications: [],
@@ -858,7 +847,6 @@ export function useDashboardHydration(options: UseDashboardHydrationOptions) {
             roleAccounts: cleanedRoleAccounts.length > 0
               ? normalizers.hydrateRoleAccounts(cleanedRoleAccounts)
               : removeLegacyDemoAccounts(INITIAL_ROLE_ACCOUNTS),
-            rolePermissions: normalizeRolePermissionSettings(firebaseState.rolePermissions || localState.rolePermissions || []),
             roleNavAccess: normalizeRoleNavAccessSettings(
               (firebaseState.roleNavAccess && firebaseState.roleNavAccess.length > 0)
                 ? firebaseState.roleNavAccess
@@ -880,7 +868,6 @@ export function useDashboardHydration(options: UseDashboardHydrationOptions) {
             whatsAppDefaultMessage: loadedWhatsAppDefaultMessage,
             customerIntakeShortLinks: firebaseState.customerIntakeShortLinks || [],
             customMissions: firebaseState.customMissions || [],
-            rewardTeams: firebaseState.rewardTeams || [],
             approvalRequests: firebaseState.approvalRequests || [],
             calendarNotes: firebaseState.calendarNotes || [],
             notifications: normalizers.normalizeNotificationList(firebaseState.notifications || []),

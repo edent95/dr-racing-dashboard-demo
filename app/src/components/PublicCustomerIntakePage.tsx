@@ -6,11 +6,15 @@
 import React from 'react';
 import { Banknote, CheckCircle2, Landmark, Users } from 'lucide-react';
 import ToggleOptionGroup from './ToggleOptionGroup';
+import FileDropZone from './FileDropZone';
+import StartYearMonthInput, { YearsMonthsDurationInput } from './StartYearMonthInput';
 import { tr } from '../lib/i18n';
+import { fieldLabelWith, FROM_IC } from '../data/fieldLabels';
 import { deriveMalaysiaIcBirthDate } from '../utils/malaysiaIc';
 import {
   GENDER_OPTIONS,
   getSalaryBankOptions,
+  hasChildrenQuestion,
   HOUSING_STATUS_OPTIONS,
   LOAN_TENURE_OPTIONS,
   MARITAL_STATUS_OPTIONS,
@@ -22,6 +26,11 @@ import {
 } from '../utils/customerIntakeValidation';
 import { getCustomerDocumentUploadLimit } from '../utils/documentChecklist';
 import type { CustomerDocumentKey, PurchaseMethod, VehicleCondition } from '../types';
+import { newId } from '../utils/id';
+import { prepareDocumentFileForUpload } from '../lib/documentImageCompression';
+
+// One line in remarks, which the Rules cap at 1000 characters with the intake note in front.
+export const CUSTOMER_REMARK_MAX_LENGTH = 600;
 
 export type CustomerIntakeDraft = {
   applicant_name: string;
@@ -40,8 +49,11 @@ export type CustomerIntakeDraft = {
   gender: string;
   race: string;
   marital_status: string;
+  number_of_children: string;
   housing_status: string;
   years_at_residence: string;
+  residence_start_year: string;
+  residence_start_month: string;
   emergency_contact_1_full_name: string;
   emergency_contact_1_relationship: string;
   emergency_contact_1_full_address: string;
@@ -53,6 +65,8 @@ export type CustomerIntakeDraft = {
   company_name: string;
   position: string;
   years_employed: string;
+  employment_start_year: string;
+  employment_start_month: string;
   company_address: string;
   office_phone_no: string;
   gross_monthly_salary: string;
@@ -61,6 +75,8 @@ export type CustomerIntakeDraft = {
   salary_payment_method: string;
   preferred_motorcycle: string;
   loan_tenure: string;
+  /** Free text from the customer, e.g. the payslip PDF password (owner 2026-10-20). */
+  customer_remark: string;
 };
 
 export type CustomerIntakeDocumentDraft = {
@@ -75,8 +91,11 @@ export type CustomerIntakeDocumentDraft = {
 export type CustomerIntakeSubmitError =
   | ''
   | 'authentication'
+  | 'documents-incomplete'
+  | 'link-inactive'
   | 'network'
   | 'permission-denied'
+  | 'rate-limited'
   | 'timeout'
   | 'unknown';
 
@@ -100,13 +119,25 @@ interface PublicCustomerIntakePageProps {
   isSubmitting?: boolean;
   submitError?: CustomerIntakeSubmitError;
   submittedApplicationId: string;
+  // A retry after a timeout re-sent the earlier content; later edits were not sent.
+  submittedWithoutLaterChanges?: boolean;
 }
 
-const inputClass = 'rounded-lg border border-slate-100 bg-white px-3 py-2.5 text-sm font-semibold text-slate-700 outline-none focus:ring-1 focus:ring-indigo-100';
-const labelClass = 'text-[10px] font-bold uppercase tracking-wide text-slate-400';
-const sectionTitleClass = 'text-sm font-bold text-slate-900';
+const inputClass = 'rounded-control border border-slate-100 bg-white px-3 py-2.5 text-callout text-slate-700 outline-none focus:ring-1 focus:ring-indigo-100';
+const labelClass = 'text-micro uppercase text-slate-400';
+const sectionTitleClass = 'text-headline text-slate-900';
 const RequiredMark = () => <span aria-hidden="true" className="text-rose-500"> *</span>;
 const CUSTOMER_DOCUMENT_MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
+// 照片上传前会自动压缩，所以原图可以更大；压缩后仍要 ≤ 10MB（storage.rules 的上限）。
+const CUSTOMER_DOCUMENT_MAX_PHOTO_INPUT_BYTES = 25 * 1024 * 1024;
+const toJpegFileName = (fileName: string) => (
+  /\.jpe?g$/i.test(fileName) ? fileName : `${fileName.replace(/\.[^./]+$/, '')}.jpg`
+);
+const documentTooLargeMessage = (fileName: string, limitMb: number) => tr(
+  `${fileName}：每个文件必须小于或等于 ${limitMb}MB。`,
+  `${fileName}: each file must be ${limitMb}MB or smaller.`,
+  `${fileName}: setiap fail mestilah ${limitMb}MB atau lebih kecil.`
+);
 const CUSTOMER_DOCUMENT_ACCEPTED_TYPES = new Set(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']);
 const normalizeDecimalInput = (value: string) => {
   const cleaned = value.replace(/[^\d.]/g, '');
@@ -131,7 +162,8 @@ export default function PublicCustomerIntakePage({
   assignmentPending = false,
   isSubmitting = false,
   submitError = '',
-  submittedApplicationId
+  submittedApplicationId,
+  submittedWithoutLaterChanges = false
 }: PublicCustomerIntakePageProps) {
   const intakeFieldsRef = React.useRef<HTMLDivElement>(null);
   const [showValidationErrors, setShowValidationErrors] = React.useState(false);
@@ -187,32 +219,35 @@ export default function PublicCustomerIntakePage({
       return;
     }
 
-    const invalidSizeFile = files.find((file) => file.size <= 0 || file.size > CUSTOMER_DOCUMENT_MAX_FILE_SIZE_BYTES);
+    const maxInputBytes = (file: File) => (
+      file.type.startsWith('image/') ? CUSTOMER_DOCUMENT_MAX_PHOTO_INPUT_BYTES : CUSTOMER_DOCUMENT_MAX_FILE_SIZE_BYTES
+    );
+    const invalidSizeFile = files.find((file) => file.size <= 0 || file.size > maxInputBytes(file));
     if (invalidSizeFile) {
-      setDocumentError(tr(
-        `${invalidSizeFile.name}：每个文件必须小于或等于 10MB。`,
-        `${invalidSizeFile.name}: each file must be 10MB or smaller.`,
-        `${invalidSizeFile.name}: setiap fail mestilah 10MB atau lebih kecil.`
-      ));
+      setDocumentError(documentTooLargeMessage(invalidSizeFile.name, maxInputBytes(invalidSizeFile) / 1024 / 1024));
       return;
     }
 
     setIsPreparingDocuments(true);
     try {
       const selectedAt = Date.now();
-      const preparedDocuments = await Promise.all(files.map(async (file, index) => ({
-        id: `${documentKey}-${selectedAt}-${index}-${Math.random().toString(36).slice(2, 7)}`,
-        document_key: documentKey,
-        file_name: file.name,
-        file_type: file.type,
-        file_size: file.size,
-        file_data_url: await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(String(reader.result || ''));
-          reader.onerror = () => reject(reader.error || new Error('Document could not be read.'));
-          reader.readAsDataURL(file);
-        })
+      const preparedFiles = await Promise.all(files.map(async (file) => ({
+        file,
+        prepared: await prepareDocumentFileForUpload(file)
       })));
+      const stillTooLarge = preparedFiles.find(({ prepared }) => prepared.fileSize > CUSTOMER_DOCUMENT_MAX_FILE_SIZE_BYTES);
+      if (stillTooLarge) {
+        setDocumentError(documentTooLargeMessage(stillTooLarge.file.name, CUSTOMER_DOCUMENT_MAX_FILE_SIZE_BYTES / 1024 / 1024));
+        return;
+      }
+      const preparedDocuments = preparedFiles.map(({ file, prepared }) => ({
+        id: newId(documentKey),
+        document_key: documentKey,
+        file_name: prepared.compressed ? toJpegFileName(file.name) : file.name,
+        file_type: prepared.fileType,
+        file_size: prepared.fileSize,
+        file_data_url: prepared.dataUrl
+      }));
       setDocuments((current) => [
         ...current,
         ...preparedDocuments
@@ -249,7 +284,8 @@ export default function PublicCustomerIntakePage({
     gender: tr('请选择性别。', 'Select the gender.', 'Pilih jantina.'),
     race: tr('请选择种族。', 'Select the race.', 'Pilih bangsa.'),
     marital_status: tr('请选择婚姻状态。', 'Select the marital status.', 'Pilih status perkahwinan.'),
-    years_at_residence: tr('请填写居住年数。', 'Enter the years at residence.', 'Masukkan tempoh menetap.'),
+    number_of_children: tr('请填写孩子数量(没有就填 0)。', 'Enter the number of children (0 if none).', 'Masukkan bilangan anak (0 jika tiada).'),
+    years_at_residence: tr('请填写在现址住了几年几个月。', 'Enter how many years and months you have lived here.', 'Isi berapa tahun dan bulan anda menetap di sini.'),
     housing_status: tr('请选择住房状态。', 'Select the housing status.', 'Pilih status perumahan.'),
     full_address: tr('请填写 IC 上的永久地址。', 'Enter the Permanent Address (IC).', 'Masukkan Alamat Tetap (IC).'),
     resident_address: tr('请填写居住地址。', 'Enter the Resident Address.', 'Masukkan Alamat Kediaman.'),
@@ -267,13 +303,13 @@ export default function PublicCustomerIntakePage({
     net_monthly_salary: copy.netMonthlySalary,
     company_name: copy.companyName,
     position: copy.position,
-    years_employed: copy.yearsEmployed,
+    years_employed: tr('请选择开始上班的年和月。', 'Pick the year and month you started work.', 'Pilih tahun dan bulan mula bekerja.'),
     office_phone_no_required: copy.officePhone,
     office_phone_no_invalid: tr('公司电话格式不正确。', 'Enter a valid Malaysian office phone number.', 'Masukkan nombor telefon pejabat Malaysia yang sah.'),
     company_address: copy.companyAddress,
     available_to_receive_calls: copy.availableToReceiveCalls,
     salary_payment_method: tr('薪资收取方式', 'Salary Paid By', 'Gaji Dibayar Melalui'),
-    bank_name: tr('薪资银行', 'Salary Bank', 'Bank Gaji'),
+    bank_name: copy.bankName,
     account_number: copy.bankAccountNumber,
     loan_tenure: copy.loanTenure
   };
@@ -328,11 +364,11 @@ export default function PublicCustomerIntakePage({
       <div>
         <h3 className={sectionTitleClass}>
           {tr('上传文件', 'Upload Documents', 'Muat Naik Dokumen')}
-          <span className="ml-2 rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-slate-500">
+          <span className="ml-2 rounded-chip bg-slate-100 px-1.5 py-0.5 text-micro tracking-normal uppercase tracking-wide text-slate-500">
             {tr('选填', 'Optional', 'Pilihan')}
           </span>
         </h3>
-        <p className="mt-1 text-xs text-slate-400">
+        <p className="mt-1 text-footnote text-slate-400">
           {tr(
             '这部分可以跳过。支持一次选择多个 PDF 或图片；身份证最多 2 个，工资单和补充文件各最多 3 个，每个文件最多 10MB。',
             'You may skip this section. Select multiple PDFs or images at once: up to 2 IC files, 3 Payslips, and 3 Supporting Docs; 10MB per file.',
@@ -346,12 +382,19 @@ export default function PublicCustomerIntakePage({
           const uploadLimit = getCustomerDocumentUploadLimit(key);
           const limitReached = selectedDocuments.length >= uploadLimit;
           return (
-            <div key={key} className="rounded-xl border border-slate-200 bg-slate-50/50 p-4">
+            <FileDropZone
+              key={key}
+              testId={`public-document-drop-${key}`}
+              className="rounded-card border border-slate-200 bg-slate-50/50 p-4"
+              activeClassName="ring-2 ring-brand-100 bg-brand-50"
+              disabled={limitReached || isPreparingDocuments}
+              onFiles={(files) => { void selectDocuments(key, files); }}
+            >
               <div className="flex items-center justify-between gap-2">
-                <p className="text-xs font-bold text-slate-700">{label}</p>
-                <span className="text-[10px] font-bold text-slate-400">{selectedDocuments.length}/{uploadLimit}</span>
+                <p className="text-footnote font-bold text-slate-700">{label}</p>
+                <span className="text-micro tracking-normal text-slate-400">{selectedDocuments.length}/{uploadLimit}</span>
               </div>
-              <label className={`mt-3 inline-flex items-center justify-center rounded-lg bg-white px-3 py-2 text-xs font-bold ring-1 ring-slate-200 ${limitReached || isPreparingDocuments ? 'cursor-not-allowed text-slate-400 opacity-60' : 'cursor-pointer text-red-800 hover:bg-red-50'}`}>
+              <label className={`mt-3 inline-flex items-center justify-center rounded-control bg-white px-3 py-2 text-footnote font-bold ring-1 ring-slate-200 ${limitReached || isPreparingDocuments ? 'cursor-not-allowed text-slate-400 opacity-60' : 'cursor-pointer text-brand-ink hover:bg-brand-50'}`}>
                   {limitReached ? tr('已达上限', 'Limit reached', 'Had dicapai') : tr('选择文件', 'Choose files', 'Pilih fail')}
                   <input
                     type="file"
@@ -374,34 +417,50 @@ export default function PublicCustomerIntakePage({
                 </label>
               <div className="mt-3 space-y-2">
                 {selectedDocuments.length === 0 ? (
-                  <p className="rounded-lg bg-white px-3 py-2 text-[10px] font-semibold text-slate-400">
+                  <p className="rounded-control bg-white px-3 py-2 text-caption text-slate-400">
                     {tr('尚未上传', 'No file selected', 'Tiada fail dipilih')}
                   </p>
                 ) : selectedDocuments.map((selectedDocument) => (
-                  <div key={selectedDocument.id} className="flex items-center justify-between gap-3 rounded-lg bg-white px-3 py-2 ring-1 ring-slate-100">
+                  <div key={selectedDocument.id} className="flex items-center justify-between gap-3 rounded-control bg-white px-3 py-2 ring-1 ring-slate-100">
                     <div className="min-w-0">
-                      <p className="truncate text-xs font-semibold text-slate-700">{selectedDocument.file_name}</p>
-                      <p className="mt-0.5 text-[10px] text-slate-400">
+                      <p className="truncate text-footnote text-slate-700">{selectedDocument.file_name}</p>
+                      <p className="mt-0.5 text-micro tracking-normal text-slate-400">
                         {(selectedDocument.file_size / 1024 / 1024).toFixed(2)} MB
                       </p>
                     </div>
                     <button
                       type="button"
                       onClick={() => removeDocument(selectedDocument.id)}
-                      className="shrink-0 text-xs font-bold text-rose-600 hover:text-rose-700"
+                      className="shrink-0 text-footnote font-bold text-rose-600 hover:text-rose-700"
                     >
                       {tr('移除', 'Remove', 'Alih keluar')}
                     </button>
                   </div>
                 ))}
               </div>
-            </div>
+            </FileDropZone>
           );
         })}
       </div>
       {documentError && (
-        <p role="alert" className="text-xs font-semibold text-rose-700">{documentError}</p>
+        <p role="alert" className="text-footnote text-rose-700">{documentError}</p>
       )}
+      <label className="flex flex-col gap-1.5">
+        <span className={labelClass}>
+          {tr('备注', 'Remark', 'Catatan')}
+          <span className="ml-2 rounded-chip bg-slate-100 px-1.5 py-0.5 text-micro tracking-normal uppercase tracking-wide text-slate-500">
+            {tr('选填', 'Optional', 'Pilihan')}
+          </span>
+        </span>
+        <textarea
+          value={draft.customer_remark}
+          onChange={(event) => onUpdateDraft('customer_remark', event.target.value.slice(0, CUSTOMER_REMARK_MAX_LENGTH))}
+          maxLength={CUSTOMER_REMARK_MAX_LENGTH}
+          placeholder={tr('例如:工资单 PDF 的密码', 'For example: the password of your payslip PDF', 'Contoh: kata laluan PDF slip gaji anda')}
+          aria-label="Customer intake remark"
+          className={`${inputClass} min-h-20`}
+        />
+      </label>
     </section>
   );
   const submitErrorReason = submitError === 'authentication'
@@ -409,6 +468,12 @@ export default function PublicCustomerIntakePage({
       '无法建立安全提交身份，请刷新页面后再试。',
       'A secure submission session could not be created. Refresh the page and try again.',
       'Sesi penyerahan selamat tidak dapat dibuat. Muat semula halaman dan cuba lagi.'
+    )
+    : submitError === 'link-inactive'
+    ? tr(
+      '这个申请链接已失效或已被停用，申请没有提交。请向销售员索取新的链接。',
+      'This application link is no longer active, so the application was not submitted. Ask the salesperson for a new link.',
+      'Pautan permohonan ini tidak lagi aktif, jadi permohonan tidak dihantar. Minta pautan baharu daripada jurujual.'
     )
     : submitError === 'network'
       ? tr(
@@ -422,11 +487,23 @@ export default function PublicCustomerIntakePage({
           'The submission was rejected. The link may be inactive. Reopen a valid link or contact the salesperson.',
           'Penyerahan ditolak. Pautan mungkin tidak aktif. Buka semula pautan yang sah atau hubungi jurujual.'
         )
+        : submitError === 'rate-limited'
+          ? tr(
+            '这个网络或这个链接短时间内提交了太多申请，这次没有提交。请一小时后再试，或直接联系销售员。',
+            'Too many applications were sent from this network or this link in a short time, so this one was not submitted. Try again in an hour or contact the salesperson directly.',
+            'Terlalu banyak permohonan dihantar dari rangkaian atau pautan ini dalam masa singkat, jadi permohonan ini tidak dihantar. Cuba lagi selepas sejam atau hubungi jurujual terus.'
+          )
+        : submitError === 'documents-incomplete'
+          ? tr(
+            '你的资料已经提交，销售员会联系你。但有文件因网络太慢没有上传完成。请再按一次「提交申请」，只会补传文件，不会重复提交；也可以稍后把文件直接发给销售员。',
+            'Your details have been submitted and the salesperson will contact you. Some files did not finish uploading because the connection is slow. Press Submit Application again to upload only the files (nothing is submitted twice), or send the files to the salesperson later.',
+            'Butiran anda telah dihantar dan jurujual akan menghubungi anda. Sesetengah fail tidak selesai dimuat naik kerana sambungan perlahan. Tekan Hantar Permohonan sekali lagi untuk memuat naik fail sahaja (tiada penghantaran berganda), atau hantar fail kepada jurujual kemudian.'
+          )
         : submitError === 'timeout'
           ? tr(
-            '服务器未在限定时间内回应，请稍后再试。',
-            'The server did not respond in time. Please try again shortly.',
-            'Pelayan tidak memberi respons dalam tempoh yang ditetapkan. Sila cuba lagi sebentar lagi.'
+            '结果待确认：服务器没有及时回应，申请可能已经送达。请稍等片刻再按提交，系统会先核对并按原来的资料重发，不会重复提交。',
+            'Result pending: the server did not respond in time and your application may already have arrived. Wait a moment and press Submit again; it is checked first, re-sends the same details, and will not be submitted twice.',
+            'Keputusan belum disahkan: pelayan tidak memberi respons tepat pada masanya dan permohonan anda mungkin sudah diterima. Tunggu sebentar dan tekan Hantar semula; ia akan disemak dahulu, menghantar butiran yang sama, dan tidak akan dihantar dua kali.'
           )
           : submitError === 'unknown'
             ? tr(
@@ -437,45 +514,54 @@ export default function PublicCustomerIntakePage({
             : '';
 
   return (
-    <div className="min-h-screen bg-[#F9FAFB] px-4 py-8 text-[#1F2937] font-sans">
+    <div className="customer-intake-form min-h-screen bg-[#F9FAFB] px-4 py-8 text-[#1F2937] font-sans">
       <div className="mx-auto max-w-5xl">
-        <div className="mb-6 rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex items-start gap-3">
-              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-red-800 text-white">
+        <div className="mb-6 rounded-panel border border-slate-100 bg-white p-6 shadow-e1">
+          <div className="flex flex-col-reverse gap-4 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
+            <div className="flex min-w-0 items-start gap-3">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-card bg-brand text-white">
                 <Users className="h-5 w-5" />
               </div>
-              <div>
-                <h1 className="text-xl font-bold text-slate-900">{copy.customerIntakeTitle}</h1>
-                <p className="mt-1 text-sm leading-relaxed text-slate-500">
+              <div className="min-w-0">
+                <h1 className="text-title-3 text-slate-900">{copy.customerIntakeTitle}</h1>
+                <p className="mt-1 text-body leading-relaxed text-slate-500">
                   {assignmentPending
                     ? copy.seoIntakeStaffNote
                     : `${copy.customerIntakeSubmittedTo} ${salesName}. ${copy.customerIntakeStaffNote}`}
                 </p>
               </div>
             </div>
-            <div className="flex shrink-0 items-center gap-2">
+            <div className="flex flex-wrap items-center justify-end gap-2 sm:shrink-0">
               {headerControls}
             </div>
           </div>
         </div>
 
-        <div className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
+        <div className="rounded-panel border border-slate-100 bg-white p-6 shadow-e1">
           {submittedApplicationId ? (
             <div className="py-10 text-center">
               <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-50 text-emerald-600 ring-1 ring-emerald-100">
                 <CheckCircle2 className="h-6 w-6" />
               </div>
-              <h2 className="text-lg font-bold text-slate-900">{copy.submitted}</h2>
-              <p className="mt-2 text-sm text-slate-500">
+              <h2 className="text-title-3 text-slate-900">{copy.submitted}</h2>
+              <p className="mt-2 text-body text-slate-500">
                 {copy.reference}: <span className="font-mono font-bold text-slate-700">{submittedApplicationId}</span>
               </p>
+              {submittedWithoutLaterChanges && (
+                <p role="status" className="mx-auto mt-4 max-w-md rounded-control border border-amber-200 bg-amber-50 px-4 py-3 text-footnote text-amber-800">
+                  {tr(
+                    '系统收到的是你第一次提交的资料；之后修改的内容没有提交。如需更正，请联系销售员。',
+                    'We received the details from your first submission; changes made afterwards were not sent. Contact the salesperson to correct anything.',
+                    'Kami menerima butiran daripada penyerahan pertama anda; perubahan selepas itu tidak dihantar. Hubungi jurujual untuk membetulkan apa-apa.'
+                  )}
+                </p>
+              )}
             </div>
           ) : (
             <>
               <div className="mb-5">
                 <h2 className={sectionTitleClass}>{copy.customerLoanInfo}</h2>
-                <p className="mt-1 text-xs text-slate-400">{copy.customerLoanInfoNote}</p>
+                <p className="mt-1 text-footnote text-slate-400">{copy.customerLoanInfoNote}</p>
               </div>
 
               <div
@@ -510,16 +596,16 @@ export default function PublicCustomerIntakePage({
                           aria-label={label}
                           aria-pressed={selected}
                           onClick={() => onUpdateDraft('purchase_method', value)}
-                          className={`flex items-start gap-3 rounded-xl border p-4 text-left transition-colors ${
+                          className={`flex items-start gap-3 rounded-card border p-4 text-left transition-colors ${
                             selected
-                              ? 'border-red-200 bg-red-50 text-red-900 ring-1 ring-red-100'
+                              ? 'border-brand-100 bg-brand-50 text-brand-ink ring-1 ring-brand-100'
                               : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
                           }`}
                         >
-                          <Icon className={`mt-0.5 h-5 w-5 shrink-0 ${selected ? 'text-red-700' : 'text-slate-400'}`} />
+                          <Icon className={`mt-0.5 h-5 w-5 shrink-0 ${selected ? 'text-brand-ink' : 'text-slate-400'}`} />
                           <span>
-                            <span className="block text-sm font-bold">{label}</span>
-                            <span className="mt-1 block text-xs font-medium leading-relaxed text-slate-500">{helper}</span>
+                            <span className="block text-headline">{label}</span>
+                            <span className="mt-1 block text-footnote font-medium leading-relaxed text-slate-500">{helper}</span>
                           </span>
                         </button>
                       );
@@ -562,7 +648,8 @@ export default function PublicCustomerIntakePage({
                             onChange={(value) => onUpdateDraft('vehicle_condition', value as VehicleCondition)}
                             ariaLabel="Customer intake vehicle condition"
                             ariaRequired
-                            className="rounded-lg bg-white p-1 ring-1 ring-slate-100"
+                            className="w-full"
+                            optionClassName="!py-2.5 !text-callout !font-normal"
                           />
                         </label>
                         {isCashPurchase && (
@@ -578,6 +665,25 @@ export default function PublicCustomerIntakePage({
                               required
                               aria-required="true"
                               className={inputClass}
+                            />
+                          </label>
+                        )}
+                        {/* Loan Tenure sits with the vehicle (meeting 2026-10-13), like the staff forms. */}
+                        {draft.purchase_method === 'Loan' && (
+                          <label className="flex flex-col gap-1.5 md:col-span-2">
+                            <span className={labelClass}>{copy.loanTenure}<RequiredMark /></span>
+                            <ToggleOptionGroup
+                              value={draft.loan_tenure}
+                              options={[
+                                { value: '', label: copy.notSet },
+                                ...(loanTenureOptions.length > 0 ? loanTenureOptions : [...LOAN_TENURE_OPTIONS])
+                                  .map((year) => ({ value: year, label: `${year} years` }))
+                              ]}
+                              onChange={(value) => onUpdateDraft('loan_tenure', value)}
+                              ariaLabel="Customer intake loan tenure"
+                              ariaRequired
+                              className="w-full"
+                              optionClassName="!py-2.5 !text-callout !font-normal"
                             />
                           </label>
                         )}
@@ -652,7 +758,7 @@ export default function PublicCustomerIntakePage({
                           id={icErrorId}
                           role="alert"
                           data-testid="customer-intake-ic-error"
-                          className="text-xs font-semibold text-rose-600"
+                          className="text-footnote text-rose-600"
                         >
                           {icFormatError}
                         </p>
@@ -660,7 +766,7 @@ export default function PublicCustomerIntakePage({
                     </label>
                     <label className="flex flex-col gap-1.5">
                       <span className={labelClass}>
-                        {tr('出生日期（IC 自动识别）', 'Date of Birth (auto-detected from IC)', "Tarikh Lahir (dikesan secara automatik daripada IC)")}
+                        {fieldLabelWith('dateOfBirth', FROM_IC)}
                         <RequiredMark />
                       </span>
                       <input
@@ -696,7 +802,8 @@ export default function PublicCustomerIntakePage({
                             onChange={(value) => onUpdateDraft('gender', value)}
                             ariaLabel="Customer intake gender"
                             ariaRequired
-                            className="rounded-lg bg-white p-1 ring-1 ring-slate-100"
+                            className="w-full"
+                            optionClassName="!py-2.5 !text-callout !font-normal"
                           />
                         </label>
                         <label className="flex flex-col gap-1.5">
@@ -710,7 +817,8 @@ export default function PublicCustomerIntakePage({
                             onChange={(value) => onUpdateDraft('race', value)}
                             ariaLabel="Customer intake race"
                             ariaRequired
-                            className="rounded-lg bg-white p-1 ring-1 ring-slate-100"
+                            className="w-full"
+                            optionClassName="!py-2.5 !text-callout !font-normal"
                           />
                         </label>
                     <label className="flex flex-col gap-1.5">
@@ -724,21 +832,37 @@ export default function PublicCustomerIntakePage({
                         onChange={(value) => onUpdateDraft('marital_status', value)}
                         ariaLabel="Customer intake marital status"
                         ariaRequired
-                        className="rounded-lg bg-white p-1 ring-1 ring-slate-100"
+                        className="w-full"
+                        optionClassName="!py-2.5 !text-callout !font-normal"
                       />
                     </label>
-                    <label className="flex flex-col gap-1.5">
-                      <span className={labelClass}>{copy.yearsAtResidence}<RequiredMark /></span>
-                      <input
-                        value={draft.years_at_residence}
-                        onChange={(event) => onUpdateDraft('years_at_residence', event.target.value.replace(/\D/g, ''))}
-                        placeholder={copy.yearsAtResidence}
-                        inputMode="numeric"
-                        required
-                        aria-required="true"
-                        className={inputClass}
-                      />
-                    </label>
+                    {/* Same rule as the staff forms: asked for Married, Divorced and Widowed. */}
+                    {hasChildrenQuestion(draft.marital_status) && (
+                      <label className="flex flex-col gap-1.5">
+                        <span className={labelClass}>{tr('孩子数量', 'Number of Children', 'Bilangan Anak')}<RequiredMark /></span>
+                        <input
+                          value={draft.number_of_children}
+                          onChange={(event) => onUpdateDraft('number_of_children', event.target.value.replace(/\D/g, '').slice(0, 2))}
+                          placeholder={tr('没有就填 0', '0 if none', '0 jika tiada')}
+                          inputMode="numeric"
+                          required
+                          aria-required="true"
+                          aria-label="Customer intake number of children"
+                          className={`${inputClass} ${showValidationErrors && !draft.number_of_children.trim() ? 'border-rose-200 bg-rose-50/40' : ''}`}
+                        />
+                      </label>
+                    )}
+                    {/* Years + months lived here (owner 2026-10-20), stored as the move-in year/month. */}
+                    <YearsMonthsDurationInput
+                      label={tr('在现址住了多久(年 / 月)', 'Lived here (years / months)', 'Tempoh menetap (tahun / bulan)')}
+                      year={draft.residence_start_year}
+                      month={draft.residence_start_month}
+                      fallbackYears={draft.years_at_residence}
+                      onChange={(field, value) => onUpdateDraft(field === 'year' ? 'residence_start_year' : 'residence_start_month', value)}
+                      labelClassName={labelClass}
+                      inputClassName={inputClass}
+                      ariaPrefix="Customer intake residence"
+                    />
                         <label className="flex flex-col gap-1.5">
                           <span className={labelClass}>{copy.housingStatus}<RequiredMark /></span>
                           <ToggleOptionGroup
@@ -750,7 +874,8 @@ export default function PublicCustomerIntakePage({
                             onChange={(value) => onUpdateDraft('housing_status', value)}
                             ariaLabel="Customer intake housing status"
                             ariaRequired
-                            className="rounded-lg bg-white p-1 ring-1 ring-slate-100"
+                            className="w-full"
+                            optionClassName="!py-2.5 !text-callout !font-normal"
                           />
                         </label>
                       </>
@@ -774,7 +899,7 @@ export default function PublicCustomerIntakePage({
                         <button
                           type="button"
                           onClick={() => onUpdateDraft('resident_address', draft.full_address)}
-                          className="rounded-md bg-slate-100 px-2 py-1 text-[10px] font-bold normal-case tracking-normal text-slate-600 transition-colors hover:bg-slate-200 hover:text-slate-900"
+                          className="rounded-chip bg-slate-100 px-2 py-1 text-micro tracking-normal normal-case tracking-normal text-slate-600 transition-colors hover:bg-slate-200 hover:text-slate-900"
                         >
                           {tr('与永久地址（IC）相同', 'Same as Permanent Address (IC)', 'Sama seperti Alamat Tetap (IC)')}
                         </button>
@@ -815,8 +940,8 @@ export default function PublicCustomerIntakePage({
                         phone: 'emergency_contact_2_phone_no'
                       }
                     ].map((contact) => (
-                      <div key={contact.title} className="space-y-3 rounded-xl border border-slate-100 bg-slate-50/50 p-4">
-                        <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{contact.title}</p>
+                      <div key={contact.title} className="space-y-3 rounded-card border border-slate-100 bg-slate-50/50 p-4">
+                        <p className="text-micro uppercase text-slate-400">{contact.title}</p>
                         <label className="flex flex-col gap-1.5">
                           <span className={labelClass}>{copy.fullName}<RequiredMark /></span>
                           <input required aria-required="true" value={draft[contact.fullName as keyof CustomerIntakeDraft]} onChange={(event) => onUpdateDraft(contact.fullName as keyof CustomerIntakeDraft, event.target.value)} placeholder={copy.fullName} className={inputClass} />
@@ -875,10 +1000,16 @@ export default function PublicCustomerIntakePage({
                       <span className={labelClass}>{copy.position}<RequiredMark /></span>
                       <input required aria-required="true" value={draft.position} onChange={(event) => onUpdateDraft('position', event.target.value)} placeholder={copy.position} className={inputClass} />
                     </label>
-                    <label className="flex flex-col gap-1.5">
-                      <span className={labelClass}>{copy.yearsEmployed}<RequiredMark /></span>
-                      <input required aria-required="true" value={draft.years_employed} onChange={(event) => onUpdateDraft('years_employed', event.target.value.replace(/\D/g, ''))} placeholder={copy.yearsEmployed} inputMode="numeric" className={inputClass} />
-                    </label>
+                    <StartYearMonthInput
+                      label={tr('开始上班(年 / 月)', 'Started work (year / month)', 'Mula bekerja (tahun / bulan)')}
+                      year={draft.employment_start_year}
+                      month={draft.employment_start_month}
+                      fallbackYears={draft.years_employed}
+                      onChange={(field, value) => onUpdateDraft(field === 'year' ? 'employment_start_year' : 'employment_start_month', value)}
+                      labelClassName={labelClass}
+                      selectClassName={inputClass}
+                      ariaPrefix="Customer intake employment start"
+                    />
                     <label className="flex flex-col gap-1.5">
                       <span className={labelClass}>{copy.officePhone}<RequiredMark /></span>
                       <input required aria-required="true" value={draft.office_phone_no} onChange={(event) => onUpdateDraft('office_phone_no', event.target.value)} placeholder={copy.officePhone} inputMode="tel" className={inputClass} />
@@ -908,28 +1039,23 @@ export default function PublicCustomerIntakePage({
                           { value: 'Bank', label: tr('银行', 'Bank', 'Bank') },
                           { value: 'Cash', label: tr('现金', 'Cash', 'Tunai') }
                         ]}
-                        onChange={(value) => {
-                          onUpdateDraft('salary_payment_method', value);
-                          if (value !== 'Bank') {
-                            onUpdateDraft('bank_name', '');
-                            onUpdateDraft('account_number', '');
-                          }
-                        }}
+                        onChange={(value) => onUpdateDraft('salary_payment_method', value)}
                         ariaLabel="Customer intake salary paid by"
                         ariaRequired
-                        className="rounded-lg bg-white p-1 ring-1 ring-slate-100"
+                        className="w-full"
+                        optionClassName="!py-2.5 !text-callout !font-normal"
                       />
                     </label>
-                    {draft.salary_payment_method === 'Bank' && (
-                      <>
+                    {/* Every loan needs a bank account, cash salary too (owner 2026-10-20). */}
+                    <>
                         <label className="flex flex-col gap-1.5">
-                          <span className={labelClass}>{tr('薪资银行', 'Salary Bank', 'Bank Gaji')}<RequiredMark /></span>
+                          <span className={labelClass}>{copy.bankName}<RequiredMark /></span>
                           <input
                             value={draft.bank_name}
                             list={salaryBankListId}
                             autoComplete="off"
                             onChange={(event) => onUpdateDraft('bank_name', event.target.value)}
-                            placeholder={tr('选择或输入薪资银行', 'Select or type the salary bank', 'Pilih atau taip bank gaji')}
+                            placeholder={tr('选择或输入银行', 'Select or type the bank', 'Pilih atau taip bank')}
                             required
                             aria-required="true"
                             className={inputClass}
@@ -937,8 +1063,8 @@ export default function PublicCustomerIntakePage({
                           <datalist id={salaryBankListId}>
                             {salaryBankOptions.map((bankName) => <option key={bankName} value={bankName} />)}
                           </datalist>
-                          <span className="text-[10px] font-medium text-slate-400">
-                            {tr('这里只填写发薪银行；贷款银行由 Super Admin 决定。', 'Enter the salary bank only. Super Admin selects the financing bank later.', 'Masukkan bank gaji sahaja. Super Admin memilih bank pembiayaan kemudian.')}
+                          <span className="text-micro tracking-normal font-medium text-slate-400">
+                            {tr('工资收现金也要填你的银行户口。这里不是贷款银行，贷款银行由我们安排。', 'Needed even if your salary is paid in cash. This is your own account, not the financing bank.', 'Wajib walaupun gaji dibayar tunai. Ini akaun anda sendiri, bukan bank pembiayaan.')}
                           </span>
                         </label>
                         <label className="flex flex-col gap-1.5">
@@ -953,23 +1079,7 @@ export default function PublicCustomerIntakePage({
                             className={inputClass}
                           />
                         </label>
-                      </>
-                    )}
-                    <label className="flex flex-col gap-1.5">
-                      <span className={labelClass}>{copy.loanTenure}<RequiredMark /></span>
-                      <ToggleOptionGroup
-                        value={draft.loan_tenure}
-                        options={[
-                          { value: '', label: copy.notSet },
-                          ...(loanTenureOptions.length > 0 ? loanTenureOptions : [...LOAN_TENURE_OPTIONS])
-                            .map((year) => ({ value: year, label: `${year} years` }))
-                        ]}
-                        onChange={(value) => onUpdateDraft('loan_tenure', value)}
-                        ariaLabel="Customer intake loan tenure"
-                        ariaRequired
-                        className="rounded-lg bg-white p-1 ring-1 ring-slate-100"
-                      />
-                    </label>
+                    </>
                   </div>
                 </section>
                 {uploadDocumentsSection}
@@ -982,7 +1092,7 @@ export default function PublicCustomerIntakePage({
               {draft.purchase_method && (
                 <div
                   data-testid="customer-intake-required-status"
-                  className={`mt-5 rounded-lg border px-4 py-3 text-xs font-semibold ${
+                  className={`mt-5 rounded-control border px-4 py-3 text-footnote ${
                     validationIssues.length > 0
                       ? 'border-amber-200 bg-amber-50/70 text-amber-800'
                       : canSubmit
@@ -1027,7 +1137,7 @@ export default function PublicCustomerIntakePage({
                 <div
                   role="alert"
                   data-testid="customer-intake-validation-summary"
-                  className="mt-5 rounded-lg border border-rose-200 bg-rose-50/70 px-4 py-3 text-xs font-semibold text-rose-700"
+                  className="mt-5 rounded-control border border-rose-200 bg-rose-50/70 px-4 py-3 text-footnote text-rose-700"
                 >
                   <p className="font-bold">
                     {tr('无法提交，请先修正以下资料：', 'Unable to submit. Fix the following:', 'Tidak dapat menyerahkan. Betulkan perkara berikut:')}
@@ -1045,12 +1155,20 @@ export default function PublicCustomerIntakePage({
               )}
 
               {submitErrorReason && (
-                <div role="alert" className="mt-5 rounded-lg border border-rose-200 bg-rose-50/70 px-4 py-3 text-xs font-semibold text-rose-700">
-                  <p className="font-bold">{tr('提交失败', 'Submission failed', 'Penyerahan gagal')}</p>
-                  <p className="mt-1">{submitErrorReason}</p>
-                  <p className="mt-1">
-                    {tr('已填写的资料仍然保留。', 'Your entered details have been kept.', 'Butiran yang dimasukkan masih disimpan.')}
+                <div role="alert" className={`mt-5 rounded-control border px-4 py-3 text-footnote ${submitError === 'documents-incomplete' ? 'border-amber-200 bg-amber-50/70 text-amber-800' : 'border-rose-200 bg-rose-50/70 text-rose-700'}`}>
+                  <p className="font-bold">
+                    {submitError === 'documents-incomplete'
+                      ? tr('资料已提交，文件未传完', 'Details submitted, files incomplete', 'Butiran dihantar, fail belum lengkap')
+                      : submitError === 'timeout'
+                      ? tr('结果待确认', 'Result pending', 'Keputusan belum disahkan')
+                      : tr('提交失败', 'Submission failed', 'Penyerahan gagal')}
                   </p>
+                  <p className="mt-1">{submitErrorReason}</p>
+                  {submitError !== 'documents-incomplete' && (
+                    <p className="mt-1">
+                      {tr('已填写的资料仍然保留。', 'Your entered details have been kept.', 'Butiran yang dimasukkan masih disimpan.')}
+                    </p>
+                  )}
                 </div>
               )}
 
@@ -1072,10 +1190,14 @@ export default function PublicCustomerIntakePage({
                       ))
                     )));
                   }}
-                  disabled={isSubmitting}
-                  className="rounded-lg bg-red-800 px-5 py-2.5 text-sm font-bold text-white transition-colors hover:bg-red-900 disabled:bg-slate-200 disabled:text-slate-400"
+                  disabled={isSubmitting || isPreparingDocuments}
+                  className="rounded-control bg-brand px-5 py-2.5 text-headline text-white transition-colors hover:bg-brand-deep disabled:bg-slate-200 disabled:text-slate-400"
                 >
-                  {isSubmitting ? tr('提交中...', 'Submitting...', "Menyerahkan...") : copy.submitApplication}
+                  {isSubmitting
+                    ? tr('提交中...', 'Submitting...', "Menyerahkan...")
+                    : isPreparingDocuments
+                      ? tr('正在读取文件...', 'Reading files...', 'Membaca fail...')
+                      : copy.submitApplication}
                 </button>
               </div>
             </>

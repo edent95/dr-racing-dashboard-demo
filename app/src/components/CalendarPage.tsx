@@ -11,6 +11,11 @@ import StaffAvatar from './StaffAvatar';
 import ToggleOptionGroup from './ToggleOptionGroup';
 import { getAppLocale, tr, trBankStatus, trFollowUpStatus, trLoanStatus } from '../lib/i18n';
 
+// calendar_tasks Rules allow a 500-char title and 5000-char body; the title
+// stays at 300 so its audit row (target_label <= 300) is accepted too.
+const CALENDAR_TITLE_MAX_LENGTH = 300;
+const CALENDAR_BODY_MAX_LENGTH = 5000;
+
 interface CalendarPageProps {
   applications: LoanApplication[];
   rawCustomerLeads: RawCustomerLead[];
@@ -84,8 +89,8 @@ const EVENT_STYLES: Record<CalendarEventType, { label: [string, string, string];
   },
   note: {
     label: ['笔记', 'Note', 'Nota'],
-    chip: 'bg-red-50 text-red-700 ring-red-100',
-    dot: 'bg-red-700',
+    chip: 'bg-brand-50 text-brand-ink ring-brand-100',
+    dot: 'bg-brand',
     icon: <NotebookPen className="h-3.5 w-3.5" />
   }
 };
@@ -222,6 +227,7 @@ export default function CalendarPage({
   const [noteAssignee, setNoteAssignee] = useState(currentStaffName);
   const [isTaskComposerOpen, setIsTaskComposerOpen] = useState(false);
   const [isSavingNote, setIsSavingNote] = useState(false);
+  const [noteError, setNoteError] = useState('');
   const [taskReplyDrafts, setTaskReplyDrafts] = useState<Record<string, string>>({});
   const [savingTaskReplyId, setSavingTaskReplyId] = useState('');
   const canAssignCalendarTasks = currentStaffRole === 'Super Admin';
@@ -496,6 +502,8 @@ export default function CalendarPage({
       return;
     }
 
+    if (isSavingNote) return;
+    setNoteError('');
     setIsSavingNote(true);
     try {
       await onAddCalendarNote({
@@ -508,6 +516,21 @@ export default function CalendarPage({
       setNoteTitle('');
       setNoteBody('');
       setIsTaskComposerOpen(false);
+    } catch (error) {
+      const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : '';
+      if (code === 'permission-denied') {
+        setNoteError(tr(
+          '日历没有保存：你的账号不能新建这条任务。草稿已保留。',
+          'The calendar task was not saved: your account cannot create it. Your draft is kept.',
+          'Tugasan kalendar tidak disimpan: akaun anda tidak boleh menciptanya. Draf anda dikekalkan.'
+        ));
+        return;
+      }
+      setNoteError(tr(
+        '日历保存结果未确认，草稿已保留。请先在另一个窗口核对日历，确认没有保存后再试。',
+        'Calendar save was not confirmed. Your draft is kept. Check the calendar in another tab before trying again.',
+        'Simpanan kalendar belum disahkan. Draf anda dikekalkan. Semak kalendar dalam tab lain sebelum mencuba lagi.'
+      ));
     } finally {
       setIsSavingNote(false);
     }
@@ -517,18 +540,18 @@ export default function CalendarPage({
     <div id="calendar-page" className="space-y-4 lg:space-y-3">
       <section className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div className="space-y-1">
-          <h2 className="text-lg font-bold tracking-tight text-slate-900">{tr('日历', 'Calendar', "Kalendar")}</h2>
-          <p className="max-w-3xl text-[11px] font-light leading-relaxed text-slate-500">
+          <h2 className="text-title-2 text-slate-900">{tr('日历', 'Calendar', "Kalendar")}</h2>
+          <p className="max-w-3xl text-caption font-normal leading-relaxed text-slate-500">
             {tr('查看员工每天要执行的回电、跟进和管理层安排。', 'Review each staff member’s daily call-backs, follow-ups, and management assignments.', "Semak panggilan balik harian, tindakan susulan dan tugasan pengurusan setiap kakitangan.")}
           </p>
         </div>
-        <span className="inline-flex self-start rounded-full bg-red-800 px-3 py-1 text-[9px] font-bold uppercase tracking-wider text-white">
+        <span className="inline-flex self-start rounded-full bg-brand px-3 py-1 text-micro uppercase text-white">
           {canViewAllCalendar ? tr('全员日历', 'All staff calendar', "Semua kalendar kakitangan") : tr(`${currentStaffName} 的日历`, `${currentStaffName} calendar`, `${currentStaffName} kalendar`)}
         </span>
       </section>
 
       {/* 自定义视图：点类型开关显示/隐藏，选择会记住 */}
-      <section className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-100 bg-white p-1.5 shadow-2xs lg:hidden">
+      <section className="flex flex-wrap items-center gap-2 rounded-card border border-slate-100 bg-white p-1.5 shadow-e1 lg:hidden">
         {ALL_EVENT_TYPES.map((type) => {
           const style = EVENT_STYLES[type];
           const isActive = activeEventTypes.has(type);
@@ -538,14 +561,14 @@ export default function CalendarPage({
               key={type}
               type="button"
               onClick={() => toggleEventType(type)}
-              className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-bold transition-colors ${
+              className={`inline-flex items-center gap-1.5 rounded-control px-2.5 py-1.5 text-caption font-semibold transition-colors ${
                 isActive ? 'bg-slate-50 text-slate-700 ring-1 ring-slate-100' : 'text-slate-300 hover:text-slate-500'
               }`}
               title={tr('点击显示/隐藏这类事件', 'Click to show/hide this event type', "Klik untuk menunjukkan/menyembunyikan jenis acara ini")}
             >
               <span className={`h-2 w-2 rounded-full ${isActive ? style.dot : 'bg-slate-200'}`} />
               {tr(style.label[0], style.label[1], style.label[2])}
-              <span className={`font-mono text-[10px] ${isActive ? 'text-slate-400' : 'text-slate-300'}`}>{typeCounts[type]}</span>
+              <span className={`font-mono text-micro tracking-normal ${isActive ? 'text-slate-400' : 'text-slate-300'}`}>{typeCounts[type]}</span>
             </button>
           );
         })}
@@ -574,12 +597,12 @@ export default function CalendarPage({
         )}
       </section>
 
-      <section className="grid grid-cols-1 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm lg:h-[calc(100vh-12rem)] lg:min-h-[600px] lg:grid-cols-[248px_minmax(0,1fr)]">
+      <section className="grid grid-cols-1 overflow-hidden rounded-panel border border-slate-200 bg-white shadow-e1 lg:h-[calc(100vh-12rem)] lg:min-h-[600px] lg:grid-cols-[248px_minmax(0,1fr)]">
         <div className="flex min-h-0 flex-col overflow-hidden bg-white lg:order-2">
           <div className="flex shrink-0 flex-col gap-2 border-b border-slate-200 px-4 py-3 md:flex-row md:items-center md:justify-between">
             <div>
-              <h3 className="text-xl font-bold tracking-tight text-slate-900">{formatMonth(monthCursor)}</h3>
-              <p className="text-[10px] font-semibold text-slate-400">{tr(`本月 ${monthEvents.length} 个事件`, `${monthEvents.length} events this month`, `${monthEvents.length} acara bulan ini`)}</p>
+              <h3 className="text-title-2 text-slate-900">{formatMonth(monthCursor)}</h3>
+              <p className="text-caption text-slate-400">{tr(`本月 ${monthEvents.length} 个事件`, `${monthEvents.length} events this month`, `${monthEvents.length} acara bulan ini`)}</p>
             </div>
             <div className="flex items-center gap-1">
               <button
@@ -593,7 +616,7 @@ export default function CalendarPage({
               <button
                 type="button"
                 onClick={goToToday}
-                className="inline-flex h-7 items-center rounded-full bg-slate-100 px-3 text-[10px] font-bold text-slate-700 transition-colors hover:bg-slate-200 hover:text-slate-900"
+                className="inline-flex h-7 items-center rounded-full bg-slate-100 px-3 text-micro tracking-normal text-slate-700 transition-colors hover:bg-slate-200 hover:text-slate-900"
               >
                 {tr('今天', 'Today', "Hari Ini")}
               </button>
@@ -608,7 +631,7 @@ export default function CalendarPage({
             </div>
           </div>
 
-          <div className="grid shrink-0 grid-cols-7 border-b border-slate-200 bg-white text-right text-[10px] font-semibold text-slate-500">
+          <div className="grid shrink-0 grid-cols-7 border-b border-slate-200 bg-white text-right text-caption text-slate-500">
             {WEEKDAYS.map(([zhDay, enDay, msDay]) => (
               <div key={enDay} className="px-2 py-1.5">{tr(zhDay, enDay, msDay)}</div>
             ))}
@@ -637,8 +660,8 @@ export default function CalendarPage({
                   }`}
                 >
                   <div className="mb-1 flex items-center justify-end">
-                    <span className={`flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold ${
-                      isToday ? 'bg-red-600 text-white' : isCurrentMonth ? 'text-slate-700' : 'text-slate-300'
+                    <span className={`flex h-5 w-5 items-center justify-center rounded-full text-micro tracking-normal ${
+                      isToday ? 'bg-brand-600 text-white' : isCurrentMonth ? 'text-slate-700' : 'text-slate-300'
                     }`}>
                       {date.getDate()}
                     </span>
@@ -648,11 +671,11 @@ export default function CalendarPage({
                     {dayEvents.slice(0, 3).map((event) => (
                       <div key={event.id} className={`flex min-w-0 items-center gap-1 rounded px-1.5 py-0.5 ring-1 ${EVENT_STYLES[event.type].chip}`}>
                         <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${EVENT_STYLES[event.type].dot}`} />
-                        <span className="truncate text-[9px] font-bold md:text-[10px]">{event.title}</span>
+                        <span className="truncate text-micro tracking-normal md:text-micro tracking-normal">{event.title}</span>
                       </div>
                     ))}
                     {dayEvents.length > 3 && (
-                      <p className="px-1.5 text-[9px] font-bold text-slate-400">{tr(`还有 ${dayEvents.length - 3} 个`, `+${dayEvents.length - 3} more`, `+${dayEvents.length - 3} lagi`)}</p>
+                      <p className="px-1.5 text-micro tracking-normal text-slate-400">{tr(`还有 ${dayEvents.length - 3} 个`, `+${dayEvents.length - 3} more`, `+${dayEvents.length - 3} lagi`)}</p>
                     )}
                   </div>
                 </button>
@@ -664,8 +687,8 @@ export default function CalendarPage({
         <div className="flex min-h-0 flex-col border-t border-slate-200 bg-slate-50/70 lg:order-1 lg:overflow-y-auto lg:border-r lg:border-t-0">
           <section className="order-1 hidden border-b border-slate-200 p-3 lg:block">
             <div className="mb-2 flex items-center justify-between gap-3">
-              <h3 className="text-xs font-bold text-slate-900">{tr('日历分类', 'Calendars', "Kalendar")}</h3>
-              <span className="text-[10px] font-semibold text-slate-400">{filteredEvents.length}</span>
+              <h3 className="text-footnote font-bold text-slate-900">{tr('日历分类', 'Calendars', "Kalendar")}</h3>
+              <span className="text-caption text-slate-400">{filteredEvents.length}</span>
             </div>
             <div className="space-y-0.5">
               {ALL_EVENT_TYPES.map((type) => {
@@ -677,16 +700,16 @@ export default function CalendarPage({
                     key={type}
                     type="button"
                     onClick={() => toggleEventType(type)}
-                    className="flex w-full items-center gap-2 rounded-lg px-2 py-1 text-left transition-colors hover:bg-white"
+                    className="flex w-full items-center gap-2 rounded-control px-2 py-1 text-left transition-colors hover:bg-white"
                     title={tr('点击显示/隐藏这类事件', 'Click to show/hide this event type', "Klik untuk menunjukkan/menyembunyikan jenis acara ini")}
                   >
                     <span className={`inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-[5px] ${isActive ? style.dot : 'bg-slate-200'}`}>
                       {isActive && <Check className="h-3 w-3 text-white" strokeWidth={3} />}
                     </span>
-                    <span className={`min-w-0 flex-1 truncate text-[11px] font-semibold ${isActive ? 'text-slate-700' : 'text-slate-400'}`}>
+                    <span className={`min-w-0 flex-1 truncate text-caption ${isActive ? 'text-slate-700' : 'text-slate-400'}`}>
                       {tr(style.label[0], style.label[1], style.label[2])}
                     </span>
-                    <span className="font-mono text-[9px] font-bold text-slate-400">{typeCounts[type]}</span>
+                    <span className="font-mono text-micro tracking-normal text-slate-400">{typeCounts[type]}</span>
                   </button>
                 );
               })}
@@ -694,7 +717,7 @@ export default function CalendarPage({
 
             {canViewAllCalendar && (
               <div className="mt-3 border-t border-slate-200 pt-3">
-                <p className="mb-1.5 text-[9px] font-bold uppercase tracking-wider text-slate-400">{tr('员工范围', 'Staff scope', "Skop kakitangan")}</p>
+                <p className="mb-1.5 text-micro uppercase text-slate-400">{tr('员工范围', 'Staff scope', "Skop kakitangan")}</p>
                 <ToggleOptionGroup
                   value={staffFilter}
                   options={[
@@ -728,7 +751,7 @@ export default function CalendarPage({
                 >
                   <ChevronLeft className="h-3.5 w-3.5" />
                 </button>
-                <span className="text-[10px] font-bold text-slate-600">{formatMonth(monthCursor)}</span>
+                <span className="text-micro tracking-normal text-slate-600">{formatMonth(monthCursor)}</span>
                 <button
                   type="button"
                   onClick={() => setMonthCursor((current) => addMonths(current, 1))}
@@ -738,7 +761,7 @@ export default function CalendarPage({
                   <ChevronRight className="h-3.5 w-3.5" />
                 </button>
               </div>
-              <div className="grid grid-cols-7 text-center text-[8px] font-bold text-slate-400">
+              <div className="grid grid-cols-7 text-center text-micro tracking-normal text-slate-400">
                 {WEEKDAYS.map(([zhDay, enDay, msDay]) => (
                   <span key={enDay} className="py-0.5">{tr(zhDay, enDay.slice(0, 1), msDay.slice(0, 1))}</span>
                 ))}
@@ -753,9 +776,9 @@ export default function CalendarPage({
                       key={`mini-${dateKey}`}
                       type="button"
                       onClick={() => selectCalendarDate(date)}
-                      className={`mx-auto inline-flex h-5 w-5 items-center justify-center rounded-full text-[8px] font-bold transition-colors ${
+                      className={`mx-auto inline-flex h-5 w-5 items-center justify-center rounded-full text-micro tracking-normal transition-colors ${
                         isToday
-                          ? 'bg-red-600 text-white'
+                          ? 'bg-brand-600 text-white'
                           : isSelected
                             ? 'bg-slate-200 text-slate-900'
                             : isCurrentMonth
@@ -774,17 +797,17 @@ export default function CalendarPage({
           <section className="order-3 border-t border-slate-200 bg-white p-3 lg:bg-transparent lg:shadow-none">
             <div className="mb-2 flex items-start justify-between gap-3">
               <div>
-                <h3 className="text-xs font-bold text-slate-900">{formatSelectedDate(selectedDate)}</h3>
-                <p className="mt-0.5 text-[10px] text-slate-400">{tr(`${selectedEvents.length} 个事项`, `${selectedEvents.length} scheduled items`, `${selectedEvents.length} item berjadual`)}</p>
+                <h3 className="text-footnote font-bold text-slate-900">{formatSelectedDate(selectedDate)}</h3>
+                <p className="mt-0.5 text-micro tracking-normal text-slate-400">{tr(`${selectedEvents.length} 个事项`, `${selectedEvents.length} scheduled items`, `${selectedEvents.length} item berjadual`)}</p>
               </div>
               <button
                 type="button"
                 onClick={() => setIsTaskComposerOpen((isOpen) => !isOpen)}
                 aria-expanded={isTaskComposerOpen}
-                className={`inline-flex h-7 shrink-0 items-center gap-1.5 rounded-lg px-2 text-[9px] font-bold transition-colors ${
+                className={`inline-flex h-7 shrink-0 items-center gap-1.5 rounded-control px-2 text-micro tracking-normal transition-colors ${
                   isTaskComposerOpen
                     ? 'bg-slate-200 text-slate-600 hover:bg-slate-300'
-                    : 'bg-red-800 text-white hover:bg-red-900'
+                    : 'bg-brand text-white hover:bg-brand-deep'
                 }`}
               >
                 <Plus className={`h-3.5 w-3.5 transition-transform ${isTaskComposerOpen ? 'rotate-45' : ''}`} />
@@ -797,10 +820,11 @@ export default function CalendarPage({
             </div>
 
             {isTaskComposerOpen && (
-              <form onSubmit={handleSubmitNote} className="mb-4 rounded-xl border border-red-100 bg-red-50 p-3">
-                <p className="mb-2 text-[10px] font-semibold text-red-700">
+              <form onSubmit={handleSubmitNote} className="mb-4 rounded-card border border-brand-100 bg-brand-50 p-3">
+                <p className="mb-2 text-caption text-brand-ink">
                   {currentStaffName} · {currentStaffRole}
                 </p>
+                {noteError && <p role="alert" className="mb-2 text-footnote text-rose-700">{noteError}</p>}
                 <div className="space-y-2">
                   {canAssignCalendarTasks && (
                     <ToggleOptionGroup
@@ -814,21 +838,23 @@ export default function CalendarPage({
                         }))}
                       onChange={setNoteAssignee}
                       ariaLabel={tr('安排给员工', 'Assign to staff', "Tugaskan kepada kakitangan")}
-                      className="w-full justify-between bg-white ring-1 ring-red-100"
+                      className="w-full justify-between bg-white ring-1 ring-brand-100"
                     />
                   )}
                   <input
                     value={noteTitle}
                     onChange={(event) => setNoteTitle(event.target.value)}
+                    maxLength={CALENDAR_TITLE_MAX_LENGTH}
                     placeholder={tr('标题，例如：客户会面', 'Title, e.g. Customer meeting', "Tajuk, mis. Mesyuarat pelanggan")}
-                    className="w-full rounded-lg border border-red-100 bg-white px-3 py-2 text-xs font-semibold text-slate-900 outline-none transition-colors placeholder:text-slate-300 focus:border-red-300 focus:ring-2 focus:ring-red-100"
+                    className="w-full rounded-control border border-brand-100 bg-white px-3 py-2 text-footnote text-slate-900 outline-none transition-colors placeholder:text-slate-300 focus:border-brand-100 focus:ring-2 focus:ring-brand-100"
                   />
                   <textarea
                     value={noteBody}
                     onChange={(event) => setNoteBody(event.target.value)}
+                    maxLength={CALENDAR_BODY_MAX_LENGTH}
                     placeholder={tr('备注内容（可选）', 'Note details (optional)', "Butiran nota (pilihan)")}
                     rows={3}
-                    className="w-full resize-none rounded-lg border border-red-100 bg-white px-3 py-2 text-xs font-semibold leading-relaxed text-slate-900 outline-none transition-colors placeholder:text-slate-300 focus:border-red-300 focus:ring-2 focus:ring-red-100"
+                    className="w-full resize-none rounded-control border border-brand-100 bg-white px-3 py-2 text-footnote leading-relaxed text-slate-900 outline-none transition-colors placeholder:text-slate-300 focus:border-brand-100 focus:ring-2 focus:ring-brand-100"
                   />
                   <div className="grid grid-cols-1 gap-2">
                     {canAssignCalendarTasks && (
@@ -842,13 +868,13 @@ export default function CalendarPage({
                           setMonthCursor(startOfMonth(new Date(`${nextDateKey}T00:00:00`)));
                         }}
                         aria-label={tr('任务日期', 'Task date', "Tarikh tugasan")}
-                        className="h-9 w-full rounded-lg border border-red-100 bg-white px-2 text-xs font-bold text-slate-700 outline-none focus:border-red-300 focus:ring-2 focus:ring-red-100"
+                        className="h-9 w-full rounded-control border border-brand-100 bg-white px-2 text-footnote font-bold text-slate-700 outline-none focus:border-brand-100 focus:ring-2 focus:ring-brand-100"
                       />
                     )}
                     <button
                       type="submit"
                       disabled={!noteTitle.trim() || isSavingNote}
-                      className="inline-flex h-9 w-full items-center justify-center gap-1.5 rounded-lg bg-red-800 px-3 text-xs font-bold text-white transition-colors hover:bg-red-900 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
+                      className="inline-flex h-9 w-full items-center justify-center gap-1.5 rounded-control bg-brand px-3 text-footnote font-bold text-white transition-colors hover:bg-brand-deep disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
                     >
                       <Plus className="h-3.5 w-3.5" />
                       {isSavingNote ? tr('保存中', 'Saving', "Menyimpan") : canAssignCalendarTasks ? tr('指派任务', 'Assign task', "Berikan tugasan") : tr('加入日历', 'Add to calendar', "Tambahkan pada kalendar")}
@@ -881,17 +907,17 @@ export default function CalendarPage({
                     }}
                     role={canOpenApplication ? 'button' : undefined}
                     tabIndex={canOpenApplication ? 0 : undefined}
-                    className={`block w-full rounded-xl border border-slate-100 bg-slate-50 px-3 py-3 text-left ${
+                    className={`block w-full rounded-card border border-slate-100 bg-slate-50 px-3 py-3 text-left ${
                       canOpenApplication ? 'transition-colors hover:border-indigo-100 hover:bg-indigo-50' : ''
                     }`}
                   >
                     <div className="mb-2 flex items-center justify-between gap-2">
-                      <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-bold ring-1 ${style.chip}`}>
+                      <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-micro tracking-normal ring-1 ${style.chip}`}>
                         {style.icon}
                         {tr(style.label[0], style.label[1], style.label[2])}
                       </span>
                       <span className="flex shrink-0 items-center gap-2">
-                        {eventTime && <span className="font-mono text-[10px] font-bold text-slate-400">{eventTime}</span>}
+                        {eventTime && <span className="font-mono text-micro tracking-normal text-slate-400">{eventTime}</span>}
                         {canDeleteNote && event.note && (
                           <button
                             type="button"
@@ -899,7 +925,7 @@ export default function CalendarPage({
                               deleteEvent.stopPropagation();
                               onDeleteCalendarNote(event.note!.id);
                             }}
-                            className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-red-50 hover:text-red-700"
+                            className="inline-flex h-7 w-7 items-center justify-center rounded-control text-slate-400 transition-colors hover:bg-brand-50 hover:text-brand-ink"
                             title={tr('删除笔记', 'Delete note', "Padam nota")}
                           >
                             <Trash2 className="h-3.5 w-3.5" />
@@ -907,15 +933,15 @@ export default function CalendarPage({
                         )}
                       </span>
                     </div>
-                    <p className="truncate text-xs font-bold text-slate-800">{event.title}</p>
-                    <p className="mt-1 truncate text-[11px] text-slate-500">{event.subtitle}</p>
+                    <p className="truncate text-footnote font-bold text-slate-800">{event.title}</p>
+                    <p className="mt-1 truncate text-caption text-slate-500">{event.subtitle}</p>
                     <div className="mt-2 flex min-w-0 items-center gap-2">
                       {event.type === 'note' ? (
-                        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ring-1 ${event.note?.completed_at ? 'bg-emerald-50 text-emerald-700 ring-emerald-100' : 'bg-white text-amber-700 ring-amber-100'}`}>
+                        <span className={`shrink-0 rounded-full px-2 py-0.5 text-micro uppercase ring-1 ${event.note?.completed_at ? 'bg-emerald-50 text-emerald-700 ring-emerald-100' : 'bg-white text-amber-700 ring-amber-100'}`}>
                           {event.note?.completed_at ? tr('已完成', 'Completed', "Selesai") : tr('待执行', 'Pending', "Menunggu")}
                         </span>
                       ) : (
-                        <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-400 ring-1 ring-slate-100">
+                        <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-micro uppercase text-slate-400 ring-1 ring-slate-100">
                           {trLoanStatus(trBankStatus(trFollowUpStatus(event.status)))}
                         </span>
                       )}
@@ -926,7 +952,7 @@ export default function CalendarPage({
                             completeEvent.stopPropagation();
                             onSetCalendarNoteCompleted(event.note!.id, !event.note!.completed_at);
                           }}
-                          className={`ml-auto inline-flex h-7 items-center gap-1 rounded-lg px-2 text-[10px] font-bold transition-colors ${event.note.completed_at ? 'bg-slate-100 text-slate-500 hover:bg-slate-200' : 'bg-emerald-600 text-white hover:bg-emerald-700'}`}
+                          className={`ml-auto inline-flex h-7 items-center gap-1 rounded-control px-2 text-micro tracking-normal transition-colors ${event.note.completed_at ? 'bg-slate-100 text-slate-500 hover:bg-slate-200' : 'bg-emerald-600 text-white hover:bg-emerald-700'}`}
                         >
                           <Check className="h-3.5 w-3.5" />
                           {event.note.completed_at ? tr('重新打开', 'Reopen', "Buka semula") : tr('完成', 'Complete', "lengkap")}
@@ -938,11 +964,11 @@ export default function CalendarPage({
                           role={event.staffRole}
                           roleAccounts={roleAccounts}
                           avatarClassName="h-6 w-6"
-                          nameClassName="text-[10px] font-bold text-slate-500"
+                          nameClassName="text-micro tracking-normal text-slate-500"
                           roleClassName="hidden"
                         />
                       ) : (
-                        <span className="truncate text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                        <span className="truncate text-micro uppercase text-slate-400">
                           {event.meta}
                         </span>
                       )}
@@ -956,12 +982,12 @@ export default function CalendarPage({
                         {(event.note.comments || []).length > 0 && (
                           <div className="mb-2 space-y-1.5">
                             {(event.note.comments || []).slice(-3).map((comment) => (
-                              <div key={comment.id} className="rounded-lg bg-white px-2.5 py-2 ring-1 ring-slate-100">
+                              <div key={comment.id} className="rounded-control bg-white px-2.5 py-2 ring-1 ring-slate-100">
                                 <div className="flex items-center justify-between gap-2">
-                                  <span className="truncate text-[10px] font-bold text-slate-700">{comment.staff_name}</span>
-                                  <span className="shrink-0 text-[9px] font-semibold text-slate-400">{formatCommentTime(comment.created_at)}</span>
+                                  <span className="truncate text-micro tracking-normal text-slate-700">{comment.staff_name}</span>
+                                  <span className="shrink-0 text-caption text-slate-400">{formatCommentTime(comment.created_at)}</span>
                                 </div>
-                                <p className="mt-1 whitespace-pre-wrap break-words text-[11px] leading-relaxed text-slate-600">{comment.body}</p>
+                                <p className="mt-1 whitespace-pre-wrap break-words text-caption leading-relaxed text-slate-600">{comment.body}</p>
                               </div>
                             ))}
                           </div>
@@ -997,13 +1023,13 @@ export default function CalendarPage({
                               `Reply to ${currentStaffName === event.note.staff_name ? event.note.assigned_to : event.note.staff_name}`,
                               `Balas kepada ${currentStaffName === event.note.staff_name ? event.note.assigned_to : event.note.staff_name}`
                             )}
-                            className="h-8 min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-2.5 text-[11px] font-semibold text-slate-800 outline-none placeholder:text-slate-300 focus:border-red-300 focus:ring-2 focus:ring-red-100"
+                            className="h-8 min-w-0 flex-1 rounded-control border border-slate-200 bg-white px-2.5 text-caption text-slate-800 outline-none placeholder:text-slate-300 focus:border-brand-100 focus:ring-2 focus:ring-brand-100"
                           />
                           <button
                             type="submit"
                             disabled={!taskReplyDrafts[event.note.id]?.trim() || Boolean(savingTaskReplyId)}
                             aria-label={tr('发送任务回复', 'Send task reply', 'Hantar balasan tugasan')}
-                            className="inline-flex h-8 items-center gap-1 rounded-lg bg-red-800 px-2.5 text-[10px] font-bold text-white transition-colors hover:bg-red-900 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
+                            className="inline-flex h-8 items-center gap-1 rounded-control bg-brand px-2.5 text-micro tracking-normal text-white transition-colors hover:bg-brand-deep disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
                           >
                             <Send className="h-3.5 w-3.5" />
                             {savingTaskReplyId === event.note.id
@@ -1018,9 +1044,9 @@ export default function CalendarPage({
               })}
 
               {selectedEvents.length === 0 && (
-                <div className="rounded-lg border border-dashed border-slate-200 px-3 py-2 text-center">
-                  <p className="text-xs font-bold text-slate-400">{tr('没有日历事项', 'No calendar item', "Tiada item kalendar")}</p>
-                  <p className="mt-1 text-[10px] text-slate-400 lg:hidden">{tr('可选择其他日期，或直接新增笔记。', 'Choose another day or add a note directly.', "Pilih hari lain atau tambahkan nota secara langsung.")}</p>
+                <div className="rounded-control border border-dashed border-slate-200 px-3 py-2 text-center">
+                  <p className="text-footnote font-bold text-slate-400">{tr('没有日历事项', 'No calendar item', "Tiada item kalendar")}</p>
+                  <p className="mt-1 text-micro tracking-normal text-slate-400 lg:hidden">{tr('可选择其他日期，或直接新增笔记。', 'Choose another day or add a note directly.', "Pilih hari lain atau tambahkan nota secara langsung.")}</p>
                 </div>
               )}
             </div>
@@ -1028,8 +1054,8 @@ export default function CalendarPage({
 
           <section className="order-2 border-t border-slate-200 bg-white p-4 lg:bg-transparent">
             <div className="mb-3">
-              <h3 className="text-sm font-bold text-slate-900">{tr('下一批提醒', 'Next Reminders', "Peringatan Seterusnya")}</h3>
-              <p className="mt-1 text-xs text-slate-400">{tr('潜在名单跟进、客户回电和银行跟进日期。', 'Raw lead follow-up, customer call-back, and bank follow-up dates.', "susulan prospek mentah, panggilan balik pelanggan dan tarikh susulan bank.")}</p>
+              <h3 className="text-headline text-slate-900">{tr('下一批提醒', 'Next Reminders', "Peringatan Seterusnya")}</h3>
+              <p className="mt-1 text-footnote text-slate-400">{tr('潜在名单跟进、客户回电和银行跟进日期。', 'Raw lead follow-up, customer call-back, and bank follow-up dates.', "susulan prospek mentah, panggilan balik pelanggan dan tarikh susulan bank.")}</p>
             </div>
             <div className="space-y-2">
               {upcomingFollowUps.map((event) => (
@@ -1039,18 +1065,18 @@ export default function CalendarPage({
                   onClick={() => {
                     selectCalendarDate(event.date);
                   }}
-                  className="flex w-full items-center justify-between gap-3 rounded-xl bg-amber-50/70 px-3 py-2 text-left transition-colors hover:bg-amber-50"
+                  className="flex w-full items-center justify-between gap-3 rounded-card bg-amber-50/70 px-3 py-2 text-left transition-colors hover:bg-amber-50"
                 >
                   <span className="min-w-0">
-                    <span className="block truncate text-xs font-bold text-amber-900">{event.title}</span>
-                    <span className="block truncate text-[10px] font-semibold text-amber-700">{event.subtitle}</span>
+                    <span className="block truncate text-footnote font-bold text-amber-900">{event.title}</span>
+                    <span className="block truncate text-caption text-amber-700">{event.subtitle}</span>
                   </span>
-                  <span className="shrink-0 font-mono text-[10px] font-bold text-amber-700">{event.dateKey}</span>
+                  <span className="shrink-0 font-mono text-micro tracking-normal text-amber-700">{event.dateKey}</span>
                 </button>
               ))}
 
               {upcomingFollowUps.length === 0 && (
-                <p className="rounded-xl bg-slate-50 px-3 py-3 text-center text-[11px] font-semibold text-slate-400">
+                <p className="rounded-card bg-slate-50 px-3 py-3 text-center text-caption text-slate-400">
                   {tr('没有即将到来的提醒日期。', 'No upcoming reminder dates.', "Tiada tarikh peringatan akan datang.")}
                 </p>
               )}

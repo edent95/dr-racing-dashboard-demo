@@ -7,12 +7,14 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft,
   Bell,
+  BookOpen,
   CalendarDays,
   CheckCircle2,
   ChevronRight,
   Clock3,
   FileText,
   Home,
+  Inbox,
   LogIn,
   LogOut,
   MessageCircle,
@@ -37,10 +39,11 @@ import {
 import type { AttendanceEvent } from '../services/dashboardRepository';
 import { getAppLocale, tr, trBankStatus, trFollowUpStatus, trLoanStatus } from '../lib/i18n';
 import { formatMalaysiaPhoneForCopy, normalizeMalaysiaPhoneDigits } from '../utils/malaysiaPhone';
+import { getMobileTabForPage, getPageForMobileTab, type MobileTab } from '../utils/mobileNavigation';
+import { getApplicationJourneyPosition } from '../utils/applicationJourneyStage';
 import BankIcon from './BankIcon';
 import StaffAvatar from './StaffAvatar';
 
-type MobileTab = 'today' | 'applications' | 'leads' | 'calendar' | 'me';
 type ApplicationFilter = 'all' | 'action' | 'pending' | 'approved';
 type ApplicationTimeFilter = 'today' | '7d' | '30d' | 'all';
 type LeadFilter = 'mine' | 'due' | 'available';
@@ -71,6 +74,20 @@ interface MobileAppShellProps {
   onRecordAttendance: (action: AttendanceEvent['action'], note: string) => Promise<boolean>;
   onNavigatePage: (page: 'taskInbox' | 'customers' | 'rawCustomers' | 'calendar' | 'user') => void;
   onLogout: () => void;
+  /** Full desktop pages opened as subpages; App owns the permission checks. */
+  canOpenTaskInbox: boolean;
+  onOpenTaskInbox: () => void;
+  onOpenProfile: () => void;
+  moreNavItems: MobileMoreNavItem[];
+  onOpenMoreNavItem: (key: string) => void;
+  canOpenCustomerActions: boolean;
+  onOpenCustomerActions: () => void;
+}
+
+export interface MobileMoreNavItem {
+  key: string;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
 }
 
 const ACTIVE_LEAD_STATUSES = new Set(['New', 'Contacted', 'No Reply', 'Interested']);
@@ -147,22 +164,6 @@ function getRoleWorkspaceLabel(role: RoleAccountRole) {
   return tr('管理工作台', 'Management workspace', 'Ruang kerja pengurusan');
 }
 
-function getMobileTabForPage(page: string): MobileTab {
-  if (page === 'customers') return 'applications';
-  if (page === 'rawCustomers') return 'leads';
-  if (page === 'calendar') return 'calendar';
-  if (page === 'user' || page === 'attendance') return 'me';
-  return 'today';
-}
-
-function getPageForMobileTab(tab: MobileTab) {
-  if (tab === 'applications') return 'customers' as const;
-  if (tab === 'leads') return 'rawCustomers' as const;
-  if (tab === 'calendar') return 'calendar' as const;
-  if (tab === 'me') return 'user' as const;
-  return 'taskInbox' as const;
-}
-
 function isApplicationActionForStaff(
   application: LoanApplication,
   staffName: string,
@@ -200,9 +201,9 @@ function MobileSectionHeading({
   return (
     <div className="flex items-center justify-between gap-3">
       <div className="flex min-w-0 items-center gap-2">
-        <h2 className="truncate text-sm font-bold text-slate-900">{title}</h2>
+        <h2 className="truncate text-headline text-slate-900">{title}</h2>
         {typeof count === 'number' && (
-          <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[11px] font-bold text-slate-500">
+          <span className="rounded-chip bg-slate-100 px-1.5 py-0.5 text-caption font-semibold text-slate-500">
             {count}
           </span>
         )}
@@ -237,28 +238,13 @@ function MobileApplicationJourney({ application }: { application: LoanApplicatio
     - new Date(left.submitted_at || left.decision_at || 0).getTime()
     || (right.round_no || 0) - (left.round_no || 0)
   ))[0];
-  const loanCurrentIndex = pendingWith === 'Closed'
-    || pendingAction === 'Choose Close or Resubmit'
-    || pendingAction === 'Contact Approved Customer'
-    ? 4
-    : pendingWith === 'Bank' || application.status === LoanStatus.IN_PROCESS
-      ? 3
-      : pendingWith === 'Admin' && (pendingAction === 'Submit to Bank' || pendingAction === 'Resubmit to Bank')
-        ? 2
-        : 1;
+  const journeyPosition = getApplicationJourneyPosition(application);
   const cashCancelled = dealFinance?.sale_status === 'Cancelled'
     || [LoanStatus.REJECT, LoanStatus.CANCELLED].includes(application.status);
   const cashCompleted = Boolean(dealFinance?.finance_completed_at);
   const cashCustomerAccepted = dealFinance?.sale_status === 'Customer Accepted'
     || (pendingWith === 'Closed' && application.status === LoanStatus.APPROVE);
-  const cashCurrentIndex = cashCancelled || cashCompleted || dealFinance?.sale_status === 'Bike Delivered'
-    ? 4
-    : cashCustomerAccepted
-      ? 3
-      : application.status === LoanStatus.APPROVE || dealFinance?.sale_status === 'Pending Acceptance'
-        ? 2
-        : 1;
-  const currentIndex = isCash ? cashCurrentIndex : loanCurrentIndex;
+  const currentIndex = journeyPosition.currentIndex;
   const steps = isCash
     ? [
         tr('提交', 'Submitted', 'Dihantar'),
@@ -307,24 +293,21 @@ function MobileApplicationJourney({ application }: { application: LoanApplicatio
       || application.status === LoanStatus.CANCELLED
       || (pendingAction === 'Choose Close or Resubmit' && latestBank?.status === 'Rejected');
   const isFinalComplete = isCash ? cashCompleted : pendingWith === 'Closed';
-  const isJourneyClosed = isCash ? cashCompleted || cashCancelled : pendingWith === 'Closed';
-  const journeyStage = isCash
-    ? ['cash-submit', 'cash-review', 'cash-accepted', 'cash-delivery', 'cash-complete'][currentIndex]
-    : ['sales-submit', 'missing-doc-check', 'admin-loan-submit', 'bank-decision', 'result'][currentIndex];
-
+  const isJourneyClosed = journeyPosition.closed;
+  const journeyStage = journeyPosition.stage;
   return (
     <div
-      className="mt-3 rounded-lg border border-slate-100 bg-slate-50/80 px-3 py-2.5"
+      className="mt-3 rounded-control border border-slate-100 bg-slate-50/80 px-3 py-2.5"
       data-testid="mobile-application-journey"
       data-current-stage={journeyStage}
       data-complete={isJourneyClosed ? 'true' : 'false'}
       aria-label={`${tr('进度', 'Journey', 'Perjalanan')}: ${pendingOwner} · ${journeyAction}`}
     >
       <div className="flex min-w-0 items-center justify-between gap-2">
-        <span className="text-[9px] font-bold uppercase tracking-wider text-slate-500">
+        <span className="text-micro uppercase text-slate-500">
           {tr('进度', 'Journey', 'Perjalanan')}
         </span>
-        <span className="truncate text-[9px] font-bold text-slate-500">{pendingOwner}</span>
+        <span className="truncate text-micro tracking-normal text-slate-500">{pendingOwner}</span>
       </div>
       <div className="mt-2 flex items-start">
         {steps.map((step, index) => {
@@ -341,11 +324,11 @@ function MobileApplicationJourney({ application }: { application: LoanApplicatio
           return (
             <React.Fragment key={step}>
               <div className="flex min-w-0 flex-1 flex-col items-center gap-1">
-                <span className={`flex h-5 w-5 items-center justify-center rounded-full text-[8px] font-bold ring-2 ${nodeClass}`}>
+                <span className={`flex h-5 w-5 items-center justify-center rounded-full text-micro tracking-normal ring-2 ${nodeClass}`}>
                   {isComplete ? '✓' : index + 1}
                 </span>
                 <span
-                  className={`line-clamp-2 min-h-5 w-full text-center text-[8px] font-bold leading-[10px] ${isCurrent ? 'text-slate-700' : 'text-slate-400'}`}
+                  className={`line-clamp-2 min-h-5 w-full text-center text-micro tracking-normal leading-[10px] ${isCurrent ? 'text-slate-700' : 'text-slate-400'}`}
                   title={step}
                 >
                   {step}
@@ -358,7 +341,7 @@ function MobileApplicationJourney({ application }: { application: LoanApplicatio
           );
         })}
       </div>
-      <p className="mt-1.5 truncate text-[9px] font-semibold text-slate-500">{journeyAction}</p>
+      <p className="mt-1.5 truncate text-caption text-slate-500">{journeyAction}</p>
     </div>
   );
 }
@@ -403,23 +386,23 @@ export function LoanApplicationCard({
     <button
       type="button"
       onClick={onOpen}
-      className="flex h-full w-full flex-col rounded-xl border border-slate-100 bg-white p-4 text-left shadow-sm transition active:scale-[0.99]"
+      className="flex h-full w-full flex-col rounded-card border border-slate-100 bg-white p-4 text-left shadow-e1 transition active:scale-[0.99]"
       data-testid={`mobile-application-card-${application.id}`}
       aria-label={`${tr('打开申请', 'Open application', 'Buka permohonan')} ${application.applicant_name}`}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-bold text-slate-900">{application.applicant_name}</p>
-          <p className="mt-1 truncate text-xs font-semibold text-slate-500">
+          <p className="truncate text-headline text-slate-900">{application.applicant_name}</p>
+          <p className="mt-1 truncate text-footnote text-slate-500">
             {application.vehicle_model || tr('未选择车辆', 'No vehicle selected', 'Tiada kenderaan dipilih')}
           </p>
         </div>
-        <span className={`shrink-0 rounded-md px-2 py-1 text-[11px] font-bold ${APPLICATION_STATUS_STYLES[application.status]}`}>
+        <span className={`shrink-0 rounded-chip px-2 py-1 text-caption font-semibold ${APPLICATION_STATUS_STYLES[application.status]}`}>
           {trLoanStatus(application.status)}
         </span>
       </div>
 
-      <div className="mt-3 grid grid-cols-2 gap-2 text-xs font-semibold text-slate-600">
+      <div className="mt-3 grid grid-cols-2 gap-2 text-footnote text-slate-600">
         <span className="flex min-w-0 items-center gap-1.5">
           <Phone className="h-3.5 w-3.5 shrink-0 text-slate-400" />
           <span className="truncate font-mono">{formatMalaysiaPhoneForCopy(application.phone_no) || '—'}</span>
@@ -429,22 +412,22 @@ export function LoanApplicationCard({
         </span>
       </div>
 
-      <div className="mt-3 flex items-center justify-between gap-3 rounded-lg bg-slate-50 px-3 py-2.5">
+      <div className="mt-3 flex items-center justify-between gap-3 rounded-control bg-slate-50 px-3 py-2.5">
         <div className="min-w-0">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+          <p className="text-micro uppercase text-slate-500">
             {tr('下一步', 'Next action', 'Tindakan seterusnya')}
           </p>
-          <p className="mt-0.5 truncate text-xs font-bold text-slate-700">{pendingAction}</p>
+          <p className="mt-0.5 truncate text-footnote font-semibold text-slate-700">{pendingAction}</p>
         </div>
         <div className="shrink-0 text-right">
-          <p className={`text-[11px] font-bold ${due ? 'text-rose-600' : 'text-slate-500'}`}>
+          <p className={`text-caption font-semibold ${due ? 'text-rose-600' : 'text-slate-500'}`}>
             {formatShortDateTime(application.action_due_at)}
           </p>
         </div>
       </div>
 
       <div className="mt-3 flex min-w-0 items-center justify-between gap-2">
-        <span className={`inline-flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-bold ${bankTone}`}>
+        <span className={`inline-flex min-w-0 items-center gap-1.5 rounded-chip px-2 py-1 text-caption font-semibold ${bankTone}`}>
           {latestBankApplication ? (
             <span data-testid={`mobile-bank-icon-${application.id}`}>
               <BankIcon
@@ -477,7 +460,7 @@ export function LoanApplicationCard({
         <div
           data-testid={`loan-staff-handler-${application.id}`}
           data-pending={isHandlerPending ? 'true' : 'false'}
-          className={`relative min-w-0 rounded-lg border px-2.5 py-2 ${isHandlerPending ? pendingCardClass : idleCardClass}`}
+          className={`relative min-w-0 rounded-control border px-2.5 py-2 ${isHandlerPending ? pendingCardClass : idleCardClass}`}
         >
           <div className="flex min-w-0 items-center gap-2">
             <span data-testid={`mobile-handler-icon-${application.id}`}>
@@ -489,18 +472,18 @@ export function LoanApplicationCard({
               />
             </span>
             <div className="min-w-0">
-              <p className="text-[9px] font-bold uppercase tracking-wider text-slate-500">{tr('负责人', 'Handler', 'Pengendali')}</p>
-              <p className="mt-0.5 truncate text-xs font-bold text-slate-800">{application.handler_name || tr('未分配', 'Unassigned', 'Belum ditetapkan')}</p>
+              <p className="text-micro uppercase text-slate-500">{tr('负责人', 'Handler', 'Pengendali')}</p>
+              <p className="mt-0.5 truncate text-footnote font-semibold text-slate-800">{application.handler_name || tr('未分配', 'Unassigned', 'Belum ditetapkan')}</p>
             </div>
           </div>
           {isHandlerPending && (
-            <span className="absolute right-1.5 top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-amber-500 text-[9px] font-black text-white" title={tr('待处理', 'Pending', 'Menunggu')} aria-label={tr('待处理', 'Pending', 'Menunggu')}>P</span>
+            <span className="absolute right-1.5 top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-amber-500 text-micro tracking-normal text-white" title={tr('待处理', 'Pending', 'Menunggu')} aria-label={tr('待处理', 'Pending', 'Menunggu')}>P</span>
           )}
         </div>
         <div
           data-testid={`loan-staff-admin-${application.id}`}
           data-pending={isAdminPending ? 'true' : 'false'}
-          className={`relative min-w-0 rounded-lg border px-2.5 py-2 ${isAdminPending ? pendingCardClass : idleCardClass}`}
+          className={`relative min-w-0 rounded-control border px-2.5 py-2 ${isAdminPending ? pendingCardClass : idleCardClass}`}
         >
           <div className="flex min-w-0 items-center gap-2">
             <span data-testid={`mobile-admin-owner-icon-${application.id}`}>
@@ -512,12 +495,12 @@ export function LoanApplicationCard({
               />
             </span>
             <div className="min-w-0">
-              <p className="text-[9px] font-bold uppercase tracking-wider text-slate-500">{tr('Admin 负责人', 'Admin owner', 'Pemilik admin')}</p>
-              <p className="mt-0.5 truncate text-xs font-bold text-slate-800">{adminOwnerName}</p>
+              <p className="text-micro uppercase text-slate-500">{tr('Admin 负责人', 'Admin owner', 'Pemilik admin')}</p>
+              <p className="mt-0.5 truncate text-footnote font-semibold text-slate-800">{adminOwnerName}</p>
             </div>
           </div>
           {isAdminPending && (
-            <span className="absolute right-1.5 top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-amber-500 text-[9px] font-black text-white" title={tr('待处理', 'Pending', 'Menunggu')} aria-label={tr('待处理', 'Pending', 'Menunggu')}>P</span>
+            <span className="absolute right-1.5 top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-amber-500 text-micro tracking-normal text-white" title={tr('待处理', 'Pending', 'Menunggu')} aria-label={tr('待处理', 'Pending', 'Menunggu')}>P</span>
           )}
         </div>
       </div>
@@ -540,17 +523,17 @@ function MobileLeadCard({
   );
 
   return (
-    <article className="rounded-xl border border-slate-100 bg-white p-4 shadow-sm">
+    <article className="rounded-card border border-slate-100 bg-white p-4 shadow-e1">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <h3 className="truncate text-sm font-bold text-slate-900">
+          <h3 className="truncate text-headline text-slate-900">
             {lead.name || lead.username || tr('未命名名单', 'Unnamed lead', 'Prospek tanpa nama')}
           </h3>
-          <p className="mt-1 truncate text-xs font-semibold text-slate-500">
+          <p className="mt-1 truncate text-footnote text-slate-500">
             {lead.channel} · {lead.phone_no || '--'}
           </p>
         </div>
-        <span className={`shrink-0 rounded-md px-2 py-1 text-[11px] font-bold ${
+        <span className={`shrink-0 rounded-chip px-2 py-1 text-caption font-semibold ${
           isDue ? 'bg-rose-50 text-rose-700' : 'bg-amber-50 text-amber-700'
         }`}>
           {isDue ? tr('已到期', 'Due', 'Tamat tempoh') : trFollowUpStatus(lead.follow_up_status || 'New')}
@@ -558,17 +541,17 @@ function MobileLeadCard({
       </div>
 
       {lead.follow_up_note && (
-        <p className="mt-3 line-clamp-2 rounded-lg bg-slate-50 px-3 py-2 text-xs font-semibold leading-relaxed text-slate-600">
+        <p className="mt-3 line-clamp-2 rounded-control bg-slate-50 px-3 py-2 text-footnote leading-relaxed text-slate-600">
           {lead.follow_up_note}
         </p>
       )}
 
       <div className="mt-3 flex items-center justify-between gap-3">
-        <p className="min-w-0 truncate text-xs font-semibold text-slate-500">
+        <p className="min-w-0 truncate text-footnote text-slate-500">
           <Clock3 className="mr-1 inline h-3.5 w-3.5" />
           {formatShortDateTime(lead.next_follow_up_at)}
         </p>
-        <p className="shrink-0 text-[11px] font-bold text-slate-500">
+        <p className="shrink-0 text-caption font-semibold text-slate-500">
           {lead.taken_by_staff_name || tr('公开名单', 'Available lead', 'Prospek tersedia')}
         </p>
       </div>
@@ -577,7 +560,7 @@ function MobileLeadCard({
         <a
           href={phoneDigits ? `tel:+${phoneDigits}` : undefined}
           aria-disabled={!phoneDigits}
-          className={`inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg text-xs font-bold ${
+          className={`inline-flex min-h-11 items-center justify-center gap-1.5 rounded-control text-callout ${
             phoneDigits ? 'bg-slate-100 text-slate-700' : 'pointer-events-none bg-slate-50 text-slate-300'
           }`}
         >
@@ -588,7 +571,7 @@ function MobileLeadCard({
           type="button"
           onClick={onOpenWhatsApp}
           disabled={!phoneDigits}
-          className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg bg-emerald-600 text-xs font-bold text-white disabled:bg-slate-100 disabled:text-slate-300"
+          className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-control bg-emerald-600 text-callout text-white disabled:bg-slate-100 disabled:text-slate-300"
         >
           <MessageCircle className="h-4 w-4" />
           WhatsApp
@@ -599,7 +582,7 @@ function MobileLeadCard({
             follow_up_status: 'Contacted',
             last_follow_up_at: new Date().toISOString()
           })}
-          className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg bg-red-800 text-xs font-bold text-white"
+          className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-control bg-brand text-callout text-white"
         >
           <CheckCircle2 className="h-4 w-4" />
           {tr('完成', 'Done', 'Selesai')}
@@ -634,11 +617,18 @@ export default function MobileAppShell({
   onUpdateLead,
   onRecordAttendance,
   onNavigatePage,
-  onLogout
+  onLogout,
+  canOpenTaskInbox,
+  onOpenTaskInbox,
+  onOpenProfile,
+  moreNavItems,
+  onOpenMoreNavItem,
+  canOpenCustomerActions,
+  onOpenCustomerActions
 }: MobileAppShellProps) {
   const [activeTab, setActiveTab] = useState<MobileTab>(() => getMobileTabForPage(navigationPage));
   const [applicationFilter, setApplicationFilter] = useState<ApplicationFilter>('action');
-  const [applicationTimeFilter, setApplicationTimeFilter] = useState<ApplicationTimeFilter>('30d');
+  const [applicationTimeFilter, setApplicationTimeFilter] = useState<ApplicationTimeFilter>('all');
   const [applicationStaffFilter, setApplicationStaffFilter] = useState('all');
   const [leadFilter, setLeadFilter] = useState<LeadFilter>('mine');
   const [applicationSearch, setApplicationSearch] = useState('');
@@ -788,7 +778,7 @@ export default function MobileAppShell({
   return (
     <div className="min-h-screen w-full bg-slate-50 text-slate-900" data-testid="responsive-dashboard-shell">
       <aside className="fixed inset-y-0 left-0 z-40 hidden w-24 flex-col bg-slate-950 px-2 py-3 text-white md:flex">
-        <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-xl bg-red-800 text-xs font-black">DR</div>
+        <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-card bg-brand text-footnote font-bold">DR</div>
         <nav className="mt-4 flex min-h-0 flex-1 flex-col gap-1.5" aria-label={tr('平板导航', 'Tablet navigation', 'Navigasi tablet')}>
           {navigationItems.map((item) => {
             const Icon = item.icon;
@@ -798,7 +788,8 @@ export default function MobileAppShell({
                 key={item.key}
                 type="button"
                 onClick={() => openTab(item.key)}
-                className={`flex min-h-14 min-w-0 flex-col items-center justify-center gap-1 rounded-xl px-1 text-[9px] font-bold transition-colors ${isActive ? 'bg-red-800 text-white' : 'text-slate-400 hover:bg-white/5 hover:text-white'}`}
+              aria-current={isActive ? 'page' : undefined}
+                className={`flex min-h-14 min-w-0 flex-col items-center justify-center gap-1 rounded-card px-1 text-micro tracking-normal transition-colors ${isActive ? 'bg-brand text-white' : 'text-slate-400 hover:bg-white/5 hover:text-white'}`}
               >
                 <Icon className="h-5 w-5" />
                 <span className="max-w-full truncate">{item.label}</span>
@@ -810,12 +801,12 @@ export default function MobileAppShell({
 
       <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-slate-100 bg-white/95 px-4 backdrop-blur md:ml-24 md:px-6">
         <div className="flex min-w-0 items-center gap-2.5 md:hidden">
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-red-800 text-sm font-bold text-white">
+          <div className="flex h-9 w-9 items-center justify-center rounded-card bg-brand text-headline text-white">
             DR
           </div>
           <div className="min-w-0">
-            <p className="truncate text-xs font-bold text-slate-900">Dr Racing</p>
-            <p className={`mt-0.5 flex items-center gap-1 text-[11px] font-bold ${
+            <p className="truncate text-footnote font-semibold text-slate-900">Dr Racing</p>
+            <p className={`mt-0.5 flex items-center gap-1 text-caption font-semibold ${
               syncStatus === 'error' ? 'text-rose-600' : 'text-slate-500'
             }`}>
               <span className={`h-1.5 w-1.5 rounded-full ${
@@ -838,12 +829,12 @@ export default function MobileAppShell({
           <button
             type="button"
             onClick={onOpenNotifications}
-            className="relative flex h-11 w-11 items-center justify-center rounded-xl bg-slate-100 text-slate-600"
+            className="relative flex h-11 w-11 items-center justify-center rounded-card bg-slate-100 text-slate-600"
             aria-label={tr('打开通知', 'Open notifications', 'Buka pemberitahuan')}
           >
             <Bell className="h-5 w-5" />
             {unreadNotificationCount > 0 && (
-              <span className="absolute right-1.5 top-1.5 flex min-w-4 items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-bold leading-4 text-white">
+              <span className="absolute right-1.5 top-1.5 flex min-w-4 items-center justify-center rounded-full bg-rose-500 px-1 text-micro tracking-normal leading-4 text-white">
                 {unreadNotificationCount > 99 ? '99+' : unreadNotificationCount}
               </span>
             )}
@@ -857,7 +848,7 @@ export default function MobileAppShell({
               name={currentStaffName}
               avatarDataUrl={currentStaffAvatar}
               className="h-11 w-11"
-              textClassName="text-xs"
+              textClassName="text-footnote"
             />
           </button>
         </div>
@@ -868,23 +859,23 @@ export default function MobileAppShell({
         {activeTab === 'today' && (
           <div className="space-y-6">
             <section>
-              <p className="text-xs font-bold text-slate-500">{formatTodayHeading()}</p>
-              <h1 className="mt-1 text-2xl font-bold tracking-tight text-slate-950">
+              <p className="text-footnote font-semibold text-slate-500">{formatTodayHeading()}</p>
+              <h1 className="mt-1 text-title-2 text-slate-950">
                 {getGreeting()}, {currentStaffName.split(/\s+/)[0]}
               </h1>
-              <p className="mt-1 text-xs font-semibold text-slate-500">
+              <p className="mt-1 text-footnote text-slate-500">
                 {getRoleWorkspaceLabel(currentStaffRole)}
               </p>
             </section>
 
             {canViewAttendance && (
-              <section className="rounded-xl bg-slate-900 p-4 text-white shadow-lg shadow-slate-200">
+              <section className="rounded-card bg-slate-900 p-4 text-white shadow-e2 shadow-slate-200">
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="text-[11px] font-bold uppercase tracking-wider text-white/50">
+                    <p className="text-micro uppercase text-white/50">
                       {tr('今日考勤', 'Today attendance', 'Kehadiran hari ini')}
                     </p>
-                    <p className="mt-1 truncate text-sm font-bold">
+                    <p className="mt-1 truncate text-headline">
                       {latestTodayAttendance
                         ? tr(
                             `上次 ${latestTodayAttendance.action === 'check_in' ? '签到' : '签退'} · ${formatTime(latestTodayAttendance.occurred_at)}`,
@@ -898,7 +889,7 @@ export default function MobileAppShell({
                     type="button"
                     onClick={handlePunch}
                     disabled={isPunching}
-                    className={`inline-flex min-h-11 shrink-0 items-center gap-2 rounded-lg px-4 text-xs font-bold text-white disabled:opacity-60 ${
+                    className={`inline-flex min-h-11 shrink-0 items-center gap-2 rounded-control px-4 text-callout text-white disabled:opacity-60 ${
                       nextPunchAction === 'check_in' ? 'bg-emerald-500' : 'bg-rose-600'
                     }`}
                   >
@@ -923,7 +914,7 @@ export default function MobileAppShell({
                   <button
                     type="button"
                     onClick={() => openTab('applications')}
-                    className="text-xs font-bold text-red-700"
+                    className="text-callout text-brand-ink"
                   >
                     {tr('查看全部', 'View all', 'Lihat semua')}
                   </button>
@@ -950,17 +941,29 @@ export default function MobileAppShell({
               ))}
 
               {actionApplications.length === 0 && dueLeads.length === 0 && (
-                <div className="rounded-xl border border-dashed border-slate-200 bg-white px-5 py-8 text-center">
+                <div className="rounded-card border border-dashed border-slate-200 bg-white px-5 py-8 text-center">
                   <CheckCircle2 className="mx-auto h-7 w-7 text-emerald-500" />
-                  <p className="mt-3 text-sm font-bold text-slate-800">
+                  <p className="mt-3 text-headline text-slate-800">
                     {tr('目前没有到期工作', 'Nothing due right now', 'Tiada tugasan tamat tempoh')}
                   </p>
-                  <p className="mt-1 text-xs font-semibold text-slate-500">
+                  <p className="mt-1 text-footnote text-slate-500">
                     {tr('新的工作会自动出现在这里。', 'New work will appear here automatically.', 'Tugasan baharu akan muncul di sini.')}
                   </p>
                 </div>
               )}
             </section>
+
+            {canOpenTaskInbox && (
+              <button
+                type="button"
+                onClick={onOpenTaskInbox}
+                className="flex min-h-12 w-full items-center justify-center gap-2 rounded-card bg-white px-4 text-callout font-semibold text-brand-ink shadow-e1"
+              >
+                <Inbox className="h-4 w-4" />
+                {tr('查看全部任务', 'View all tasks', 'Lihat semua tugasan')}
+                <ChevronRight className="h-4 w-4" />
+              </button>
+            )}
 
             <section className="space-y-3">
               <MobileSectionHeading title={tr('快速前往', 'Quick access', 'Akses pantas')} />
@@ -969,36 +972,36 @@ export default function MobileAppShell({
                   <button
                     type="button"
                     onClick={() => openTab('applications')}
-                    className="flex min-h-24 flex-col items-center justify-center gap-2 rounded-xl bg-white p-3 text-center shadow-sm"
+                    className="flex min-h-24 flex-col items-center justify-center gap-2 rounded-card bg-white p-3 text-center shadow-e1"
                   >
-                    <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-red-50 text-red-700">
-                      <FileText className="h-5 w-5" />
+                    <span className="flex h-10 w-10 items-center justify-center rounded-card bg-slate-100 text-slate-600">
+                      <FileText className="h-5 w-5" strokeWidth={1.75} />
                     </span>
-                    <span className="text-xs font-bold text-slate-700">{tr('申请', 'Applications', 'Permohonan')}</span>
+                    <span className="text-footnote font-semibold text-slate-700">{tr('申请', 'Applications', 'Permohonan')}</span>
                   </button>
                 )}
                 {canViewLeads && (
                   <button
                     type="button"
                     onClick={() => openTab('leads')}
-                    className="flex min-h-24 flex-col items-center justify-center gap-2 rounded-xl bg-white p-3 text-center shadow-sm"
+                    className="flex min-h-24 flex-col items-center justify-center gap-2 rounded-card bg-white p-3 text-center shadow-e1"
                   >
-                    <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-50 text-emerald-700">
-                      <Users className="h-5 w-5" />
+                    <span className="flex h-10 w-10 items-center justify-center rounded-card bg-slate-100 text-slate-600">
+                      <Users className="h-5 w-5" strokeWidth={1.75} />
                     </span>
-                    <span className="text-xs font-bold text-slate-700">{tr('名单', 'Leads', 'Prospek')}</span>
+                    <span className="text-footnote font-semibold text-slate-700">{tr('名单', 'Leads', 'Prospek')}</span>
                   </button>
                 )}
                 {canViewCalendar && (
                   <button
                     type="button"
                     onClick={() => openTab('calendar')}
-                    className="flex min-h-24 flex-col items-center justify-center gap-2 rounded-xl bg-white p-3 text-center shadow-sm"
+                    className="flex min-h-24 flex-col items-center justify-center gap-2 rounded-card bg-white p-3 text-center shadow-e1"
                   >
-                    <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-700">
-                      <CalendarDays className="h-5 w-5" />
+                    <span className="flex h-10 w-10 items-center justify-center rounded-card bg-slate-100 text-slate-600">
+                      <CalendarDays className="h-5 w-5" strokeWidth={1.75} />
                     </span>
-                    <span className="text-xs font-bold text-slate-700">{tr('日历', 'Calendar', 'Kalendar')}</span>
+                    <span className="text-footnote font-semibold text-slate-700">{tr('日历', 'Calendar', 'Kalendar')}</span>
                   </button>
                 )}
               </div>
@@ -1009,36 +1012,47 @@ export default function MobileAppShell({
         {activeTab === 'applications' && canViewApplications && (
           <div className="space-y-4">
             <section>
-              <h1 className="text-2xl font-bold tracking-tight text-slate-950">
+              <h1 className="text-title-2 text-slate-950">
                 {tr('贷款申请', 'Applications', 'Permohonan')}
               </h1>
-              <p className="mt-1 text-xs font-semibold text-slate-500">
+              <p className="mt-1 text-footnote text-slate-500">
                 {tr('点开客户卡片查看和处理下一步。', 'Open a customer card to handle the next action.', 'Buka kad pelanggan untuk tindakan seterusnya.')}
               </p>
+              {canOpenCustomerActions && (
+                <button
+                  type="button"
+                  onClick={onOpenCustomerActions}
+                  className="mt-3 inline-flex min-h-11 items-center gap-2 rounded-control bg-white px-4 text-callout font-semibold text-brand-ink shadow-e1"
+                >
+                  <SlidersHorizontal className="h-4 w-4" />
+                  {tr('更多操作', 'More actions', 'Lagi tindakan')}
+                  <ChevronRight className="h-4 w-4" />
+                </button>
+              )}
             </section>
 
             <div className="grid gap-2 md:grid-cols-[minmax(260px,1fr)_minmax(390px,1.2fr)]" data-testid="application-filter-toolbar">
-              <label className="flex min-h-11 items-center gap-2 rounded-xl border border-slate-100 bg-white px-3 shadow-sm">
+              <label className="flex min-h-11 items-center gap-2 rounded-card border border-slate-100 bg-white px-3 shadow-e1">
                 <Search className="h-4 w-4 text-slate-500" />
                 <input
                   value={applicationSearch}
                   onChange={(event) => setApplicationSearch(event.target.value)}
                   placeholder={tr('搜索客户、电话、IC、车辆', 'Search customer, phone, IC, vehicle', 'Cari pelanggan, telefon, IC, kenderaan')}
-                  className="min-w-0 flex-1 bg-transparent text-sm font-semibold text-slate-800 outline-none placeholder:text-slate-300"
+                  className="min-w-0 flex-1 bg-transparent text-callout text-slate-800 outline-none placeholder:text-slate-300"
                 />
               </label>
 
-              <div className="grid grid-cols-3 gap-1.5 rounded-xl bg-white p-1.5 shadow-sm">
+              <div className="grid grid-cols-3 gap-1.5 rounded-card bg-white p-1.5 shadow-e1">
                 <label className="min-w-0">
                   <span className="sr-only">{tr('员工筛选', 'Staff filter', 'Penapis staf')}</span>
-                  <select value={applicationStaffFilter} onChange={(event) => setApplicationStaffFilter(event.target.value)} className="h-9 w-full min-w-0 rounded-lg bg-slate-50 px-2 text-[11px] font-bold text-slate-700 outline-none" aria-label={tr('员工筛选', 'Staff filter', 'Penapis staf')}>
+                  <select value={applicationStaffFilter} onChange={(event) => setApplicationStaffFilter(event.target.value)} className="h-9 w-full min-w-0 rounded-control bg-slate-50 px-2 text-caption font-semibold text-slate-700 outline-none" aria-label={tr('员工筛选', 'Staff filter', 'Penapis staf')}>
                     <option value="all">{tr('全部员工', 'All staff', 'Semua staf')}</option>
                     {applicationStaffOptions.map((staffName) => <option key={staffName} value={staffName}>{staffName}</option>)}
                   </select>
                 </label>
                 <label className="min-w-0">
                   <span className="sr-only">{tr('状态筛选', 'Status filter', 'Penapis status')}</span>
-                  <select value={applicationFilter} onChange={(event) => setApplicationFilter(event.target.value as ApplicationFilter)} className="h-9 w-full min-w-0 rounded-lg bg-slate-50 px-2 text-[11px] font-bold text-slate-700 outline-none" aria-label={tr('状态筛选', 'Status filter', 'Penapis status')}>
+                  <select value={applicationFilter} onChange={(event) => setApplicationFilter(event.target.value as ApplicationFilter)} className="h-9 w-full min-w-0 rounded-control bg-slate-50 px-2 text-caption font-semibold text-slate-700 outline-none" aria-label={tr('状态筛选', 'Status filter', 'Penapis status')}>
                     <option value="action">{tr(`需处理 ${actionApplications.length}`, `Need action ${actionApplications.length}`, `Perlu tindakan ${actionApplications.length}`)}</option>
                     <option value="all">{tr(`全部 ${applications.length}`, `All ${applications.length}`, `Semua ${applications.length}`)}</option>
                     <option value="pending">{tr('进行中', 'In progress', 'Sedang berjalan')}</option>
@@ -1047,7 +1061,7 @@ export default function MobileAppShell({
                 </label>
                 <label className="min-w-0">
                   <span className="sr-only">{tr('时间筛选', 'Time filter', 'Penapis masa')}</span>
-                  <select value={applicationTimeFilter} onChange={(event) => setApplicationTimeFilter(event.target.value as ApplicationTimeFilter)} className="h-9 w-full min-w-0 rounded-lg bg-slate-50 px-2 text-[11px] font-bold text-slate-700 outline-none" aria-label={tr('时间筛选', 'Time filter', 'Penapis masa')}>
+                  <select value={applicationTimeFilter} onChange={(event) => setApplicationTimeFilter(event.target.value as ApplicationTimeFilter)} className="h-9 w-full min-w-0 rounded-control bg-slate-50 px-2 text-caption font-semibold text-slate-700 outline-none" aria-label={tr('时间筛选', 'Time filter', 'Penapis masa')}>
                     <option value="today">{tr('今天', 'Today', 'Hari ini')}</option>
                     <option value="7d">{tr('最近 7 天', 'Last 7 days', '7 hari lalu')}</option>
                     <option value="30d">{tr('最近 30 天', 'Last 30 days', '30 hari lalu')}</option>
@@ -1074,7 +1088,7 @@ export default function MobileAppShell({
                 />
               ))}
               {filteredApplications.length === 0 && (
-                <div className="rounded-xl border border-dashed border-slate-200 bg-white p-8 text-center text-sm font-bold text-slate-500">
+                <div className="rounded-card border border-dashed border-slate-200 bg-white p-8 text-center text-headline text-slate-500">
                   {tr('没有符合条件的申请。', 'No matching applications.', 'Tiada permohonan sepadan.')}
                 </div>
               )}
@@ -1085,25 +1099,25 @@ export default function MobileAppShell({
         {activeTab === 'leads' && canViewLeads && (
           <div className="space-y-4">
             <section>
-              <h1 className="text-2xl font-bold tracking-tight text-slate-950">
+              <h1 className="text-title-2 text-slate-950">
                 {tr('名单跟进', 'Lead follow-up', 'Susulan prospek')}
               </h1>
-              <p className="mt-1 text-xs font-semibold text-slate-500">
+              <p className="mt-1 text-footnote text-slate-500">
                 {tr('从手机直接联系客户并记录进度。', 'Contact customers and record progress from your phone.', 'Hubungi pelanggan dan rekod kemajuan melalui telefon.')}
               </p>
             </section>
 
-            <label className="flex min-h-12 items-center gap-2 rounded-xl border border-slate-100 bg-white px-3 shadow-sm">
+            <label className="flex min-h-12 items-center gap-2 rounded-card border border-slate-100 bg-white px-3 shadow-e1">
               <Search className="h-4 w-4 text-slate-500" />
               <input
                 value={leadSearch}
                 onChange={(event) => setLeadSearch(event.target.value)}
                 placeholder={tr('搜索姓名、电话或渠道', 'Search name, phone, or channel', 'Cari nama, telefon atau saluran')}
-                className="min-w-0 flex-1 bg-transparent text-sm font-semibold text-slate-800 outline-none placeholder:text-slate-300"
+                className="min-w-0 flex-1 bg-transparent text-callout text-slate-800 outline-none placeholder:text-slate-300"
               />
             </label>
 
-            <div className="grid grid-cols-3 gap-2 rounded-xl bg-white p-1 shadow-sm">
+            <div className="grid grid-cols-3 gap-2 rounded-card bg-white p-1 shadow-e1">
               {([
                 ['mine', tr('我的', 'Mine', 'Saya'), ownedLeads.length],
                 ['due', tr('到期', 'Due', 'Tamat'), dueLeads.length],
@@ -1113,8 +1127,8 @@ export default function MobileAppShell({
                   key={key}
                   type="button"
                   onClick={() => setLeadFilter(key)}
-                  className={`min-h-11 rounded-lg px-2 text-xs font-bold ${
-                    leadFilter === key ? 'bg-red-800 text-white' : 'text-slate-500'
+                  className={`min-h-11 rounded-control px-2 text-callout ${
+                    leadFilter === key ? 'bg-brand text-white' : 'text-slate-500'
                   }`}
                 >
                   {label} <span className="opacity-60">{count}</span>
@@ -1132,7 +1146,7 @@ export default function MobileAppShell({
                 />
               ))}
               {filteredLeads.length === 0 && (
-                <div className="rounded-xl border border-dashed border-slate-200 bg-white p-8 text-center text-sm font-bold text-slate-500">
+                <div className="rounded-card border border-dashed border-slate-200 bg-white p-8 text-center text-headline text-slate-500">
                   {tr('这个名单目前是空的。', 'This lead list is empty.', 'Senarai prospek ini kosong.')}
                 </div>
               )}
@@ -1155,7 +1169,7 @@ export default function MobileAppShell({
                   setShowAttendanceWorkspace(false);
                   window.scrollTo({ top: 0, behavior: 'smooth' });
                 }}
-                className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-white px-3 text-xs font-bold text-slate-700 shadow-sm"
+                className="inline-flex min-h-11 items-center gap-2 rounded-control bg-white px-3 text-callout text-slate-700 shadow-e1"
               >
                 <ArrowLeft className="h-4 w-4" />
                 {tr('返回个人页面', 'Back to profile', 'Kembali ke profil')}
@@ -1166,19 +1180,27 @@ export default function MobileAppShell({
             </div>
           ) : (
             <div className="space-y-5">
-              <section className="rounded-xl bg-slate-900 p-5 text-white shadow-lg shadow-slate-200">
+              <section className="rounded-card bg-slate-900 p-5 text-white shadow-e2 shadow-slate-200">
                 <div className="flex items-center gap-4">
                   <StaffAvatar
                     name={currentStaffName}
                     avatarDataUrl={currentStaffAvatar}
                     className="h-16 w-16 border-white/20"
-                    textClassName="text-sm"
+                    textClassName="text-body"
                   />
                   <div className="min-w-0">
-                    <h1 className="truncate text-xl font-bold">{currentStaffName}</h1>
-                    <p className="mt-1 text-xs font-bold text-white/50">{currentStaffRole}</p>
+                    <h1 className="truncate text-title-3">{currentStaffName}</h1>
+                    <p className="mt-1 text-footnote font-semibold text-white/50">{currentStaffRole}</p>
                   </div>
                 </div>
+                <button
+                  type="button"
+                  onClick={onOpenProfile}
+                  className="mt-4 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-control bg-white/10 px-4 text-callout font-semibold text-white"
+                >
+                  <UserCircle className="h-4 w-4" />
+                  {tr('编辑个人资料', 'Edit profile', 'Sunting profil')}
+                </button>
               </section>
 
               {canViewAttendance && (
@@ -1190,16 +1212,16 @@ export default function MobileAppShell({
                       setShowAttendanceWorkspace(true);
                       window.scrollTo({ top: 0, behavior: 'smooth' });
                     }}
-                    className="flex min-h-16 w-full items-center gap-3 rounded-xl bg-white p-4 text-left shadow-sm"
+                    className="flex min-h-16 w-full items-center gap-3 rounded-card bg-white p-4 text-left shadow-e1"
                   >
-                    <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-emerald-700">
+                    <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-card bg-emerald-50 text-emerald-700">
                       <Clock3 className="h-5 w-5" />
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block text-sm font-bold text-slate-800">
+                      <span className="block text-headline text-slate-800">
                         {tr('考勤与 Leave / MC', 'Attendance & Leave / MC', 'Kehadiran & Cuti / MC')}
                       </span>
-                      <span className="mt-1 block truncate text-xs font-semibold text-slate-500">
+                      <span className="mt-1 block truncate text-footnote text-slate-500">
                         {latestTodayAttendance
                           ? `${latestTodayAttendance.action === 'check_in' ? 'Check in' : 'Check out'} · ${formatTime(latestTodayAttendance.occurred_at)}`
                           : tr('今天还没有打卡', 'No punch yet today', 'Belum ada rekod hari ini')}
@@ -1210,9 +1232,44 @@ export default function MobileAppShell({
                 </section>
               )}
 
+              <section className="space-y-3" data-testid="mobile-more-pages">
+                <MobileSectionHeading title={tr('更多', 'More', 'Lagi')} />
+                <div className="overflow-hidden rounded-card bg-white shadow-e1">
+                  {moreNavItems.map((item) => {
+                    const Icon = item.icon;
+                    return (
+                      <button
+                        key={item.key}
+                        type="button"
+                        onClick={() => onOpenMoreNavItem(item.key)}
+                        className="flex min-h-14 w-full items-center gap-3 border-b border-slate-100 px-4 text-left last:border-b-0"
+                      >
+                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-card bg-slate-100 text-slate-600">
+                          <Icon className="h-4 w-4" />
+                        </span>
+                        <span className="min-w-0 flex-1 truncate text-headline text-slate-800">{item.label}</span>
+                        <ChevronRight className="h-4 w-4 shrink-0 text-slate-300" />
+                      </button>
+                    );
+                  })}
+                  <a
+                    href="/handbook"
+                    className="flex min-h-14 w-full items-center gap-3 px-4 text-left"
+                  >
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-card bg-slate-100 text-slate-600">
+                      <BookOpen className="h-4 w-4" />
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-headline text-slate-800">
+                      {tr('员工手册', 'Staff handbook', 'Buku panduan staf')}
+                    </span>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-slate-300" />
+                  </a>
+                </div>
+              </section>
+
               <section className="space-y-3">
                 <MobileSectionHeading title={tr('显示设置', 'Display settings', 'Tetapan paparan')} />
-                <div className="flex flex-col items-start gap-3 rounded-xl bg-white p-4 shadow-sm">
+                <div className="flex flex-col items-start gap-3 rounded-card bg-white p-4 shadow-e1">
                   {preferenceControls}
                 </div>
               </section>
@@ -1220,7 +1277,7 @@ export default function MobileAppShell({
               <button
                 type="button"
                 onClick={onLogout}
-                className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-rose-50 text-sm font-bold text-rose-700"
+                className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-card bg-rose-50 text-headline text-rose-700"
               >
                 <LogOut className="h-4 w-4" />
                 {tr('退出登录', 'Log out', 'Log keluar')}
@@ -1232,7 +1289,7 @@ export default function MobileAppShell({
       </main>
 
       <nav
-        className="fixed inset-x-3 bottom-3 z-40 grid rounded-2xl border border-slate-100 bg-white/95 p-1 shadow-2xl shadow-slate-300/40 backdrop-blur md:hidden"
+        className="fixed inset-x-3 bottom-3 z-40 grid rounded-panel border border-slate-100 bg-white/95 p-1 shadow-e3 shadow-slate-300/40 backdrop-blur md:hidden"
         style={{
           gridTemplateColumns: navigationItems
             .map((item) => `minmax(0, ${item.key === 'applications' ? 1.2 : 1}fr)`)
@@ -1249,8 +1306,9 @@ export default function MobileAppShell({
               key={item.key}
               type="button"
               onClick={() => openTab(item.key)}
-              className={`flex min-h-14 min-w-0 flex-col items-center justify-center gap-1 rounded-xl px-1 text-[10px] font-bold transition-colors ${
-                isActive ? 'bg-red-800 text-white' : 'text-slate-500'
+              aria-current={isActive ? 'page' : undefined}
+              className={`flex min-h-14 min-w-0 flex-col items-center justify-center gap-1 rounded-card px-1 text-micro tracking-normal transition-colors ${
+                isActive ? 'bg-brand text-white' : 'text-slate-500'
               }`}
             >
               <Icon className="h-5 w-5" />

@@ -3,10 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ArrowRight,
   ArrowUpRight,
+  Building2,
   CalendarCheck2,
   CalendarRange,
   CheckCircle2,
@@ -24,11 +25,12 @@ import {
   TimerReset,
   Trash2,
   UploadCloud,
+  Users,
   Wifi,
   WifiOff,
   XCircle
 } from 'lucide-react';
-import { normalizeAttendanceNetworkIp, normalizeAttendancePolicy, type ApprovalRequest, type ApprovalRequestStatus, type AttendancePolicy, type AttendanceWeeklySchedule, type RoleAccount, type RoleAccountRole } from '../types';
+import { ATTENDANCE_MAIN_TEAM_ID, getAttendanceTeamIdForAccount, normalizeAttendanceNetworkIp, normalizeAttendancePolicy, resolveAttendancePolicyForAccount, type ApprovalRequest, type ApprovalRequestStatus, type AttendancePolicy, type AttendanceTeam, type AttendanceWeeklySchedule, type RoleAccount, type RoleAccountRole } from '../types';
 import type { AttendanceEvent } from '../services/dashboardRepository';
 import StaffAvatar from './StaffAvatar';
 import ToggleOptionGroup from './ToggleOptionGroup';
@@ -65,8 +67,13 @@ interface AttendancePageProps {
   currentStaffRole: RoleAccountRole;
   canViewAll: boolean;
   canManageSchedules: boolean;
+  // Monthly salary is Super Admin only (owner decision 2026-10-06).
+  canViewSalary: boolean;
   attendancePolicy: AttendancePolicy;
   currentNetworkIp: string;
+  // Firebase mode: the server's Wi-Fi answer (null while loading). Undefined in
+  // local mode, where the policy's office IPs are compared in the browser.
+  networkCheck?: { required: boolean; allowed: boolean } | null;
   onRecordAttendance: (action: AttendanceEvent['action'], note: string) => Promise<boolean>;
   onSaveWeeklySchedules: (schedules: AttendanceWeeklySchedule[]) => Promise<boolean>;
   onSubmitLeaveRequest: (request: Omit<ApprovalRequest, 'id' | 'status' | 'requester_name' | 'requester_role' | 'submitted_at'>) => Promise<boolean>;
@@ -195,6 +202,19 @@ function statusLabel(status: ApprovalRequestStatus) {
   return tr('已取消', 'Cancelled', 'Dibatalkan');
 }
 
+function parseNetworkIpText(value: string) {
+  return value
+    .split(/[\s,]+/)
+    .map(normalizeAttendanceNetworkIp)
+    .filter(Boolean);
+}
+
+function teamIpTextFromPolicy(policy: AttendancePolicy) {
+  return Object.fromEntries((policy.teams || []).map((team) => [team.id, team.office_network_ips.join('\n')]));
+}
+
+const CLOCK_TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
+
 export default function AttendancePage({
   events,
   schedules,
@@ -204,8 +224,10 @@ export default function AttendancePage({
   currentStaffRole,
   canViewAll,
   canManageSchedules,
+  canViewSalary,
   attendancePolicy,
   currentNetworkIp,
+  networkCheck,
   onRecordAttendance,
   onSaveWeeklySchedules,
   onSubmitLeaveRequest,
@@ -233,6 +255,7 @@ export default function AttendancePage({
   const [showPolicyEditor, setShowPolicyEditor] = useState(false);
   const [policyDraft, setPolicyDraft] = useState(() => normalizeAttendancePolicy(attendancePolicy));
   const [officeIpText, setOfficeIpText] = useState(() => attendancePolicy.office_network_ips.join('\n'));
+  const [teamIpText, setTeamIpText] = useState<Record<string, string>>(() => teamIpTextFromPolicy(attendancePolicy));
   const [policyError, setPolicyError] = useState('');
   const [policySaved, setPolicySaved] = useState(false);
   const [scheduleWeekStart, setScheduleWeekStart] = useState(() => mondayOfWeek(today));
@@ -242,11 +265,41 @@ export default function AttendancePage({
   useEffect(() => {
     setPolicyDraft(normalizeAttendancePolicy(attendancePolicy));
     setOfficeIpText(attendancePolicy.office_network_ips.join('\n'));
+    setTeamIpText(teamIpTextFromPolicy(attendancePolicy));
   }, [attendancePolicy]);
 
   const activeAccounts = useMemo(() => roleAccounts
     .filter((account) => account.status === 'Active')
     .sort((left, right) => left.name.localeCompare(right.name)), [roleAccounts]);
+  // Each shop (team) gets its own tab for managers: schedule, day status,
+  // monthly summary, punches and leave requests only show that shop's staff.
+  const teamTabs = useMemo(() => [
+    {
+      id: ATTENDANCE_MAIN_TEAM_ID,
+      name: attendancePolicy.main_team_name || tr('主队', 'Main team', 'Pasukan utama'),
+      work_start_time: attendancePolicy.work_start_time,
+      work_end_time: attendancePolicy.work_end_time
+    },
+    ...(attendancePolicy.teams || []).map((team) => ({
+      id: team.id,
+      name: team.name,
+      work_start_time: team.work_start_time,
+      work_end_time: team.work_end_time
+    }))
+  ], [attendancePolicy]);
+  const showTeamTabs = canViewAll && teamTabs.length > 1;
+  const [selectedTeamTab, setSelectedTeamTab] = useState(() => getAttendanceTeamIdForAccount(
+    attendancePolicy,
+    roleAccounts.find((account) => account.name === currentStaffName)?.id
+  ));
+  const activeTeamTab = teamTabs.some((team) => team.id === selectedTeamTab) ? selectedTeamTab : ATTENDANCE_MAIN_TEAM_ID;
+  const teamIdForStaffName = useCallback((name: string) => getAttendanceTeamIdForAccount(
+    attendancePolicy,
+    roleAccounts.find((account) => account.name === name)?.id
+  ), [attendancePolicy, roleAccounts]);
+  const teamAccounts = useMemo(() => (showTeamTabs
+    ? activeAccounts.filter((account) => getAttendanceTeamIdForAccount(attendancePolicy, account.id) === activeTeamTab)
+    : activeAccounts), [activeAccounts, activeTeamTab, attendancePolicy, showTeamTabs]);
   const scheduleWeekDates = useMemo(() => weekDateKeys(scheduleWeekStart), [scheduleWeekStart]);
   useEffect(() => {
     const nextDraft: WeeklyScheduleDraft = {};
@@ -269,7 +322,7 @@ export default function AttendancePage({
     setScheduleDraft(nextDraft);
   }, [activeAccounts, scheduleWeekDates, scheduleWeekStart, schedules]);
   const visibleAccounts = useMemo(() => {
-    if (canViewAll) return activeAccounts;
+    if (canViewAll) return teamAccounts;
     const self = activeAccounts.find((account) => account.name === currentStaffName);
     return self ? [self] : [{
       id: currentStaffName,
@@ -278,27 +331,41 @@ export default function AttendancePage({
       role: currentStaffRole,
       status: 'Active' as const
     }];
-  }, [activeAccounts, canViewAll, currentStaffName, currentStaffRole]);
+  }, [activeAccounts, canViewAll, currentStaffName, currentStaffRole, teamAccounts]);
   const summaries = useMemo(() => visibleAccounts.map((account) => buildDailyAttendanceSummary(
     account.name,
     account.role,
     account.avatar_data_url,
     events,
     selectedDate,
-    attendancePolicy,
+    resolveAttendancePolicyForAccount(attendancePolicy, account.id),
     schedules,
     leaveRequests
   )), [attendancePolicy, events, leaveRequests, schedules, selectedDate, visibleAccounts]);
+  const selfAccount = activeAccounts.find((account) => account.name === currentStaffName);
+  const selfPolicy = useMemo(
+    () => resolveAttendancePolicyForAccount(attendancePolicy, selfAccount?.id),
+    [attendancePolicy, selfAccount?.id]
+  );
   const selfSummary = useMemo(() => buildDailyAttendanceSummary(
     currentStaffName,
     currentStaffRole,
-    activeAccounts.find((account) => account.name === currentStaffName)?.avatar_data_url,
+    selfAccount?.avatar_data_url,
     events,
     today,
-    attendancePolicy,
+    selfPolicy,
     schedules,
     leaveRequests
-  ), [activeAccounts, attendancePolicy, currentStaffName, currentStaffRole, events, leaveRequests, schedules, today]);
+  ), [currentStaffName, currentStaffRole, events, leaveRequests, schedules, selfAccount?.avatar_data_url, selfPolicy, today]);
+  const teamNameById = new Map<string, string>([
+    [ATTENDANCE_MAIN_TEAM_ID, attendancePolicy.main_team_name || tr('主队', 'Main team', 'Pasukan utama')],
+    ...(attendancePolicy.teams || []).map((team): [string, string] => [team.id, team.name])
+  ]);
+  const hasExtraTeams = (attendancePolicy.teams || []).length > 0;
+  const teamNameForStaff = (name: string) => teamNameById.get(getAttendanceTeamIdForAccount(
+    attendancePolicy,
+    activeAccounts.find((account) => account.name === name)?.id
+  )) || '';
   const monthlySummaries = useMemo(() => visibleAccounts.map((account) => (
     buildMonthlyAttendanceSummary(account, events, selectedMonth, attendancePolicy, schedules, leaveRequests)
   )), [attendancePolicy, events, leaveRequests, schedules, selectedMonth, visibleAccounts]);
@@ -308,10 +375,13 @@ export default function AttendancePage({
   const normalizedCurrentNetworkIp = normalizeAttendanceNetworkIp(currentNetworkIp);
   const hasDetectedNetworkIp = Boolean(normalizedCurrentNetworkIp)
     && !['unavailable', 'local browser'].includes(normalizedCurrentNetworkIp);
-  const officeNetworkMatches = !attendancePolicy.require_office_wifi_for_check_in
-    || attendancePolicy.office_network_ips.includes(normalizedCurrentNetworkIp);
+  const officeWifiRequired = networkCheck ? networkCheck.required : selfPolicy.require_office_wifi_for_check_in;
+  const officeNetworkMatches = networkCheck !== undefined
+    ? networkCheck === null || networkCheck.allowed
+    : !selfPolicy.require_office_wifi_for_check_in
+      || selfPolicy.office_network_ips.includes(normalizedCurrentNetworkIp);
   const checkInNetworkBlocked = nextAction === 'check_in'
-    && attendancePolicy.require_office_wifi_for_check_in
+    && officeWifiRequired
     && !officeNetworkMatches;
   const checkInOffDayBlocked = nextAction === 'check_in' && selfSummary.isOffDay;
   const attendanceNextStep = checkInNetworkBlocked
@@ -329,11 +399,16 @@ export default function AttendancePage({
         instruction: tr('离开或结束今天工作时按 Check out；系统会保留完整工时记录。', 'Use Check out when leaving or finishing work so today’s hours are recorded.', 'Gunakan Check out apabila keluar atau tamat kerja supaya waktu hari ini direkodkan.')
       };
   const visibleRequests = useMemo(() => leaveRequests
-    .filter((request) => canViewAll || request.requester_name === currentStaffName)
+    .filter((request) => (canViewAll
+      ? !showTeamTabs || teamIdForStaffName(request.requester_name) === activeTeamTab
+      : request.requester_name === currentStaffName))
     .sort((left, right) => right.submitted_at.localeCompare(left.submitted_at)), [
+    activeTeamTab,
     canViewAll,
     currentStaffName,
-    leaveRequests
+    leaveRequests,
+    showTeamTabs,
+    teamIdForStaffName
   ]);
   const pendingRequestCount = visibleRequests.filter((request) => request.status === 'Pending').length;
   const presentCount = summaries.filter((summary) => Boolean(summary.firstCheckIn)).length;
@@ -359,12 +434,61 @@ export default function AttendancePage({
     setPolicySaved(false);
   };
 
+  const updateDraftTeam = (teamId: string, updates: Partial<AttendanceTeam>) => {
+    setPolicyDraft((current) => ({
+      ...current,
+      teams: current.teams.map((team) => (team.id === teamId ? { ...team, ...updates } : team))
+    }));
+    setPolicySaved(false);
+  };
+
+  const handleAddTeam = () => {
+    const id = `team-${Date.now().toString(36)}`;
+    setPolicyDraft((current) => ({
+      ...current,
+      teams: [
+        ...current.teams,
+        {
+          id,
+          name: '',
+          work_start_time: '12:00',
+          work_end_time: '21:00',
+          overtime_next_day_start_time: '14:00',
+          require_office_wifi_for_check_in: false,
+          office_network_ips: []
+        }
+      ]
+    }));
+    setTeamIpText((current) => ({ ...current, [id]: '' }));
+    setPolicySaved(false);
+  };
+
+  const handleRemoveTeam = (teamId: string) => {
+    setPolicyDraft((current) => ({
+      ...current,
+      teams: current.teams.filter((team) => team.id !== teamId),
+      staff_team_assignments: Object.fromEntries(Object.entries(current.staff_team_assignments)
+        .filter(([, assignedTeamId]) => assignedTeamId !== teamId))
+    }));
+    setPolicySaved(false);
+  };
+
+  const handleAssignStaffTeam = (accountId: string, teamId: string) => {
+    setPolicyDraft((current) => {
+      const nextAssignments = { ...current.staff_team_assignments };
+      if (teamId === ATTENDANCE_MAIN_TEAM_ID) {
+        delete nextAssignments[accountId];
+      } else {
+        nextAssignments[accountId] = teamId;
+      }
+      return { ...current, staff_team_assignments: nextAssignments };
+    });
+    setPolicySaved(false);
+  };
+
   const handleSavePolicy = () => {
     setPolicyError('');
-    const officeNetworkIps = officeIpText
-      .split(/[\s,]+/)
-      .map(normalizeAttendanceNetworkIp)
-      .filter(Boolean);
+    const officeNetworkIps = parseNetworkIpText(officeIpText);
     if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(policyDraft.work_start_time)) {
       setPolicyError(tr('请选择正确的上班时间。', 'Choose a valid work start time.', 'Pilih masa mula kerja yang sah.'));
       return;
@@ -401,9 +525,42 @@ export default function AttendancePage({
       return;
     }
 
+    const draftTeams = policyDraft.teams.map((team) => ({
+      ...team,
+      name: team.name.trim(),
+      office_network_ips: parseNetworkIpText(teamIpText[team.id] || '')
+    }));
+    const teamNames = [
+      (policyDraft.main_team_name.trim() || tr('主队', 'Main team', 'Pasukan utama')).toLowerCase(),
+      ...draftTeams.map((team) => team.name.toLowerCase())
+    ];
+    if (draftTeams.some((team) => !team.name) || new Set(teamNames).size !== teamNames.length) {
+      setPolicyError(tr('每个团队都需要不重复的名称。', 'Every team needs a unique name.', 'Setiap pasukan memerlukan nama yang unik.'));
+      return;
+    }
+    if (draftTeams.some((team) => (
+      !CLOCK_TIME_PATTERN.test(team.work_start_time)
+      || !CLOCK_TIME_PATTERN.test(team.work_end_time)
+      || !CLOCK_TIME_PATTERN.test(team.overtime_next_day_start_time)
+    ))) {
+      setPolicyError(tr('请为每个团队选择正确的上班、下班与 OT 次日上班时间。', 'Choose valid start, end and post-OT start times for every team.', 'Pilih masa mula, tamat dan mula selepas OT yang sah untuk setiap pasukan.'));
+      return;
+    }
+    const teamMissingIps = draftTeams.find((team) => team.require_office_wifi_for_check_in && team.office_network_ips.length === 0);
+    if (teamMissingIps) {
+      setPolicyError(tr(
+        `「${teamMissingIps.name}」开启 Office Wi-Fi Check in 前，请至少填写一个 IP。`,
+        `Add at least one office IP for "${teamMissingIps.name}" before requiring Office Wi-Fi.`,
+        `Tambah sekurang-kurangnya satu IP pejabat untuk "${teamMissingIps.name}" sebelum mewajibkan Wi-Fi pejabat.`
+      ));
+      return;
+    }
+
     const saved = onUpdateAttendancePolicy(normalizeAttendancePolicy({
       ...policyDraft,
-      office_network_ips: officeNetworkIps
+      office_network_ips: officeNetworkIps,
+      main_team_name: policyDraft.main_team_name.trim(),
+      teams: draftTeams
     }));
     setPolicySaved(saved);
   };
@@ -418,7 +575,7 @@ export default function AttendancePage({
 
   const handleSaveSchedule = async () => {
     const now = new Date().toISOString();
-    const nextSchedules = activeAccounts.map((account) => {
+    const nextSchedules = teamAccounts.map((account) => {
       const draft = scheduleDraft[account.name];
       return {
         id: `ATT-SCHEDULE-${scheduleWeekStart}-${encodeURIComponent(account.name)}`,
@@ -464,7 +621,8 @@ export default function AttendancePage({
         return;
       }
       setMcAttachment({
-        name: file.name,
+        // Rules cap the attachment name at 255 characters.
+        name: file.name.slice(-255),
         type: file.type,
         size: file.size,
         uploaded_at: new Date().toISOString(),
@@ -496,8 +654,8 @@ export default function AttendancePage({
       return;
     }
 
-    const workEndMinutes = Number(attendancePolicy.work_end_time.slice(0, 2)) * 60
-      + Number(attendancePolicy.work_end_time.slice(3, 5));
+    const workEndMinutes = Number(selfPolicy.work_end_time.slice(0, 2)) * 60
+      + Number(selfPolicy.work_end_time.slice(3, 5));
     const overtimeEndMinutes = Number(overtimeEndTime.slice(0, 2)) * 60
       + Number(overtimeEndTime.slice(3, 5));
     const overtimeMinutes = overtimeEndMinutes >= workEndMinutes
@@ -545,30 +703,30 @@ export default function AttendancePage({
       <header className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-red-50 text-red-800">
+            <div className="flex h-11 w-11 items-center justify-center rounded-card bg-brand-50 text-brand-ink">
               <CalendarCheck2 className="h-5 w-5" />
             </div>
             <div>
-              <h1 className="text-2xl font-bold text-slate-900">{tr('考勤与请假', 'Attendance & Leave', 'Kehadiran & Cuti')}</h1>
-              <p className="mt-1 text-sm text-slate-500">
+              <h1 className="text-title-2 text-slate-900">{tr('考勤与请假', 'Attendance & Leave', 'Kehadiran & Cuti')}</h1>
+              <p className="mt-1 text-body text-slate-500">
                 {tr('每周排班、迟到扣款，以及 Leave / MC / OT 审批。', 'Weekly schedules, late deductions, and Leave / MC / OT approval.', 'Jadual mingguan, potongan lewat serta kelulusan Cuti / MC / OT.')}
               </p>
             </div>
           </div>
         </div>
-        <label className="flex items-center gap-3 rounded-xl bg-white px-4 py-3 text-xs font-bold text-slate-600 shadow-sm ring-1 ring-slate-100">
+        <label className="flex items-center gap-3 rounded-card bg-white px-4 py-3 text-footnote font-bold text-slate-600 shadow-e1 ring-1 ring-slate-100">
           <span>{tr('查看日期', 'View date', 'Lihat tarikh')}</span>
           <input
             type="date"
             value={selectedDate}
             onChange={(event) => setSelectedDate(event.target.value)}
-            className="rounded-lg bg-slate-50 px-3 py-2 text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-red-100"
+            className="rounded-control bg-slate-50 px-3 py-2 text-footnote font-bold text-slate-700 outline-none focus:ring-2 focus:ring-brand-100"
           />
         </label>
       </header>
 
       <section className="grid gap-4 xl:grid-cols-[minmax(0,1.4fr)_minmax(320px,0.6fr)]">
-        <div className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-100">
+        <div className="rounded-panel bg-white p-5 shadow-e1 ring-1 ring-slate-100">
           <div className="flex flex-col gap-5 md:flex-row md:items-center md:justify-between">
             <div className="flex items-center gap-3">
               <StaffAvatar
@@ -578,8 +736,8 @@ export default function AttendancePage({
               />
               <div>
                 <p className="font-bold text-slate-900">{currentStaffName}</p>
-                <p className="text-xs font-semibold text-slate-400">{trRole(currentStaffRole)}</p>
-                <p className="mt-1 text-xs text-slate-500">
+                <p className="text-footnote text-slate-400">{trRole(currentStaffRole)}</p>
+                <p className="mt-1 text-footnote text-slate-500">
                   {selfSummary.lastEvent
                     ? tr(
                       `今天最后记录：${selfSummary.lastEvent.action === 'check_in' ? '上班' : '离开'} ${formatTime(selfSummary.lastEvent.occurred_at)}`,
@@ -594,14 +752,14 @@ export default function AttendancePage({
               type="button"
               onClick={handleAttendance}
               disabled={isRecording || checkInOffDayBlocked}
-              className={`inline-flex min-h-14 items-center justify-center gap-2 rounded-xl px-7 text-sm font-bold text-white shadow-sm transition-colors disabled:cursor-wait disabled:bg-slate-300 ${
+              className={`inline-flex min-h-14 items-center justify-center gap-2 rounded-card px-7 text-headline text-white shadow-e1 transition-colors disabled:cursor-wait disabled:bg-slate-300 ${
                 checkInOffDayBlocked
                   ? 'bg-slate-400'
                   : checkInNetworkBlocked
                   ? 'bg-amber-600 hover:bg-amber-700'
                   : nextAction === 'check_in'
                     ? 'bg-emerald-600 hover:bg-emerald-700'
-                    : 'bg-red-800 hover:bg-red-900'
+                    : 'bg-brand hover:bg-brand-deep'
               }`}
             >
               {checkInOffDayBlocked
@@ -623,15 +781,15 @@ export default function AttendancePage({
             </button>
           </div>
           {!checkInOffDayBlocked && (
-            <div data-testid="attendance-next-step" className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3.5">
+            <div data-testid="attendance-next-step" className="mt-4 rounded-card border border-amber-200 bg-amber-50 p-3.5">
               <div className="flex items-start gap-3">
-                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-500 text-white shadow-sm">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-control bg-amber-500 text-white shadow-e1">
                   <ArrowUpRight className="h-4 w-4" />
                 </span>
                 <div className="min-w-0">
-                  <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-amber-700">{tr('下一步', 'Next step', 'Langkah seterusnya')}</p>
-                  <p className="mt-0.5 text-sm font-bold text-slate-900">{attendanceNextStep.label}</p>
-                  <p className="mt-1 text-xs font-semibold leading-relaxed text-slate-700">{attendanceNextStep.instruction}</p>
+                  <p className="text-micro uppercase tracking-[0.16em] text-amber-700">{tr('下一步', 'Next step', 'Langkah seterusnya')}</p>
+                  <p className="mt-0.5 text-headline text-slate-900">{attendanceNextStep.label}</p>
+                  <p className="mt-1 text-footnote leading-relaxed text-slate-700">{attendanceNextStep.instruction}</p>
                 </div>
               </div>
             </div>
@@ -641,17 +799,17 @@ export default function AttendancePage({
               value={attendanceNote}
               onChange={(event) => setAttendanceNote(event.target.value.slice(0, 500))}
               placeholder={tr('备注（选填，例如：外出见客户）', 'Note (optional, e.g. customer visit)', 'Nota (pilihan, cth. jumpa pelanggan)')}
-              className="min-w-0 flex-1 rounded-xl bg-slate-50 px-4 py-3 text-xs font-semibold text-slate-700 outline-none placeholder:text-slate-300 focus:ring-2 focus:ring-red-100"
+              className="min-w-0 flex-1 rounded-card bg-slate-50 px-4 py-3 text-footnote text-slate-700 outline-none placeholder:text-slate-300 focus:ring-2 focus:ring-brand-100"
             />
-            <div className="flex items-center gap-2 rounded-xl bg-slate-50 px-4 py-3 text-[11px] font-semibold text-slate-500">
+            <div className="flex items-center gap-2 rounded-card bg-slate-50 px-4 py-3 text-caption text-slate-500">
               <TimerReset className="h-4 w-4 text-slate-400" />
               {tr('可重复 Check in / Check out', 'Repeat as often as needed', 'Boleh ulang masuk / keluar')}
             </div>
           </div>
-          {attendancePolicy.require_office_wifi_for_check_in && nextAction === 'check_in' && (
+          {officeWifiRequired && nextAction === 'check_in' && (
             <div
               data-testid="office-network-status"
-              className={`mt-3 flex items-center gap-2 rounded-xl px-4 py-3 text-xs font-bold ${
+              className={`mt-3 flex items-center gap-2 rounded-card px-4 py-3 text-footnote font-bold ${
                 officeNetworkMatches
                   ? 'bg-emerald-50 text-emerald-700'
                   : 'bg-amber-50 text-amber-800'
@@ -665,17 +823,24 @@ export default function AttendancePage({
           )}
         </div>
 
-        <div className="rounded-2xl bg-slate-900 p-5 text-white shadow-sm">
+        <div className="rounded-panel bg-slate-900 p-5 text-white shadow-e1">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <p className="text-xs font-bold uppercase tracking-wider text-slate-400">{tr('考勤判断规则', 'Attendance rules', 'Peraturan kehadiran')}</p>
-              <p className="mt-2 text-lg font-bold">{tr('自动标记异常', 'Automatic exceptions', 'Pengecualian automatik')}</p>
+              <p className="text-footnote font-bold uppercase tracking-wider text-slate-400">{tr('考勤判断规则', 'Attendance rules', 'Peraturan kehadiran')}</p>
+              <p className="mt-2 text-title-3">{tr('自动标记异常', 'Automatic exceptions', 'Pengecualian automatik')}</p>
+              {hasExtraTeams && (
+                <p data-testid="attendance-self-team" className="mt-1 text-footnote text-slate-400">
+                  {tr(`我的团队：${teamNameForStaff(currentStaffName)}`, `My team: ${teamNameForStaff(currentStaffName)}`, `Pasukan saya: ${teamNameForStaff(currentStaffName)}`)}
+                </p>
+              )}
             </div>
-            {canViewAll ? (
+            {/* Only Super Admin can save the attendance rules (handleUpdateAttendancePolicy);
+                Operations Manager used to see a button whose save did nothing. */}
+            {canViewAll && currentStaffRole === 'Super Admin' ? (
               <button
                 type="button"
                 onClick={() => setShowPolicyEditor((current) => !current)}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-2 text-[10px] font-bold text-white transition-colors hover:bg-white/15"
+                className="inline-flex items-center gap-1.5 rounded-control bg-white/10 px-3 py-2 text-micro tracking-normal text-white transition-colors hover:bg-white/15"
               >
                 <Settings2 className="h-3.5 w-3.5" />
                 {showPolicyEditor ? tr('关闭设定', 'Close settings', 'Tutup tetapan') : tr('更改规则', 'Edit rules', 'Ubah peraturan')}
@@ -684,18 +849,18 @@ export default function AttendancePage({
               <ShieldCheck className="h-5 w-5 text-emerald-400" />
             )}
           </div>
-          <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
-            <div className="rounded-xl bg-white/5 p-3">
-              <p className="font-bold text-white">{attendancePolicy.work_start_time}–{attendancePolicy.work_end_time}</p>
+          <div className="mt-4 grid grid-cols-2 gap-2 text-footnote">
+            <div className="rounded-card bg-white/5 p-3">
+              <p className="font-bold text-white">{selfPolicy.work_start_time}–{selfPolicy.work_end_time}</p>
               <p className="mt-1 text-slate-400">{tr('正常班', 'Normal shift', 'Syif biasa')}</p>
             </div>
-            <div className="rounded-xl bg-white/5 p-3">
-              <p className="font-bold text-white">{attendancePolicy.overtime_next_day_start_time}</p>
+            <div className="rounded-card bg-white/5 p-3">
+              <p className="font-bold text-white">{selfPolicy.overtime_next_day_start_time}</p>
               <p className="mt-1 text-slate-400">{tr('批准 OT 后次日上班', 'Next start after approved OT', 'Mula selepas OT diluluskan')}</p>
             </div>
-            <div className="rounded-xl bg-white/5 p-3">
+            <div className="rounded-card bg-white/5 p-3">
               <p className="font-bold text-white">
-                {attendancePolicy.require_office_wifi_for_check_in
+                {officeWifiRequired
                   ? tr('必须连接', 'Required', 'Diperlukan')
                   : tr('未启用', 'Not required', 'Tidak diperlukan')}
               </p>
@@ -704,7 +869,7 @@ export default function AttendancePage({
           </div>
           <div className="mt-3 flex flex-wrap gap-1.5">
             {attendancePolicy.late_penalty_rules.length > 0 ? attendancePolicy.late_penalty_rules.map((rule) => (
-              <span key={rule.threshold_minutes} className="rounded-md bg-rose-400/10 px-2 py-1 text-[10px] font-bold text-rose-200">
+              <span key={rule.threshold_minutes} className="rounded-chip bg-rose-400/10 px-2 py-1 text-micro tracking-normal text-rose-200">
                 {tr(
                   `迟到 ${rule.threshold_minutes}m → ${rule.penalty_type === 'fixed_amount' ? `扣 ${formatMoney(rule.amount)}` : `扣 ${rule.amount} 天薪水`}`,
                   `${rule.threshold_minutes}m late → ${rule.penalty_type === 'fixed_amount' ? `deduct ${formatMoney(rule.amount)}` : `deduct ${rule.amount} salary day`}`,
@@ -712,33 +877,61 @@ export default function AttendancePage({
                 )}
               </span>
             )) : (
-              <span className="rounded-md bg-white/5 px-2 py-1 text-[10px] font-bold text-slate-400">
+              <span className="rounded-chip bg-white/5 px-2 py-1 text-micro tracking-normal text-slate-400">
                 {tr('没有扣除规则', 'No deduction rules', 'Tiada peraturan potongan')}
               </span>
             )}
           </div>
-          <p className="mt-3 text-[10px] leading-relaxed text-slate-400">
-            {tr('第一笔 Check in 与当天生效的上班时间比较。批准 OT 后，次日改用 12:00；达到门槛时采用最高一档扣款。', 'The first check-in is compared with that day’s effective start. Approved OT moves the next-day start to 12:00; the highest reached penalty applies.', 'Daftar masuk pertama dibandingkan dengan masa mula berkuat kuasa. OT diluluskan mengubah mula hari berikutnya kepada 12:00; penalti tertinggi digunakan.')}
+          <p className="mt-3 text-micro tracking-normal leading-relaxed text-slate-400">
+            {tr(
+              `第一笔 Check in 与当天生效的上班时间比较。批准 OT 后，次日改用 ${selfPolicy.overtime_next_day_start_time}；达到门槛时采用最高一档扣款。`,
+              `The first check-in is compared with that day’s effective start. Approved OT moves the next-day start to ${selfPolicy.overtime_next_day_start_time}; the highest reached penalty applies.`,
+              `Daftar masuk pertama dibandingkan dengan masa mula berkuat kuasa. OT diluluskan mengubah mula hari berikutnya kepada ${selfPolicy.overtime_next_day_start_time}; penalti tertinggi digunakan.`
+            )}
           </p>
+          {canViewAll && hasExtraTeams && (
+            <div data-testid="attendance-team-summary" className="mt-3 space-y-1.5 border-t border-white/10 pt-3">
+              {[
+                { id: ATTENDANCE_MAIN_TEAM_ID, name: teamNameById.get(ATTENDANCE_MAIN_TEAM_ID) || '', work_start_time: attendancePolicy.work_start_time, work_end_time: attendancePolicy.work_end_time, require_office_wifi_for_check_in: attendancePolicy.require_office_wifi_for_check_in },
+                ...attendancePolicy.teams
+              ].map((team) => (
+                <p key={team.id} className="flex flex-wrap items-center gap-x-2 text-micro tracking-normal text-slate-300">
+                  <Users className="h-3.5 w-3.5 text-slate-400" />
+                  <span className="font-bold text-white">{team.name}</span>
+                  <span>{team.work_start_time}–{team.work_end_time}</span>
+                  <span className="text-slate-400">
+                    {team.require_office_wifi_for_check_in ? tr('需 Office Wi-Fi', 'Office Wi-Fi required', 'Wi-Fi pejabat diperlukan') : tr('不限网络', 'Any network', 'Mana-mana rangkaian')}
+                  </span>
+                </p>
+              ))}
+            </div>
+          )}
         </div>
       </section>
 
-      {canViewAll && showPolicyEditor && (
-        <section data-testid="attendance-policy-editor" className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-100">
+      {canViewAll && currentStaffRole === 'Super Admin' && showPolicyEditor && (
+        <section data-testid="attendance-policy-editor" className="rounded-panel bg-white p-5 shadow-e1 ring-1 ring-slate-100">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <h2 className="font-bold text-slate-900">{tr('上班时间与迟到规则', 'Work time & lateness rules', 'Masa kerja & peraturan lewat')}</h2>
-              <p className="mt-1 text-xs text-slate-400">
+              <p className="mt-1 text-footnote text-slate-400">
                 {tr('只有 Super Admin 可以修改；扣除采用员工当天达到的最高一档。', 'Only Super Admin can edit these settings; the highest tier reached that day applies.', 'Hanya Super Admin boleh mengubah; tahap tertinggi yang dicapai pada hari itu digunakan.')}
               </p>
             </div>
-            <span className="self-start rounded-lg bg-indigo-50 px-3 py-1.5 text-[10px] font-bold text-indigo-700">
+            <span className="self-start rounded-control bg-indigo-50 px-3 py-1.5 text-micro tracking-normal text-indigo-700">
               {tr('Super Admin 设定', 'Super Admin settings', 'Tetapan Super Admin')}
             </span>
           </div>
 
-          <div className="mt-5 grid gap-4 sm:grid-cols-2">
-            <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+          <p data-testid="attendance-main-team-times-heading" className="mt-5 text-footnote font-bold text-slate-800">
+            {tr(
+              `主店「${policyDraft.main_team_name.trim() || '主队'}」的上班时间`,
+              `Main shop "${policyDraft.main_team_name.trim() || 'Main team'}" work times`,
+              `Masa kerja kedai utama "${policyDraft.main_team_name.trim() || 'Pasukan utama'}"`
+            )}
+          </p>
+          <div className="mt-3 grid gap-4 sm:grid-cols-2">
+            <label className="text-micro uppercase text-slate-400">
               {tr('上班时间', 'Scheduled work start', 'Masa mula kerja')}
               <input
                 aria-label="Scheduled work start"
@@ -748,10 +941,10 @@ export default function AttendancePage({
                   setPolicyDraft((current) => ({ ...current, work_start_time: event.target.value }));
                   setPolicySaved(false);
                 }}
-                className="mt-2 w-full rounded-xl bg-slate-50 px-4 py-3 text-xs font-bold normal-case tracking-normal text-slate-700 outline-none focus:ring-2 focus:ring-red-100"
+                className="mt-2 w-full rounded-card bg-slate-50 px-4 py-3 text-footnote font-bold normal-case tracking-normal text-slate-700 outline-none focus:ring-2 focus:ring-brand-100"
               />
             </label>
-            <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+            <label className="text-micro uppercase text-slate-400">
               {tr('迟到宽限（分钟）', 'Late grace (minutes)', 'Tempoh lewat (minit)')}
               <input
                 aria-label="Late grace minutes"
@@ -764,10 +957,10 @@ export default function AttendancePage({
                   setPolicyDraft((current) => ({ ...current, late_grace_minutes: Number(event.target.value) }));
                   setPolicySaved(false);
                 }}
-                className="mt-2 w-full rounded-xl bg-slate-50 px-4 py-3 text-xs font-bold normal-case tracking-normal text-slate-700 outline-none focus:ring-2 focus:ring-red-100"
+                className="mt-2 w-full rounded-card bg-slate-50 px-4 py-3 text-footnote font-bold normal-case tracking-normal text-slate-700 outline-none focus:ring-2 focus:ring-brand-100"
               />
             </label>
-            <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+            <label className="text-micro uppercase text-slate-400">
               {tr('下班时间', 'Scheduled work end', 'Masa tamat kerja')}
               <input
                 aria-label="Scheduled work end"
@@ -777,10 +970,10 @@ export default function AttendancePage({
                   setPolicyDraft((current) => ({ ...current, work_end_time: event.target.value }));
                   setPolicySaved(false);
                 }}
-                className="mt-2 w-full rounded-xl bg-slate-50 px-4 py-3 text-xs font-bold normal-case tracking-normal text-slate-700 outline-none focus:ring-2 focus:ring-red-100"
+                className="mt-2 w-full rounded-card bg-slate-50 px-4 py-3 text-footnote font-bold normal-case tracking-normal text-slate-700 outline-none focus:ring-2 focus:ring-brand-100"
               />
             </label>
-            <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+            <label className="text-micro uppercase text-slate-400">
               {tr('OT 后次日上班', 'Post-OT next-day start', 'Mula hari selepas OT')}
               <input
                 aria-label="Post-OT next-day start"
@@ -790,12 +983,12 @@ export default function AttendancePage({
                   setPolicyDraft((current) => ({ ...current, overtime_next_day_start_time: event.target.value }));
                   setPolicySaved(false);
                 }}
-                className="mt-2 w-full rounded-xl bg-slate-50 px-4 py-3 text-xs font-bold normal-case tracking-normal text-slate-700 outline-none focus:ring-2 focus:ring-red-100"
+                className="mt-2 w-full rounded-card bg-slate-50 px-4 py-3 text-footnote font-bold normal-case tracking-normal text-slate-700 outline-none focus:ring-2 focus:ring-brand-100"
               />
             </label>
           </div>
 
-          <div className="mt-5 rounded-xl bg-slate-50 p-4">
+          <div className="mt-5 rounded-card bg-slate-50 p-4">
             <ToggleSwitch
               checked={policyDraft.require_office_wifi_for_check_in}
               onChange={(checked) => {
@@ -805,7 +998,9 @@ export default function AttendancePage({
                 }));
                 setPolicySaved(false);
               }}
-              label={tr('所有员工 Check in 必须连接 Office Wi-Fi', 'Require Office Wi-Fi for every staff check-in', 'Wajibkan Wi-Fi pejabat untuk daftar masuk semua kakitangan')}
+              label={policyDraft.teams.length > 0
+                ? tr('主队 Check in 必须连接 Office Wi-Fi', 'Require Office Wi-Fi for main-team check-in', 'Wajibkan Wi-Fi pejabat untuk daftar masuk pasukan utama')
+                : tr('所有员工 Check in 必须连接 Office Wi-Fi', 'Require Office Wi-Fi for every staff check-in', 'Wajibkan Wi-Fi pejabat untuk daftar masuk semua kakitangan')}
               description={tr('只限制 Check in；Check out 不受影响。', 'Check-in only; checkout remains available.', 'Daftar masuk sahaja; daftar keluar kekal tersedia.')}
               leading={<Wifi className="h-4 w-4 text-slate-500" />}
               className="w-full justify-start"
@@ -813,7 +1008,7 @@ export default function AttendancePage({
 
             {policyDraft.require_office_wifi_for_check_in && (
               <div className="mt-4">
-                <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                <label className="text-micro uppercase text-slate-400">
                   {tr('办公室公网 IP（每行一个）', 'Office public IPs (one per line)', 'IP awam pejabat (satu setiap baris)')}
                   <textarea
                     aria-label="Office network IPs"
@@ -824,11 +1019,11 @@ export default function AttendancePage({
                       setPolicySaved(false);
                     }}
                     placeholder="203.0.113.10"
-                    className="mt-2 w-full resize-y rounded-xl bg-white px-4 py-3 font-mono text-xs font-bold normal-case tracking-normal text-slate-700 outline-none focus:ring-2 focus:ring-red-100"
+                    className="mt-2 w-full resize-y rounded-card bg-white px-4 py-3 font-mono text-footnote font-bold normal-case tracking-normal text-slate-700 outline-none focus:ring-2 focus:ring-brand-100"
                   />
                 </label>
                 <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                  <p className="text-[10px] font-semibold text-slate-400">
+                  <p className="text-caption text-slate-400">
                     {tr(
                       `当前检测：${hasDetectedNetworkIp ? normalizedCurrentNetworkIp : '无法取得'}`,
                       `Currently detected: ${hasDetectedNetworkIp ? normalizedCurrentNetworkIp : 'Unavailable'}`,
@@ -846,15 +1041,179 @@ export default function AttendancePage({
                       setOfficeIpText(nextIps.join('\n'));
                       setPolicySaved(false);
                     }}
-                    className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-white px-3 py-2 text-[10px] font-bold text-slate-600 shadow-sm hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+                    className="inline-flex min-h-10 items-center justify-center gap-2 rounded-control bg-white px-3 py-2 text-micro tracking-normal text-slate-600 shadow-e1 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     <Wifi className="h-3.5 w-3.5" />
                     {tr('使用当前 IP', 'Use current IP', 'Gunakan IP semasa')}
                   </button>
                 </div>
-                <p className="mt-2 text-[10px] leading-relaxed text-slate-400">
+                <p className="mt-2 text-micro tracking-normal leading-relaxed text-slate-400">
                   {tr('系统以服务器看到的公网 IP 判断网络。办公室网络 IP 改变后，需要在这里更新。', 'The server-observed public IP is used. Update this list if the office network IP changes.', 'IP awam yang dilihat pelayan digunakan. Kemas kini senarai ini jika IP rangkaian pejabat berubah.')}
                 </p>
+              </div>
+            )}
+          </div>
+
+          <div data-testid="attendance-team-editor" className="mt-5 rounded-card bg-slate-50 p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-footnote font-bold text-slate-800">{tr('团队 / 分店', 'Teams / shops', 'Pasukan / cawangan')}</h3>
+                <p className="mt-1 text-micro tracking-normal leading-relaxed text-slate-400">
+                  {tr(
+                    '上面的上班时间与 Office Wi-Fi 属于主队。另一间店可以加一个团队，设定自己的上班时间和 Wi-Fi IP；迟到宽限与扣款级别所有团队共用。',
+                    'The work times and Office Wi-Fi above belong to the main team. Add a team for another shop with its own hours and Wi-Fi IPs; late grace and deduction tiers are shared by all teams.',
+                    'Masa kerja dan Wi-Fi pejabat di atas milik pasukan utama. Tambah pasukan untuk kedai lain dengan waktu dan IP Wi-Fi sendiri; tempoh lewat dan tahap potongan dikongsi semua pasukan.'
+                  )}
+                </p>
+              </div>
+            </div>
+
+            <label className="mt-4 block text-micro uppercase text-slate-400">
+              {tr('主队名称', 'Main team name', 'Nama pasukan utama')}
+              <input
+                aria-label="Main team name"
+                type="text"
+                maxLength={60}
+                value={policyDraft.main_team_name}
+                placeholder={tr('主队', 'Main team', 'Pasukan utama')}
+                onChange={(event) => {
+                  setPolicyDraft((current) => ({ ...current, main_team_name: event.target.value }));
+                  setPolicySaved(false);
+                }}
+                className="mt-2 w-full rounded-control bg-white px-3 py-2.5 text-footnote font-bold normal-case tracking-normal text-slate-700 outline-none focus:ring-2 focus:ring-brand-100"
+              />
+            </label>
+            {/* Owners renamed the main team twice expecting a second shop (2026-10-20). */}
+            <p className="mt-1.5 text-micro tracking-normal leading-relaxed text-amber-700">
+              {tr(
+                '这里只是给现有的店改名，不会多出一间店。要加另一间店，请按下面的「增加分店」。',
+                'This only renames the existing shop; it does not add one. To add another shop, use "Add team" below.',
+                'Ini hanya menamakan semula kedai sedia ada; ia tidak menambah kedai. Untuk menambah kedai lain, guna "Add team" di bawah.'
+              )}
+            </p>
+
+            <div className="mt-3 space-y-3">
+              {policyDraft.teams.map((team, index) => (
+                <div key={team.id} data-testid={`attendance-team-${index + 1}`} className="rounded-card bg-white p-3 ring-1 ring-slate-100">
+                  <div className="flex items-end gap-2">
+                    <label className="min-w-0 flex-1 text-micro uppercase text-slate-400">
+                      {tr('团队名称', 'Team name', 'Nama pasukan')}
+                      <input
+                        aria-label={`Team ${index + 1} name`}
+                        type="text"
+                        maxLength={60}
+                        value={team.name}
+                        placeholder={tr('例如：第二间店', 'e.g. Second shop', 'cth. Kedai kedua')}
+                        onChange={(event) => updateDraftTeam(team.id, { name: event.target.value })}
+                        className="mt-2 w-full rounded-control bg-slate-50 px-3 py-2.5 text-footnote font-bold normal-case tracking-normal text-slate-700 outline-none focus:ring-2 focus:ring-brand-100"
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      aria-label={`Remove team ${index + 1}`}
+                      onClick={() => handleRemoveTeam(team.id)}
+                      className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-control bg-slate-50 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                    {([
+                      ['work_start_time', tr('上班时间', 'Work start', 'Masa mula'), `Team ${index + 1} work start`],
+                      ['work_end_time', tr('下班时间', 'Work end', 'Masa tamat'), `Team ${index + 1} work end`],
+                      ['overtime_next_day_start_time', tr('OT 后次日上班', 'Post-OT next-day start', 'Mula hari selepas OT'), `Team ${index + 1} post-OT start`]
+                    ] as const).map(([field, label, ariaLabel]) => (
+                      <label key={field} className="text-micro uppercase text-slate-400">
+                        {label}
+                        <input
+                          aria-label={ariaLabel}
+                          type="time"
+                          value={team[field]}
+                          onChange={(event) => updateDraftTeam(team.id, { [field]: event.target.value })}
+                          className="mt-2 w-full rounded-control bg-slate-50 px-3 py-2.5 text-footnote font-bold normal-case tracking-normal text-slate-700 outline-none focus:ring-2 focus:ring-brand-100"
+                        />
+                      </label>
+                    ))}
+                  </div>
+                  <div className="mt-3">
+                    <ToggleSwitch
+                      checked={team.require_office_wifi_for_check_in}
+                      onChange={(checked) => updateDraftTeam(team.id, { require_office_wifi_for_check_in: checked })}
+                      label={tr('必须连接 Office Wi-Fi', 'Require Office Wi-Fi', 'Wajib Wi-Fi pejabat')}
+                      description={tr('这个团队只能在这间店的网络 Check in。', 'This team can check in only on this shop’s network.', 'Pasukan ini hanya boleh daftar masuk di rangkaian kedai ini.')}
+                      leading={<Wifi className="h-4 w-4 text-slate-500" />}
+                      className="w-full justify-start"
+                    />
+                  </div>
+                  {team.require_office_wifi_for_check_in && (
+                    <div className="mt-3">
+                      <label className="text-micro uppercase text-slate-400">
+                        {tr('这间店的公网 IP（每行一个）', 'This shop’s public IPs (one per line)', 'IP awam kedai ini (satu setiap baris)')}
+                        <textarea
+                          aria-label={`Team ${index + 1} network IPs`}
+                          rows={2}
+                          value={teamIpText[team.id] || ''}
+                          onChange={(event) => {
+                            setTeamIpText((current) => ({ ...current, [team.id]: event.target.value }));
+                            setPolicySaved(false);
+                          }}
+                          placeholder="203.0.113.20"
+                          className="mt-2 w-full resize-y rounded-card bg-slate-50 px-4 py-3 font-mono text-footnote font-bold normal-case tracking-normal text-slate-700 outline-none focus:ring-2 focus:ring-brand-100"
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        disabled={!hasDetectedNetworkIp}
+                        onClick={() => {
+                          const nextIps = [...new Set([...parseNetworkIpText(teamIpText[team.id] || ''), normalizedCurrentNetworkIp])];
+                          setTeamIpText((current) => ({ ...current, [team.id]: nextIps.join('\n') }));
+                          setPolicySaved(false);
+                        }}
+                        className="mt-2 inline-flex min-h-10 items-center justify-center gap-2 rounded-control bg-slate-50 px-3 py-2 text-micro tracking-normal text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <Wifi className="h-3.5 w-3.5" />
+                        {tr('使用当前 IP', 'Use current IP', 'Gunakan IP semasa')}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <button
+              type="button"
+              onClick={handleAddTeam}
+              disabled={policyDraft.teams.length >= 10}
+              className="mt-3 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-card border-2 border-dashed border-brand-100 bg-white px-3 py-2.5 text-footnote font-bold text-brand-ink hover:bg-brand-50 disabled:opacity-40"
+            >
+              <Plus className="h-4 w-4" />
+              {tr('增加分店', 'Add team', 'Tambah pasukan')}
+            </button>
+
+            {policyDraft.teams.length > 0 && (
+              <div className="mt-4">
+                <h4 className="text-micro uppercase text-slate-400">{tr('员工所属团队', 'Staff team', 'Pasukan kakitangan')}</h4>
+                <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                  {activeAccounts.map((account) => (
+                    <label key={account.id} className="flex items-center justify-between gap-3 rounded-control bg-white px-3 py-2 ring-1 ring-slate-100">
+                      <span className="flex min-w-0 items-center gap-2">
+                        <StaffAvatar name={account.name} avatarDataUrl={account.avatar_data_url} className="h-7 w-7" />
+                        <span className="truncate text-footnote font-bold text-slate-700">{account.name}</span>
+                      </span>
+                      <select
+                        aria-label={`Team for ${account.name}`}
+                        value={getAttendanceTeamIdForAccount(policyDraft, account.id)}
+                        onChange={(event) => handleAssignStaffTeam(account.id, event.target.value)}
+                        className="max-w-[55%] rounded-control bg-slate-50 px-2 py-1.5 text-footnote font-bold text-slate-700 outline-none focus:ring-2 focus:ring-brand-100"
+                      >
+                        <option value={ATTENDANCE_MAIN_TEAM_ID}>{policyDraft.main_team_name.trim() || tr('主队', 'Main team', 'Pasukan utama')}</option>
+                        {policyDraft.teams.map((team, index) => (
+                          <option key={team.id} value={team.id}>{team.name.trim() || tr(`团队 ${index + 1}`, `Team ${index + 1}`, `Pasukan ${index + 1}`)}</option>
+                        ))}
+                      </select>
+                    </label>
+                  ))}
+                </div>
               </div>
             )}
           </div>
@@ -862,14 +1221,14 @@ export default function AttendancePage({
           <div className="mt-5">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <h3 className="text-xs font-bold text-slate-800">{tr('迟到扣除级别', 'Late deduction tiers', 'Tahap potongan lewat')}</h3>
-                <p className="mt-1 text-[10px] text-slate-400">{tr('当前规则：迟到 30 分钟扣 RM20；60 分钟扣半天薪水。', 'Current rule: 30 minutes deducts RM20; 60 minutes deducts half-day salary.', 'Peraturan semasa: 30 minit potong RM20; 60 minit potong separuh hari gaji.')}</p>
+                <h3 className="text-footnote font-bold text-slate-800">{tr('迟到扣除级别', 'Late deduction tiers', 'Tahap potongan lewat')}</h3>
+                <p className="mt-1 text-micro tracking-normal text-slate-400">{tr('当前规则：迟到 30 分钟扣 RM20；60 分钟扣半天薪水。', 'Current rule: 30 minutes deducts RM20; 60 minutes deducts half-day salary.', 'Peraturan semasa: 30 minit potong RM20; 60 minit potong separuh hari gaji.')}</p>
               </div>
               <button
                 type="button"
                 onClick={handleAddPenaltyRule}
                 disabled={policyDraft.late_penalty_rules.length >= 10}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-slate-100 px-3 py-2 text-[10px] font-bold text-slate-600 hover:bg-slate-200 disabled:opacity-40"
+                className="inline-flex items-center gap-1.5 rounded-control bg-slate-100 px-3 py-2 text-micro tracking-normal text-slate-600 hover:bg-slate-200 disabled:opacity-40"
               >
                 <Plus className="h-3.5 w-3.5" />
                 {tr('增加级别', 'Add tier', 'Tambah tahap')}
@@ -878,8 +1237,8 @@ export default function AttendancePage({
 
             <div className="mt-3 space-y-2">
               {policyDraft.late_penalty_rules.map((rule, index) => (
-                <div key={`${index}-${rule.threshold_minutes}`} className="grid grid-cols-1 items-end gap-2 rounded-xl bg-slate-50 p-3 sm:grid-cols-[minmax(0,1fr)_180px_minmax(0,1fr)_auto]">
-                  <label className="text-[9px] font-bold uppercase tracking-wider text-slate-400">
+                <div key={`${index}-${rule.threshold_minutes}`} className="grid grid-cols-1 items-end gap-2 rounded-card bg-slate-50 p-3 sm:grid-cols-[minmax(0,1fr)_180px_minmax(0,1fr)_auto]">
+                  <label className="text-micro uppercase text-slate-400">
                     {tr('迟到分钟', 'Late minutes', 'Minit lewat')}
                     <input
                       aria-label={`Late threshold ${index + 1}`}
@@ -898,10 +1257,10 @@ export default function AttendancePage({
                         }));
                         setPolicySaved(false);
                       }}
-                      className="mt-2 w-full rounded-lg bg-white px-3 py-2.5 text-xs font-bold normal-case tracking-normal text-slate-700 outline-none focus:ring-2 focus:ring-red-100"
+                      className="mt-2 w-full rounded-control bg-white px-3 py-2.5 text-footnote font-bold normal-case tracking-normal text-slate-700 outline-none focus:ring-2 focus:ring-brand-100"
                     />
                   </label>
-                  <div className="text-[9px] font-bold uppercase tracking-wider text-slate-400">
+                  <div className="text-micro uppercase text-slate-400">
                     {tr('扣款类型', 'Penalty type', 'Jenis penalti')}
                     <ToggleOptionGroup
                       value={rule.penalty_type}
@@ -926,10 +1285,10 @@ export default function AttendancePage({
                         setPolicySaved(false);
                       }}
                       ariaLabel={`Penalty type ${index + 1}`}
-                      className="mt-2 rounded-lg bg-white p-1"
+                      className="mt-2 rounded-control bg-white p-1"
                     />
                   </div>
-                  <label className="text-[9px] font-bold uppercase tracking-wider text-slate-400">
+                  <label className="text-micro uppercase text-slate-400">
                     {rule.penalty_type === 'fixed_amount'
                       ? tr('扣款 RM', 'Deduct RM', 'Potong RM')
                       : tr('扣除薪水天数', 'Deduct salary days', 'Potong hari gaji')}
@@ -956,7 +1315,7 @@ export default function AttendancePage({
                         }));
                         setPolicySaved(false);
                       }}
-                      className="mt-2 w-full rounded-lg bg-white px-3 py-2.5 text-xs font-bold normal-case tracking-normal text-slate-700 outline-none focus:ring-2 focus:ring-red-100"
+                      className="mt-2 w-full rounded-control bg-white px-3 py-2.5 text-footnote font-bold normal-case tracking-normal text-slate-700 outline-none focus:ring-2 focus:ring-brand-100"
                     />
                   </label>
                   <button
@@ -969,26 +1328,26 @@ export default function AttendancePage({
                       }));
                       setPolicySaved(false);
                     }}
-                    className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-white text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                    className="inline-flex h-9 w-9 items-center justify-center rounded-control bg-white text-slate-400 hover:bg-rose-50 hover:text-rose-600"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>
                 </div>
               ))}
               {policyDraft.late_penalty_rules.length === 0 && (
-                <div className="rounded-xl border border-dashed border-slate-200 px-4 py-6 text-center text-xs font-semibold text-slate-400">
+                <div className="rounded-card border border-dashed border-slate-200 px-4 py-6 text-center text-footnote text-slate-400">
                   {tr('没有迟到扣除级别。', 'No late deduction tiers.', 'Tiada tahap potongan lewat.')}
                 </div>
               )}
             </div>
           </div>
 
-          {policyError && <p className="mt-3 text-xs font-semibold text-rose-600">{policyError}</p>}
+          {policyError && <p className="mt-3 text-footnote text-rose-600">{policyError}</p>}
           <button
             type="button"
             onClick={handleSavePolicy}
-            className={`mt-4 inline-flex items-center gap-2 rounded-xl px-4 py-3 text-xs font-bold ${
-              policySaved ? 'bg-emerald-50 text-emerald-700' : 'bg-red-800 text-white hover:bg-red-900'
+            className={`mt-4 inline-flex items-center gap-2 rounded-card px-4 py-3 text-footnote font-bold ${
+              policySaved ? 'bg-emerald-50 text-emerald-700' : 'bg-brand text-white hover:bg-brand-deep'
             }`}
           >
             <Save className="h-4 w-4" />
@@ -997,34 +1356,70 @@ export default function AttendancePage({
         </section>
       )}
 
+      {showTeamTabs && (
+        <section
+          data-testid="attendance-team-tabs"
+          role="tablist"
+          aria-label={tr('分店', 'Shops', 'Cawangan')}
+          className="flex max-w-full items-center gap-1 overflow-x-auto rounded-card border border-slate-100 bg-white p-1 shadow-e1"
+        >
+          {teamTabs.map((team) => {
+            const isActive = team.id === activeTeamTab;
+            const staffCount = activeAccounts.filter((account) => getAttendanceTeamIdForAccount(attendancePolicy, account.id) === team.id).length;
+            return (
+              <button
+                key={team.id}
+                type="button"
+                role="tab"
+                aria-selected={isActive}
+                data-testid={`attendance-team-tab-${team.id}`}
+                onClick={() => setSelectedTeamTab(team.id)}
+                className={`inline-flex shrink-0 items-center gap-2 rounded-control px-4 py-2 text-footnote font-bold transition-colors ${
+                  isActive ? 'bg-brand text-white' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'
+                }`}
+              >
+                <Building2 className="h-4 w-4" aria-hidden="true" />
+                {team.name}
+                <span className={`text-caption font-semibold ${isActive ? 'text-white/80' : 'text-slate-400'}`}>
+                  {team.work_start_time}–{team.work_end_time}
+                </span>
+                <span className={`rounded-full px-1.5 py-0.5 text-caption ${isActive ? 'bg-white/15 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                  {staffCount}
+                </span>
+              </button>
+            );
+          })}
+        </section>
+      )}
+
       {canManageSchedules && (
-        <section data-testid="attendance-weekly-schedule" className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-100">
+        <section data-testid="attendance-weekly-schedule" className="rounded-panel bg-white p-5 shadow-e1 ring-1 ring-slate-100">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div>
               <div className="flex items-center gap-2">
-                <CalendarRange className="h-5 w-5 text-red-800" />
+                <CalendarRange className="h-5 w-5 text-brand-ink" />
                 <h2 className="font-bold text-slate-900">{tr('每周员工排班', 'Weekly staff schedule', 'Jadual mingguan kakitangan')}</h2>
               </div>
-              <p className="mt-1 text-xs text-slate-400">
+              <p className="mt-1 text-footnote text-slate-400">
                 {tr('Admin 每个星期一设定 Working / Off Day；Off Day 不需要打卡。月薪只用于计算迟到半天薪水扣款。', 'Admin sets Working / Off Day every Monday. Off Days need no punch; monthly salary is used only for half-day late deductions.', 'Admin menetapkan Kerja / Hari Cuti setiap Isnin. Hari Cuti tidak perlu rekod; gaji bulanan hanya untuk potongan lewat separuh hari.')}
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <label className="flex items-center gap-2 rounded-xl bg-slate-50 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+              <label className="flex items-center gap-2 rounded-card bg-slate-50 px-3 py-2 text-micro uppercase text-slate-400">
                 {tr('星期开始', 'Week starting', 'Minggu bermula')}
                 <input
                   aria-label="Attendance schedule week"
                   type="date"
                   value={scheduleWeekStart}
                   onChange={(event) => setScheduleWeekStart(mondayOfWeek(event.target.value))}
-                  className="rounded-lg bg-white px-3 py-2 text-xs font-bold normal-case tracking-normal text-slate-700 outline-none"
+                  className="rounded-control bg-white px-3 py-2 text-footnote font-bold normal-case tracking-normal text-slate-700 outline-none"
                 />
               </label>
               <button
                 type="button"
                 disabled={isSavingSchedule}
                 onClick={() => void handleSaveSchedule()}
-                className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-red-800 px-4 py-2 text-xs font-bold text-white hover:bg-red-900 disabled:bg-slate-300"
+                className="inline-flex min-h-10 items-center gap-2 rounded-card bg-brand px-4 py-2 text-footnote font-bold text-white hover:bg-brand-deep disabled:bg-slate-300"
               >
                 <Save className="h-4 w-4" />
                 {isSavingSchedule ? tr('保存中...', 'Saving...', 'Menyimpan...') : tr('保存本周排班', 'Save week', 'Simpan minggu')}
@@ -1035,9 +1430,11 @@ export default function AttendancePage({
           <div className="mt-4 overflow-x-auto">
             <table className="w-full min-w-[1080px] table-fixed text-left">
               <thead>
-                <tr className="text-[9px] font-bold uppercase tracking-wider text-slate-400">
+                <tr className="text-micro uppercase text-slate-400">
                   <th className="w-48 px-2 py-2">{tr('员工', 'Staff', 'Kakitangan')}</th>
-                  <th className="w-36 px-2 py-2">{tr('月薪', 'Monthly salary', 'Gaji bulanan')}</th>
+                  {canViewSalary && (
+                    <th className="w-36 px-2 py-2">{tr('月薪', 'Monthly salary', 'Gaji bulanan')}</th>
+                  )}
                   {scheduleWeekDates.map((date) => (
                     <th key={date} className="px-2 py-2 text-center">
                       {new Intl.DateTimeFormat(getAppLocale(), {
@@ -1051,38 +1448,40 @@ export default function AttendancePage({
                 </tr>
               </thead>
               <tbody>
-                {activeAccounts.map((account) => (
+                {teamAccounts.map((account) => (
                   <tr key={account.id} className="border-t border-slate-100">
                     <td className="px-2 py-3">
                       <div className="flex items-center gap-2">
                         <StaffAvatar name={account.name} avatarDataUrl={account.avatar_data_url} className="h-8 w-8" />
                         <div>
-                          <p className="text-xs font-bold text-slate-800">{account.name}</p>
-                          <p className="text-[9px] font-semibold text-slate-400">{trRole(account.role)}</p>
+                          <p className="text-footnote font-bold text-slate-800">{account.name}</p>
+                          <p className="text-caption text-slate-400">{trRole(account.role)}</p>
                         </div>
                       </div>
                     </td>
-                    <td className="px-2 py-3">
-                      <label className="flex items-center rounded-lg bg-slate-50 px-2 ring-1 ring-slate-100">
-                        <span className="text-[10px] font-bold text-slate-400">RM</span>
-                        <input
-                          aria-label={`Monthly salary for ${account.name}`}
-                          type="number"
-                          min="0"
-                          max="1000000"
-                          step="0.01"
-                          value={scheduleDraft[account.name]?.monthly_salary || ''}
-                          onChange={(event) => setScheduleDraft((current) => ({
-                            ...current,
-                            [account.name]: {
-                              ...(current[account.name] || { days: {} }),
-                              monthly_salary: Number(event.target.value) || 0
-                            }
-                          }))}
-                          className="min-w-0 flex-1 bg-transparent px-2 py-2 text-right text-xs font-bold text-slate-700 outline-none"
-                        />
-                      </label>
-                    </td>
+                    {canViewSalary && (
+                      <td className="px-2 py-3">
+                        <label className="flex items-center rounded-control bg-slate-50 px-2 ring-1 ring-slate-100">
+                          <span className="text-micro tracking-normal text-slate-400">RM</span>
+                          <input
+                            aria-label={`Monthly salary for ${account.name}`}
+                            type="number"
+                            min="0"
+                            max="1000000"
+                            step="0.01"
+                            value={scheduleDraft[account.name]?.monthly_salary || ''}
+                            onChange={(event) => setScheduleDraft((current) => ({
+                              ...current,
+                              [account.name]: {
+                                ...(current[account.name] || { days: {} }),
+                                monthly_salary: Number(event.target.value) || 0
+                              }
+                            }))}
+                            className="min-w-0 flex-1 bg-transparent px-2 py-2 text-right text-footnote font-bold text-slate-700 outline-none"
+                          />
+                        </label>
+                      </td>
+                    )}
                     {scheduleWeekDates.map((date) => {
                       const status = scheduleDraft[account.name]?.days[date] || 'Working';
                       return (
@@ -1100,7 +1499,7 @@ export default function AttendancePage({
                                 }
                               }
                             }))}
-                            className={`w-full rounded-lg px-2 py-2 text-[10px] font-bold ${
+                            className={`w-full rounded-control px-2 py-2 text-micro tracking-normal ${
                               status === 'Working'
                                 ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100'
                                 : 'bg-slate-100 text-slate-500 ring-1 ring-slate-200'
@@ -1125,12 +1524,12 @@ export default function AttendancePage({
           { label: tr('迟到', 'Late', 'Lewat'), value: lateCount, icon: Clock3, tone: 'text-rose-700 bg-rose-50' },
           { label: tr('待审批', 'Pending requests', 'Permohonan menunggu'), value: pendingRequestCount, icon: FileText, tone: 'text-indigo-700 bg-indigo-50' }
         ].map((item) => (
-          <div key={item.label} className="rounded-xl bg-white p-4 shadow-sm ring-1 ring-slate-100">
-            <div className={`inline-flex items-center gap-2 rounded-md px-2 py-1 text-[10px] font-bold uppercase tracking-wider ${item.tone}`}>
+          <div key={item.label} className="rounded-card bg-white p-4 shadow-e1 ring-1 ring-slate-100">
+            <div className={`inline-flex items-center gap-2 rounded-chip px-2 py-1 text-micro uppercase ${item.tone}`}>
               <item.icon className="h-3.5 w-3.5" />
               {item.label}
             </div>
-            <p className="mt-3 text-2xl font-bold text-slate-900">{item.value}</p>
+            <p className="mt-3 text-title-2 text-slate-900">{item.value}</p>
           </div>
         ))}
       </section>
@@ -1138,37 +1537,37 @@ export default function AttendancePage({
       {canViewAll && !showStaffDayStatus ? (
         <section
           data-testid="staff-day-status-collapsed"
-          className="flex flex-col gap-3 rounded-2xl bg-white px-5 py-4 shadow-sm ring-1 ring-slate-100 sm:flex-row sm:items-center sm:justify-between"
+          className="flex flex-col gap-3 rounded-panel bg-white px-5 py-4 shadow-e1 ring-1 ring-slate-100 sm:flex-row sm:items-center sm:justify-between"
         >
           <div>
             <h2 className="font-bold text-slate-900">{tr('员工每日考勤汇总', 'Daily attendance summary', 'Ringkasan kehadiran harian')}</h2>
-            <p className="mt-1 text-xs text-slate-400">{selectedDate}</p>
+            <p className="mt-1 text-footnote text-slate-400">{selectedDate}</p>
           </div>
           <button
             type="button"
             onClick={() => setShowStaffDayStatus(true)}
-            className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-100 px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-200 hover:text-slate-900"
+            className="inline-flex items-center justify-center gap-2 rounded-control bg-slate-100 px-3 py-2 text-footnote font-bold text-slate-600 transition-colors hover:bg-slate-200 hover:text-slate-900"
           >
             <Eye className="h-4 w-4" />
             {tr('显示员工当天状态', 'Show Staff day status', 'Tunjukkan status harian kakitangan')}
           </button>
         </section>
       ) : (
-        <section data-testid="staff-day-status-section" className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-100">
+        <section data-testid="staff-day-status-section" className="rounded-panel bg-white p-5 shadow-e1 ring-1 ring-slate-100">
           <div className="mb-4 flex items-center justify-between gap-3">
             <div>
               <h2 className="font-bold text-slate-900">{canViewAll ? tr('员工每日考勤汇总', 'Daily attendance summary', 'Ringkasan kehadiran harian') : tr('我的每日考勤汇总', 'My daily attendance summary', 'Ringkasan kehadiran harian saya')}</h2>
-              <p className="mt-1 text-xs text-slate-400">{selectedDate}</p>
+              <p className="mt-1 text-footnote text-slate-400">{selectedDate}</p>
             </div>
             {canViewAll && (
               <div className="flex flex-wrap items-center justify-end gap-2">
-                <span className="rounded-lg bg-indigo-50 px-3 py-1.5 text-[10px] font-bold text-indigo-700">
+                <span className="rounded-control bg-indigo-50 px-3 py-1.5 text-micro tracking-normal text-indigo-700">
                   {tr('Super Admin 全员视图', 'Super Admin team view', 'Paparan pasukan Super Admin')}
                 </span>
                 <button
                   type="button"
                   onClick={() => setShowStaffDayStatus(false)}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-slate-100 px-3 py-1.5 text-[10px] font-bold text-slate-500 transition-colors hover:bg-slate-200 hover:text-slate-900"
+                  className="inline-flex items-center gap-1.5 rounded-control bg-slate-100 px-3 py-1.5 text-micro tracking-normal text-slate-500 transition-colors hover:bg-slate-200 hover:text-slate-900"
                 >
                   <EyeOff className="h-3.5 w-3.5" />
                   {tr('隐藏', 'Hide', 'Sembunyikan')}
@@ -1178,16 +1577,18 @@ export default function AttendancePage({
           </div>
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             {summaries.map((summary) => (
-              <article key={summary.name} className="rounded-xl bg-slate-50 p-4">
+              <article key={summary.name} className="rounded-card bg-slate-50 p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex min-w-0 items-center gap-3">
                     <StaffAvatar name={summary.name} avatarDataUrl={summary.avatar} className="h-10 w-10" />
                     <div className="min-w-0">
-                      <p className="truncate text-sm font-bold text-slate-900">{summary.name}</p>
-                      <p className="text-[10px] font-semibold text-slate-400">{trRole(summary.role)}</p>
+                      <p className="truncate text-headline text-slate-900">{summary.name}</p>
+                      <p className="text-caption text-slate-400">
+                        {trRole(summary.role)}{hasExtraTeams ? ` · ${teamNameForStaff(summary.name)}` : ''}
+                      </p>
                     </div>
                   </div>
-                  <span className={`rounded-md px-2 py-1 text-[10px] font-bold ${
+                  <span className={`rounded-chip px-2 py-1 text-micro tracking-normal ${
                     summary.lastEvent?.action === 'check_in'
                       ? 'bg-emerald-100 text-emerald-700'
                       : summary.events.length
@@ -1202,51 +1603,51 @@ export default function AttendancePage({
                   </span>
                 </div>
                 <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
-                  <div className="rounded-lg bg-white p-2.5">
-                    <p className="text-[9px] font-bold uppercase tracking-wider text-slate-400">{tr('首到', 'First in', 'Masuk pertama')}</p>
-                    <p className="mt-1 text-xs font-bold text-slate-800">{formatTime(summary.firstCheckIn?.occurred_at)}</p>
+                  <div className="rounded-control bg-white p-2.5">
+                    <p className="text-micro uppercase text-slate-400">{tr('首到', 'First in', 'Masuk pertama')}</p>
+                    <p className="mt-1 text-footnote font-bold text-slate-800">{formatTime(summary.firstCheckIn?.occurred_at)}</p>
                   </div>
-                  <div className="rounded-lg bg-white p-2.5">
-                    <p className="text-[9px] font-bold uppercase tracking-wider text-slate-400">{tr('当日总工时', 'Daily total', 'Jumlah harian')}</p>
-                    <p className="mt-1 text-xs font-bold text-slate-800">{formatDuration(summary.workedMinutes)}</p>
+                  <div className="rounded-control bg-white p-2.5">
+                    <p className="text-micro uppercase text-slate-400">{tr('当日总工时', 'Daily total', 'Jumlah harian')}</p>
+                    <p className="mt-1 text-footnote font-bold text-slate-800">{formatDuration(summary.workedMinutes)}</p>
                   </div>
-                  <div className="rounded-lg bg-white p-2.5">
-                    <p className="text-[9px] font-bold uppercase tracking-wider text-slate-400">{tr('迟到次数', 'Late count', 'Kiraan lewat')}</p>
-                    <p className="mt-1 text-xs font-bold text-slate-800">{summary.isLate ? 1 : 0}</p>
+                  <div className="rounded-control bg-white p-2.5">
+                    <p className="text-micro uppercase text-slate-400">{tr('迟到次数', 'Late count', 'Kiraan lewat')}</p>
+                    <p className="mt-1 text-footnote font-bold text-slate-800">{summary.isLate ? 1 : 0}</p>
                   </div>
-                  <div className="rounded-lg bg-white p-2.5">
-                    <p className="text-[9px] font-bold uppercase tracking-wider text-slate-400">{tr('次数', 'Punches', 'Rekod')}</p>
-                    <p className="mt-1 text-xs font-bold text-slate-800">{summary.events.length}</p>
+                  <div className="rounded-control bg-white p-2.5">
+                    <p className="text-micro uppercase text-slate-400">{tr('次数', 'Punches', 'Rekod')}</p>
+                    <p className="mt-1 text-footnote font-bold text-slate-800">{summary.events.length}</p>
                   </div>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2">
                   {summary.isOffDay && (
-                    <span className="rounded-md bg-slate-200 px-2 py-1 text-[10px] font-bold text-slate-600">
+                    <span className="rounded-chip bg-slate-200 px-2 py-1 text-micro tracking-normal text-slate-600">
                       {tr('Off Day · 无需打卡', 'Off Day · no punch required', 'Hari Cuti · tiada rekod diperlukan')}
                     </span>
                   )}
                   {summary.hasApprovedOvertime && !summary.isOffDay && (
-                    <span className="rounded-md bg-indigo-100 px-2 py-1 text-[10px] font-bold text-indigo-700">
+                    <span className="rounded-chip bg-indigo-100 px-2 py-1 text-micro tracking-normal text-indigo-700">
                       {tr(`OT 已批准 · ${summary.effectiveStartTime} 上班`, `OT approved · ${summary.effectiveStartTime} start`, `OT diluluskan · mula ${summary.effectiveStartTime}`)}
                     </span>
                   )}
                   {summary.isLate && (
-                    <span className="rounded-md bg-rose-100 px-2 py-1 text-[10px] font-bold text-rose-700">
+                    <span className="rounded-chip bg-rose-100 px-2 py-1 text-micro tracking-normal text-rose-700">
                       {tr(`迟到 ${summary.lateMinutes}m`, `Late ${summary.lateMinutes}m`, `Lewat ${summary.lateMinutes}m`)}
                     </span>
                   )}
                   {summary.deductionDays > 0 && (
-                    <span className="rounded-md bg-red-100 px-2 py-1 text-[10px] font-bold text-red-700">
+                    <span className="rounded-chip bg-brand-100 px-2 py-1 text-micro tracking-normal text-brand-ink">
                       {tr(`扣 ${summary.deductionDays} 天`, `Deduct ${summary.deductionDays} day`, `Potong ${summary.deductionDays} hari`)}
                     </span>
                   )}
                   {summary.deductionAmount > 0 && (
-                    <span className="rounded-md bg-red-100 px-2 py-1 text-[10px] font-bold text-red-700">
+                    <span className="rounded-chip bg-brand-100 px-2 py-1 text-micro tracking-normal text-brand-ink">
                       {tr(`扣 ${formatMoney(summary.deductionAmount)}`, `Deduct ${formatMoney(summary.deductionAmount)}`, `Potong ${formatMoney(summary.deductionAmount)}`)}
                     </span>
                   )}
                   {!summary.isLate && summary.firstCheckIn && !summary.isOffDay && (
-                    <span className="rounded-md bg-emerald-100 px-2 py-1 text-[10px] font-bold text-emerald-700">
+                    <span className="rounded-chip bg-emerald-100 px-2 py-1 text-micro tracking-normal text-emerald-700">
                       {tr('正常', 'On time', 'Tepat masa')}
                     </span>
                   )}
@@ -1260,46 +1661,46 @@ export default function AttendancePage({
       {canViewAll && !showMonthlyAttendance ? (
         <section
           data-testid="monthly-attendance-summary-collapsed"
-          className="flex flex-col gap-3 rounded-2xl bg-white px-5 py-4 shadow-sm ring-1 ring-slate-100 sm:flex-row sm:items-center sm:justify-between"
+          className="flex flex-col gap-3 rounded-panel bg-white px-5 py-4 shadow-e1 ring-1 ring-slate-100 sm:flex-row sm:items-center sm:justify-between"
         >
           <div>
             <h2 className="font-bold text-slate-900">{tr('员工每月上班时间', 'Monthly staff attendance', 'Kehadiran bulanan kakitangan')}</h2>
-            <p className="mt-1 text-xs text-slate-400">{selectedMonth}</p>
+            <p className="mt-1 text-footnote text-slate-400">{selectedMonth}</p>
           </div>
           <button
             type="button"
             onClick={() => setShowMonthlyAttendance(true)}
-            className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-100 px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-200 hover:text-slate-900"
+            className="inline-flex items-center justify-center gap-2 rounded-control bg-slate-100 px-3 py-2 text-footnote font-bold text-slate-600 transition-colors hover:bg-slate-200 hover:text-slate-900"
           >
             <Eye className="h-4 w-4" />
             {tr('显示每月员工考勤', 'Show Monthly staff attendance', 'Tunjukkan kehadiran bulanan kakitangan')}
           </button>
         </section>
       ) : (
-      <section data-testid="monthly-attendance-summary" className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-100">
+      <section data-testid="monthly-attendance-summary" className="rounded-panel bg-white p-5 shadow-e1 ring-1 ring-slate-100">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="font-bold text-slate-900">{canViewAll ? tr('员工每月上班时间', 'Monthly staff attendance', 'Kehadiran bulanan kakitangan') : tr('我的每月上班时间', 'My monthly attendance', 'Kehadiran bulanan saya')}</h2>
-            <p className="mt-1 text-xs text-slate-400">
+            <p className="mt-1 text-footnote text-slate-400">
               {tr('汇总排班、Off Day、实际工时、30–59 分钟 / 60 分钟以上迟到次数与扣款。', 'Totals schedule, Off Days, actual hours, 30–59 minute / 60+ minute late counts, and deductions.', 'Jumlah jadual, Hari Cuti, jam sebenar, kiraan lewat 30–59 minit / 60+ minit dan potongan.')}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <label className="flex items-center gap-3 rounded-xl bg-slate-50 px-4 py-3 text-xs font-bold text-slate-600">
+            <label className="flex items-center gap-3 rounded-card bg-slate-50 px-4 py-3 text-footnote font-bold text-slate-600">
               <span>{tr('月份', 'Month', 'Bulan')}</span>
               <input
                 aria-label="Attendance summary month"
                 type="month"
                 value={selectedMonth}
                 onChange={(event) => setSelectedMonth(event.target.value)}
-                className="rounded-lg bg-white px-3 py-2 text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-red-100"
+                className="rounded-control bg-white px-3 py-2 text-footnote font-bold text-slate-700 outline-none focus:ring-2 focus:ring-brand-100"
               />
             </label>
             {canViewAll && (
               <button
                 type="button"
                 onClick={() => setShowMonthlyAttendance(false)}
-                className="inline-flex min-h-10 items-center gap-1.5 rounded-lg bg-slate-100 px-3 py-2 text-xs font-bold text-slate-500 transition-colors hover:bg-slate-200 hover:text-slate-900"
+                className="inline-flex min-h-10 items-center gap-1.5 rounded-control bg-slate-100 px-3 py-2 text-footnote font-bold text-slate-500 transition-colors hover:bg-slate-200 hover:text-slate-900"
               >
                 <EyeOff className="h-4 w-4" />
                 {tr('隐藏', 'Hide', 'Sembunyikan')}
@@ -1311,7 +1712,7 @@ export default function AttendancePage({
         <div className="mt-4 overflow-x-auto">
           <table className="w-full min-w-[1040px] table-fixed text-left">
             <thead>
-              <tr className="text-[9px] font-bold uppercase tracking-wider text-slate-400">
+              <tr className="text-micro uppercase text-slate-400">
                 <th className="w-[32%] px-3 py-2">{tr('员工', 'Staff', 'Kakitangan')}</th>
                 <th className="px-3 py-2">{tr('排班 / Off', 'Scheduled / Off', 'Jadual / Cuti')}</th>
                 <th className="px-3 py-2">{tr('上班天数', 'Worked days', 'Hari bekerja')}</th>
@@ -1324,13 +1725,15 @@ export default function AttendancePage({
             </thead>
             <tbody>
               {monthlySummaries.map((summary) => (
-                <tr key={summary.name} data-testid={`monthly-attendance-${summary.name}`} className="border-t border-slate-100 text-xs text-slate-700">
+                <tr key={summary.name} data-testid={`monthly-attendance-${summary.name}`} className="border-t border-slate-100 text-footnote text-slate-700">
                   <td className="px-3 py-3">
                     <div className="flex items-center gap-2">
                       <StaffAvatar name={summary.name} avatarDataUrl={summary.avatar} className="h-8 w-8" />
                       <div className="min-w-0">
                         <p className="truncate font-bold text-slate-900">{summary.name}</p>
-                        <p className="text-[10px] font-semibold text-slate-400">{trRole(summary.role)}</p>
+                        <p className="text-caption text-slate-400">
+                          {trRole(summary.role)}{hasExtraTeams ? ` · ${teamNameForStaff(summary.name)}` : ''}
+                        </p>
                       </div>
                     </div>
                   </td>
@@ -1340,9 +1743,9 @@ export default function AttendancePage({
                   <td className={`px-3 py-3 font-bold ${summary.lateCount > 0 ? 'text-rose-700' : ''}`}>{summary.lateCount}</td>
                   <td className={`px-3 py-3 font-bold ${summary.late30MinuteCount > 0 ? 'text-amber-700' : ''}`}>{summary.late30MinuteCount}</td>
                   <td className={`px-3 py-3 font-bold ${summary.late60MinuteCount > 0 ? 'text-rose-700' : ''}`}>{summary.late60MinuteCount}</td>
-                  <td className={`px-3 py-3 font-bold ${summary.deductionDays > 0 || summary.deductionAmount > 0 ? 'text-red-700' : ''}`}>
+                  <td className={`px-3 py-3 font-bold ${summary.deductionDays > 0 || summary.deductionAmount > 0 ? 'text-brand-ink' : ''}`}>
                     <p>{formatMoney(summary.deductionAmount)}</p>
-                    {summary.deductionDays > 0 && <p className="text-[9px]">+ {summary.deductionDays} {tr('天薪水', 'salary day', 'hari gaji')}</p>}
+                    {summary.deductionDays > 0 && <p className="text-micro tracking-normal">+ {summary.deductionDays} {tr('天薪水', 'salary day', 'hari gaji')}</p>}
                   </td>
                 </tr>
               ))}
@@ -1353,41 +1756,41 @@ export default function AttendancePage({
       )}
 
       <section className="grid gap-5 xl:grid-cols-2">
-        <div className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-100">
+        <div className="rounded-panel bg-white p-5 shadow-e1 ring-1 ring-slate-100">
           <h2 className="font-bold text-slate-900">{tr('打卡明细', 'Punch timeline', 'Garis masa rekod')}</h2>
-          <p className="mt-1 text-xs text-slate-400">{tr('每一次 Check in / Check out 都保留。', 'Every check-in and checkout is retained.', 'Setiap rekod masuk / keluar disimpan.')}</p>
+          <p className="mt-1 text-footnote text-slate-400">{tr('每一次 Check in / Check out 都保留。', 'Every check-in and checkout is retained.', 'Setiap rekod masuk / keluar disimpan.')}</p>
           <div className="mt-4 max-h-[420px] space-y-2 overflow-y-auto pr-1">
             {selectedEvents.length === 0 ? (
-              <div className="rounded-xl bg-slate-50 px-4 py-10 text-center text-xs font-semibold text-slate-400">
+              <div className="rounded-card bg-slate-50 px-4 py-10 text-center text-footnote text-slate-400">
                 {tr('这一天没有打卡记录。', 'No punches on this date.', 'Tiada rekod pada tarikh ini.')}
               </div>
             ) : selectedEvents.map((event) => (
-              <div key={event.id} className="flex items-center gap-3 rounded-xl bg-slate-50 px-4 py-3">
-                <div className={`flex h-9 w-9 items-center justify-center rounded-lg ${
-                  event.action === 'check_in' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'
+              <div key={event.id} className="flex items-center gap-3 rounded-card bg-slate-50 px-4 py-3">
+                <div className={`flex h-9 w-9 items-center justify-center rounded-control ${
+                  event.action === 'check_in' ? 'bg-emerald-100 text-emerald-700' : 'bg-brand-100 text-brand-ink'
                 }`}>
                   {event.action === 'check_in' ? <LogIn className="h-4 w-4" /> : <LogOut className="h-4 w-4" />}
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
-                    <p className="truncate text-xs font-bold text-slate-800">{event.staff_name}</p>
+                    <p className="truncate text-footnote font-bold text-slate-800">{event.staff_name}</p>
                     <ArrowRight className="h-3 w-3 text-slate-300" />
-                    <p className="text-xs font-bold text-slate-600">
+                    <p className="text-footnote font-bold text-slate-600">
                       {event.action === 'check_in' ? 'Check in' : 'Check out'}
                     </p>
                   </div>
-                  <p className="mt-0.5 truncate text-[10px] text-slate-400">{event.note || tr('无备注', 'No note', 'Tiada nota')}</p>
+                  <p className="mt-0.5 truncate text-micro tracking-normal text-slate-400">{event.note || tr('无备注', 'No note', 'Tiada nota')}</p>
                 </div>
-                <time className="shrink-0 text-xs font-bold text-slate-700">{formatTime(event.occurred_at)}</time>
+                <time className="shrink-0 text-footnote font-bold text-slate-700">{formatTime(event.occurred_at)}</time>
               </div>
             ))}
           </div>
         </div>
 
-        <form onSubmit={handleLeaveSubmit} className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-100">
+        <form onSubmit={handleLeaveSubmit} className="rounded-panel bg-white p-5 shadow-e1 ring-1 ring-slate-100">
           <h2 className="font-bold text-slate-900">{tr('申请 Leave / MC / OT', 'Request Leave / MC / OT', 'Mohon Cuti / MC / OT')}</h2>
-          <p className="mt-1 text-xs text-slate-400">{tr('OT 必须先由 Super Admin 批准，批准后次日上班时间为 12:00。', 'OT requires Super Admin approval; an approved OT moves the next-day start to 12:00.', 'OT memerlukan kelulusan Super Admin; OT diluluskan mengubah mula hari berikutnya kepada 12:00.')}</p>
-          <div className="mt-4 grid grid-cols-3 gap-2 rounded-xl bg-slate-50 p-1">
+          <p className="mt-1 text-footnote text-slate-400">{tr('OT 必须先由 Super Admin 或 Operations Manager 批准，批准后次日上班时间为 12:00。', 'OT requires Super Admin or Operations Manager approval; an approved OT moves the next-day start to 12:00.', 'OT memerlukan kelulusan Super Admin atau Operations Manager; OT diluluskan mengubah mula hari berikutnya kepada 12:00.')}</p>
+          <div className="mt-4 grid grid-cols-3 gap-2 rounded-card bg-slate-50 p-1">
             {(['Leave', 'MC', 'OT'] as LeaveKind[]).map((kind) => (
               <button
                 key={kind}
@@ -1397,8 +1800,8 @@ export default function AttendancePage({
                   setLeaveError('');
                   if (kind !== 'MC') setMcAttachment(undefined);
                 }}
-                className={`rounded-lg px-4 py-2.5 text-xs font-bold transition-colors ${
-                  leaveKind === kind ? 'bg-red-800 text-white shadow-sm' : 'text-slate-500 hover:bg-white'
+                className={`rounded-control px-4 py-2.5 text-footnote font-bold transition-colors ${
+                  leaveKind === kind ? 'bg-brand text-white shadow-e1' : 'text-slate-500 hover:bg-white'
                 }`}
               >
                 {kind === 'Leave'
@@ -1411,31 +1814,31 @@ export default function AttendancePage({
           </div>
           {leaveKind === 'OT' ? (
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+              <label className="text-micro uppercase text-slate-400">
                 {tr('OT 日期', 'OT date', 'Tarikh OT')}
                 <input
                   type="date"
                   required
                   value={leaveStartDate}
                   onChange={(event) => setLeaveStartDate(event.target.value)}
-                  className="mt-2 w-full rounded-xl bg-slate-50 px-4 py-3 text-xs font-bold normal-case tracking-normal text-slate-700 outline-none focus:ring-2 focus:ring-red-100"
+                  className="mt-2 w-full rounded-card bg-slate-50 px-4 py-3 text-footnote font-bold normal-case tracking-normal text-slate-700 outline-none focus:ring-2 focus:ring-brand-100"
                 />
               </label>
-              <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+              <label className="text-micro uppercase text-slate-400">
                 {tr('预计 OT 结束时间', 'Expected OT end', 'Jangkaan tamat OT')}
                 <input
                   type="time"
                   required
                   value={overtimeEndTime}
                   onChange={(event) => setOvertimeEndTime(event.target.value)}
-                  className="mt-2 w-full rounded-xl bg-slate-50 px-4 py-3 text-xs font-bold normal-case tracking-normal text-slate-700 outline-none focus:ring-2 focus:ring-red-100"
+                  className="mt-2 w-full rounded-card bg-slate-50 px-4 py-3 text-footnote font-bold normal-case tracking-normal text-slate-700 outline-none focus:ring-2 focus:ring-brand-100"
                 />
               </label>
             </div>
           ) : (
           <>
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+            <label className="text-micro uppercase text-slate-400">
               {tr('开始日期', 'Start date', 'Tarikh mula')}
               <input
                 type="date"
@@ -1446,10 +1849,10 @@ export default function AttendancePage({
                   if (leaveEndDate < event.target.value) setLeaveEndDate(event.target.value);
                   setLeaveDuration(String(inclusiveDays(event.target.value, leaveEndDate < event.target.value ? event.target.value : leaveEndDate)));
                 }}
-                className="mt-2 w-full rounded-xl bg-slate-50 px-4 py-3 text-xs font-bold normal-case tracking-normal text-slate-700 outline-none focus:ring-2 focus:ring-red-100"
+                className="mt-2 w-full rounded-card bg-slate-50 px-4 py-3 text-footnote font-bold normal-case tracking-normal text-slate-700 outline-none focus:ring-2 focus:ring-brand-100"
               />
             </label>
-            <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+            <label className="text-micro uppercase text-slate-400">
               {tr('结束日期', 'End date', 'Tarikh tamat')}
               <input
                 type="date"
@@ -1460,11 +1863,11 @@ export default function AttendancePage({
                   setLeaveEndDate(event.target.value);
                   setLeaveDuration(String(inclusiveDays(leaveStartDate, event.target.value)));
                 }}
-                className="mt-2 w-full rounded-xl bg-slate-50 px-4 py-3 text-xs font-bold normal-case tracking-normal text-slate-700 outline-none focus:ring-2 focus:ring-red-100"
+                className="mt-2 w-full rounded-card bg-slate-50 px-4 py-3 text-footnote font-bold normal-case tracking-normal text-slate-700 outline-none focus:ring-2 focus:ring-brand-100"
               />
             </label>
           </div>
-          <label className="mt-3 block text-[10px] font-bold uppercase tracking-wider text-slate-400">
+          <label className="mt-3 block text-micro uppercase text-slate-400">
             {tr('天数（可输入 0.5）', 'Days (0.5 allowed)', 'Hari (0.5 dibenarkan)')}
             <input
               type="number"
@@ -1474,12 +1877,12 @@ export default function AttendancePage({
               required
               value={leaveDuration}
               onChange={(event) => setLeaveDuration(event.target.value)}
-              className="mt-2 w-full rounded-xl bg-slate-50 px-4 py-3 text-xs font-bold normal-case tracking-normal text-slate-700 outline-none focus:ring-2 focus:ring-red-100"
+              className="mt-2 w-full rounded-card bg-slate-50 px-4 py-3 text-footnote font-bold normal-case tracking-normal text-slate-700 outline-none focus:ring-2 focus:ring-brand-100"
             />
           </label>
           </>
           )}
-          <label className="mt-3 block text-[10px] font-bold uppercase tracking-wider text-slate-400">
+          <label className="mt-3 block text-micro uppercase text-slate-400">
             {tr('原因', 'Reason', 'Sebab')}
             <textarea
               required
@@ -1488,11 +1891,11 @@ export default function AttendancePage({
               placeholder={leaveKind === 'OT'
                 ? tr('说明加班工作与原因...', 'Explain the overtime work and reason...', 'Terangkan kerja lebih masa dan sebab...')
                 : tr('说明请假或病假原因...', 'Explain the leave or MC request...', 'Terangkan sebab cuti atau MC...')}
-              className="mt-2 min-h-24 w-full resize-none rounded-xl bg-slate-50 px-4 py-3 text-xs font-semibold normal-case tracking-normal text-slate-700 outline-none placeholder:text-slate-300 focus:ring-2 focus:ring-red-100"
+              className="mt-2 min-h-24 w-full resize-none rounded-card bg-slate-50 px-4 py-3 text-footnote normal-case tracking-normal text-slate-700 outline-none placeholder:text-slate-300 focus:ring-2 focus:ring-brand-100"
             />
           </label>
           {leaveKind === 'MC' && (
-            <label className="mt-3 flex cursor-pointer items-center gap-3 rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-xs font-bold text-slate-600 hover:border-indigo-200 hover:bg-indigo-50/40">
+            <label className="mt-3 flex cursor-pointer items-center gap-3 rounded-card border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-footnote font-bold text-slate-600 hover:border-indigo-200 hover:bg-indigo-50/40">
               <UploadCloud className="h-5 w-5 text-indigo-600" />
               <span className="min-w-0 flex-1 truncate">
                 {mcAttachment?.name || tr('上传 MC（PDF / 图片，小于 400KB）', 'Upload MC (PDF / image, under 400KB)', 'Muat naik MC (PDF / imej, bawah 400KB)')}
@@ -1505,11 +1908,11 @@ export default function AttendancePage({
               />
             </label>
           )}
-          {leaveError && <p className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700">{leaveError}</p>}
+          {leaveError && <p className="mt-3 rounded-control bg-rose-50 px-3 py-2 text-footnote text-rose-700">{leaveError}</p>}
           <button
             type="submit"
             disabled={isSubmittingLeave}
-            className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-red-800 px-4 py-3 text-xs font-bold text-white transition-colors hover:bg-red-900 disabled:cursor-wait disabled:bg-slate-300"
+            className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-card bg-brand px-4 py-3 text-footnote font-bold text-white transition-colors hover:bg-brand-deep disabled:cursor-wait disabled:bg-slate-300"
           >
             <CalendarCheck2 className="h-4 w-4" />
             {isSubmittingLeave ? tr('提交中...', 'Submitting...', 'Menghantar...') : tr('提交审批申请', 'Submit for approval', 'Hantar untuk kelulusan')}
@@ -1517,17 +1920,17 @@ export default function AttendancePage({
         </form>
       </section>
 
-      <section className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-100">
+      <section className="rounded-panel bg-white p-5 shadow-e1 ring-1 ring-slate-100">
         <div className="flex items-center justify-between gap-3">
           <div>
             <h2 className="font-bold text-slate-900">{canViewAll ? tr('Leave / MC / OT 审批', 'Leave / MC / OT approvals', 'Kelulusan Cuti / MC / OT') : tr('我的申请', 'My requests', 'Permohonan saya')}</h2>
-            <p className="mt-1 text-xs text-slate-400">{tr('申请记录与审批结果会保留。', 'Requests and decisions are retained.', 'Permohonan dan keputusan disimpan.')}</p>
+            <p className="mt-1 text-footnote text-slate-400">{tr('申请记录与审批结果会保留。', 'Requests and decisions are retained.', 'Permohonan dan keputusan disimpan.')}</p>
           </div>
-          <span className="rounded-lg bg-slate-100 px-3 py-1.5 text-[10px] font-bold text-slate-600">{visibleRequests.length}</span>
+          <span className="rounded-control bg-slate-100 px-3 py-1.5 text-micro tracking-normal text-slate-600">{visibleRequests.length}</span>
         </div>
         <div className="mt-4 space-y-3">
           {visibleRequests.length === 0 ? (
-            <div className="rounded-xl bg-slate-50 px-4 py-10 text-center text-xs font-semibold text-slate-400">
+            <div className="rounded-card bg-slate-50 px-4 py-10 text-center text-footnote text-slate-400">
               {tr('还没有 Leave / MC / OT 申请。', 'No Leave / MC / OT requests yet.', 'Belum ada permohonan Cuti / MC / OT.')}
             </div>
           ) : visibleRequests.map((request) => {
@@ -1536,10 +1939,10 @@ export default function AttendancePage({
             const canCancel = request.requester_name === currentStaffName && request.status === 'Pending';
 
             return (
-              <article key={request.id} data-testid={`leave-request-${request.id}`} className="rounded-xl bg-slate-50 p-4">
+              <article key={request.id} data-testid={`leave-request-${request.id}`} className="rounded-card bg-slate-50 p-4">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                   <div className="flex min-w-0 items-start gap-3">
-                    <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${
+                    <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-control ${
                       meta.kind === 'MC'
                         ? 'bg-rose-100 text-rose-700'
                         : meta.kind === 'OT'
@@ -1554,33 +1957,33 @@ export default function AttendancePage({
                     </div>
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
-                        <p className="text-sm font-bold text-slate-900">{request.requester_name}</p>
-                        <span className="rounded-md bg-white px-2 py-1 text-[10px] font-bold text-slate-600">{meta.kind}</span>
-                        <span className={`rounded-md px-2 py-1 text-[10px] font-bold ${STATUS_STYLE[request.status]}`}>{statusLabel(request.status)}</span>
+                        <p className="text-headline text-slate-900">{request.requester_name}</p>
+                        <span className="rounded-chip bg-white px-2 py-1 text-micro tracking-normal text-slate-600">{meta.kind}</span>
+                        <span className={`rounded-chip px-2 py-1 text-micro tracking-normal ${STATUS_STYLE[request.status]}`}>{statusLabel(request.status)}</span>
                       </div>
                       {meta.kind === 'OT' ? (
-                        <p className="mt-1 text-xs font-semibold text-slate-600">
+                        <p className="mt-1 text-footnote text-slate-600">
                           {meta.overtime_date || meta.start_date} · {tr('预计结束', 'Expected end', 'Jangkaan tamat')} {meta.overtime_end_time || '--'} · {request.amount} {tr('小时', 'hour(s)', 'jam')}
                         </p>
                       ) : (
-                        <p className="mt-1 text-xs font-semibold text-slate-600">
+                        <p className="mt-1 text-footnote text-slate-600">
                           {meta.start_date} <ArrowRight className="mx-1 inline h-3 w-3" /> {meta.end_date} · {request.amount} {tr('天', 'day(s)', 'hari')}
                         </p>
                       )}
-                      <p className="mt-2 text-xs leading-relaxed text-slate-500">{request.reason}</p>
-                      <p className="mt-2 text-[10px] text-slate-400">{tr('提交于', 'Submitted', 'Dihantar')} {formatDateTime(request.submitted_at)}</p>
+                      <p className="mt-2 text-footnote leading-relaxed text-slate-500">{request.reason}</p>
+                      <p className="mt-2 text-micro tracking-normal text-slate-400">{tr('提交于', 'Submitted', 'Dihantar')} {formatDateTime(request.submitted_at)}</p>
                       {request.mc_attachment && (
                         <SafeAttachmentLink
                           attachment={request.mc_attachment}
-                          className="mt-2 inline-flex items-center gap-1.5 text-[10px] font-bold text-indigo-700 hover:text-indigo-900"
-                          unsafeClassName="mt-2 inline-flex items-center gap-1.5 text-[10px] font-bold text-slate-400 line-through"
+                          className="mt-2 inline-flex items-center gap-1.5 text-micro tracking-normal text-indigo-700 hover:text-indigo-900"
+                          unsafeClassName="mt-2 inline-flex items-center gap-1.5 text-micro tracking-normal text-slate-400 line-through"
                         >
                           <Paperclip className="h-3 w-3" />
                           {request.mc_attachment.name}
                         </SafeAttachmentLink>
                       )}
                       {request.reviewed_by && (
-                        <p className="mt-2 rounded-lg bg-white px-3 py-2 text-[10px] font-semibold text-slate-500">
+                        <p className="mt-2 rounded-control bg-white px-3 py-2 text-caption text-slate-500">
                           {request.reviewed_by}: {request.review_note || statusLabel(request.status)}
                         </p>
                       )}
@@ -1590,20 +1993,20 @@ export default function AttendancePage({
                     <div className="w-full shrink-0 space-y-2 lg:w-72">
                       <div
                         data-testid={`leave-next-step-${request.id}`}
-                        className={`rounded-xl border p-3 ${canDecide ? 'border-amber-200 bg-amber-50' : 'border-slate-200 bg-white'}`}
+                        className={`rounded-card border p-3 ${canDecide ? 'border-amber-200 bg-amber-50' : 'border-slate-200 bg-white'}`}
                       >
                         <div className="flex items-start gap-2.5">
-                          <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-white ${canDecide ? 'bg-amber-500' : 'bg-slate-400'}`}>
+                          <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-white ${canDecide ? 'bg-amber-500' : 'bg-slate-400'}`}>
                             <ArrowUpRight className="h-3.5 w-3.5" />
                           </span>
                           <div className="min-w-0">
-                            <p className={`text-[9px] font-bold uppercase tracking-[0.16em] ${canDecide ? 'text-amber-700' : 'text-slate-500'}`}>{tr('下一步', 'Next step', 'Langkah seterusnya')}</p>
-                            <p className="mt-0.5 text-xs font-bold text-slate-900">
+                            <p className={`text-micro uppercase tracking-[0.16em] ${canDecide ? 'text-amber-700' : 'text-slate-500'}`}>{tr('下一步', 'Next step', 'Langkah seterusnya')}</p>
+                            <p className="mt-0.5 text-footnote font-bold text-slate-900">
                               {canDecide
                                 ? tr('审核申请', 'Review request', 'Semak permintaan')
                                 : tr('等待审批', 'Wait for approval', 'Tunggu kelulusan')}
                             </p>
-                            <p className="mt-1 text-[11px] font-semibold leading-relaxed text-slate-600">
+                            <p className="mt-1 text-caption leading-relaxed text-slate-600">
                               {canDecide
                                 ? tr('核对日期、时长与原因，然后选择批准或拒绝。', 'Check the dates, duration, and reason, then approve or reject it.', 'Semak tarikh, tempoh dan sebab, kemudian luluskan atau tolak.')
                                 : tr('现在无需处理；如果不再需要这份申请，可以取消。', 'No action is needed now; cancel only if this request is no longer needed.', 'Tiada tindakan diperlukan sekarang; batalkan hanya jika permintaan ini tidak lagi diperlukan.')}
@@ -1615,7 +2018,7 @@ export default function AttendancePage({
                         value={reviewNotes[request.id] || ''}
                         onChange={(event) => setReviewNotes((current) => ({ ...current, [request.id]: event.target.value.slice(0, 2000) }))}
                         placeholder={canDecide ? tr('审批备注（选填）', 'Review note (optional)', 'Nota semakan (pilihan)') : tr('取消备注（选填）', 'Cancellation note (optional)', 'Nota pembatalan (pilihan)')}
-                        className="w-full rounded-lg bg-white px-3 py-2.5 text-xs font-semibold text-slate-700 outline-none placeholder:text-slate-300 focus:ring-2 focus:ring-red-100"
+                        className="w-full rounded-control bg-white px-3 py-2.5 text-footnote text-slate-700 outline-none placeholder:text-slate-300 focus:ring-2 focus:ring-brand-100"
                       />
                       {canDecide ? (
                         <div className="grid grid-cols-2 gap-2">
@@ -1623,7 +2026,7 @@ export default function AttendancePage({
                             type="button"
                             disabled={reviewingId === request.id}
                             onClick={() => reviewRequest(request.id, 'Approved')}
-                            className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2.5 text-xs font-bold text-white hover:bg-emerald-700 disabled:bg-slate-300"
+                            className="inline-flex items-center justify-center gap-1.5 rounded-control bg-emerald-600 px-3 py-2.5 text-footnote font-bold text-white hover:bg-emerald-700 disabled:bg-slate-300"
                           >
                             <CheckCircle2 className="h-3.5 w-3.5" />
                             {tr('批准', 'Approve', 'Lulus')}
@@ -1632,7 +2035,7 @@ export default function AttendancePage({
                             type="button"
                             disabled={reviewingId === request.id}
                             onClick={() => reviewRequest(request.id, 'Rejected')}
-                            className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-rose-600 px-3 py-2.5 text-xs font-bold text-white hover:bg-rose-700 disabled:bg-slate-300"
+                            className="inline-flex items-center justify-center gap-1.5 rounded-control bg-rose-600 px-3 py-2.5 text-footnote font-bold text-white hover:bg-rose-700 disabled:bg-slate-300"
                           >
                             <XCircle className="h-3.5 w-3.5" />
                             {tr('拒绝', 'Reject', 'Tolak')}
@@ -1643,7 +2046,7 @@ export default function AttendancePage({
                           type="button"
                           disabled={reviewingId === request.id}
                           onClick={() => reviewRequest(request.id, 'Cancelled')}
-                          className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-slate-200 px-3 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-300 disabled:opacity-50"
+                          className="inline-flex w-full items-center justify-center gap-1.5 rounded-control bg-slate-200 px-3 py-2.5 text-footnote font-bold text-slate-600 hover:bg-slate-300 disabled:opacity-50"
                         >
                           <XCircle className="h-3.5 w-3.5" />
                           {tr('取消申请', 'Cancel request', 'Batal permohonan')}

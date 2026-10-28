@@ -4,12 +4,10 @@
  */
 
 import React from 'react';
+import { BarChart3, Bike, Target } from 'lucide-react';
 import SortableHeader, { type SortDirection, type SortState } from '../../SortableHeader';
 import { tr } from '../../../lib/i18n';
 import { AnalyticsSection, AssetIcon, MetaBar, SampleBadge, StatTile, tra, type StatComparison } from './SectionShell';
-import analyticsIcon from '../../../assets/icons/nav/analytics.png';
-import missionTargetIcon from '../../../assets/icons/nav/missionTarget.png';
-import vehicleInfoIcon from '../../../assets/icons/nav/vehicleInfo.png';
 
 type VehicleDemandBreakdown = 'model' | 'brand';
 type VehicleConditionFilter = 'all' | 'New' | 'Used' | 'not_set';
@@ -126,7 +124,7 @@ function VehicleDemandSection({
       id="vehicle"
       title={tr('车辆需求', 'Vehicle Demand', "Permintaan Kenderaan")}
       subtitle={tr('型号与品牌分布', 'By model & brand', "Mengikut model & jenama")}
-      icon={<AssetIcon src={vehicleInfoIcon} />}
+      icon={<AssetIcon icon={Bike} />}
       isOpen={isOpen}
       onToggle={onToggle}
     >
@@ -136,7 +134,7 @@ function VehicleDemandSection({
           title="Vehicle Units"
           value={totalVehicleUnits}
           subtitle={tr(`${vehicleStockRowsCount} 种车型 · 按车牌统计`, `${vehicleStockRowsCount} model types counted by plate number`, `${vehicleStockRowsCount} jenis model dikira mengikut nombor plat`)}
-          icon={<AssetIcon src={vehicleInfoIcon} />}
+          icon={<AssetIcon icon={Bike} />}
           tone="bg-transparent"
           comparison={comparisons.totalVehicleUnits}
         />
@@ -144,16 +142,16 @@ function VehicleDemandSection({
           title="Top Model"
           value={topVehicleModel?.label || '-'}
           subtitle={topVehicleModel ? tr(`${topVehicleModel.value} 台 · 占库存 ${topVehicleModel.percentage}%`, `${topVehicleModel.value} units · ${topVehicleModel.percentage}% of stock`, `${topVehicleModel.value} unit · ${topVehicleModel.percentage}% daripada stok`) : tr('暂无车型数据', 'No vehicle model data', "Tiada data model kenderaan")}
-          icon={<AssetIcon src={analyticsIcon} />}
+          icon={<AssetIcon icon={BarChart3} />}
           tone="bg-transparent"
-          valueClassName="text-base leading-snug"
+          valueClassName="text-callout leading-snug"
           comparison={comparisons.topVehicleModelLabel}
         />
         <StatTile
           title="Best Mix Share"
           value={topVehicleModel ? `${topVehicleModel.percentage}%` : '0%'}
           subtitle={topVehicleModel ? tr(`${topVehicleModel.label} 当前库存占比最高`, `${topVehicleModel.label} currently has highest stock share`, `${topVehicleModel.label} pada masa ini mempunyai bahagian saham tertinggi`) : tr('还没有库存占比', 'No stock share yet', "Tiada saham saham lagi")}
-          icon={<AssetIcon src={missionTargetIcon} />}
+          icon={<AssetIcon icon={Target} />}
           tone="bg-transparent"
           comparison={comparisons.topVehicleModelShare}
           badge={<SampleBadge total={totalVehicleUnits} />}
@@ -162,28 +160,29 @@ function VehicleDemandSection({
           title="Vehicle Brands"
           value={loansByVehicleBrandCount}
           subtitle="Brand demand in selected timeframe"
-          icon={<AssetIcon src={vehicleInfoIcon} />}
+          icon={<AssetIcon icon={Bike} />}
           tone="bg-transparent"
           comparison={comparisons.loansByVehicleBrandCount}
         />
       </div>
 
-      <section className="rounded-xl border border-slate-100 bg-white shadow-sm">
+      <section className="rounded-card border border-slate-100 bg-white shadow-e1">
         <div className="flex flex-col gap-4 border-b border-slate-100 px-5 py-4">
           <div>
-            <h3 className="text-sm font-bold text-slate-900">{tr('车辆需求分析', 'Vehicle Demand Analysis', "Analisis Permintaan Kenderaan")}</h3>
-            <p className="text-xs text-slate-400">{tr('按车型或品牌查看，并可筛选新车/二手与贷款/现金。', 'Model or brand view with New / Used and Loan / Cash filters', "Paparan model atau jenama dengan penapis Baharu / Terpakai dan Pinjaman / Tunai")}</p>
+            <h3 className="text-headline text-slate-900">{tr('车辆需求分析', 'Vehicle Demand Analysis', "Analisis Permintaan Kenderaan")}</h3>
+            <p className="text-footnote text-slate-400">{tr('按车型或品牌查看，并可筛选新车/二手与贷款/现金。', 'Model or brand view with New / Used and Loan / Cash filters', "Paparan model atau jenama dengan penapis Baharu / Terpakai dan Pinjaman / Tunai")}</p>
           </div>
           <div className="flex flex-col gap-3 xl:flex-row xl:flex-wrap xl:items-center">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{tra('View')}</span>
-              <div className="flex flex-wrap gap-2 rounded-xl bg-slate-100 p-1">
+              <span className="text-micro uppercase text-slate-400">{tra('View')}</span>
+              <div className="flex flex-wrap gap-2 rounded-card bg-slate-100 p-1">
                 {VEHICLE_DEMAND_BREAKDOWN_OPTIONS.map((option) => (
                   <button
+                    aria-pressed={vehicleDemandBreakdown === option.value}
                     key={option.value}
                     type="button"
                     onClick={() => onVehicleDemandBreakdownChange(option.value)}
-                    className={`rounded-lg px-3 py-2 text-xs font-bold transition-colors ${
+                    className={`rounded-control px-3 py-2 text-footnote font-bold transition-colors ${
                       vehicleDemandBreakdown === option.value
                         ? 'bg-white text-indigo-600 shadow-xs'
                         : 'text-slate-500 hover:text-slate-700'
@@ -196,14 +195,15 @@ function VehicleDemandSection({
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{tra('New / Used')}</span>
-              <div className="flex flex-wrap gap-2 rounded-xl bg-slate-100 p-1">
+              <span className="text-micro uppercase text-slate-400">{tra('New / Used')}</span>
+              <div className="flex flex-wrap gap-2 rounded-card bg-slate-100 p-1">
                 {VEHICLE_CONDITION_FILTER_OPTIONS.map((option) => (
                   <button
+                    aria-pressed={vehicleConditionFilter === option.value}
                     key={option.value}
                     type="button"
                     onClick={() => onVehicleConditionFilterChange(option.value)}
-                    className={`rounded-lg px-3 py-2 text-xs font-bold transition-colors ${
+                    className={`rounded-control px-3 py-2 text-footnote font-bold transition-colors ${
                       vehicleConditionFilter === option.value
                         ? 'bg-white text-indigo-600 shadow-xs'
                         : 'text-slate-500 hover:text-slate-700'
@@ -216,14 +216,15 @@ function VehicleDemandSection({
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{tra('Loan / Cash')}</span>
-              <div className="flex flex-wrap gap-2 rounded-xl bg-slate-100 p-1">
+              <span className="text-micro uppercase text-slate-400">{tra('Loan / Cash')}</span>
+              <div className="flex flex-wrap gap-2 rounded-card bg-slate-100 p-1">
                 {PURCHASE_METHOD_FILTER_OPTIONS.map((option) => (
                   <button
+                    aria-pressed={purchaseMethodFilter === option.value}
                     key={option.value}
                     type="button"
                     onClick={() => onPurchaseMethodFilterChange(option.value)}
-                    className={`rounded-lg px-3 py-2 text-xs font-bold transition-colors ${
+                    className={`rounded-control px-3 py-2 text-footnote font-bold transition-colors ${
                       purchaseMethodFilter === option.value
                         ? 'bg-white text-indigo-600 shadow-xs'
                         : 'text-slate-500 hover:text-slate-700'
@@ -248,7 +249,7 @@ function VehicleDemandSection({
               { label: 'Top Segment', value: vehicleDemandTopSegment?.label || '-', hideOnSmallSample: true }
             ]}
           />
-          <div className="mb-5 rounded-xl bg-slate-50 px-4 py-3 text-xs font-semibold text-slate-500">
+          <div className="mb-5 rounded-card bg-slate-50 px-4 py-3 text-footnote text-slate-500">
             {tr('当前筛选', 'Active filters', "Penapis aktif")}: {tra('New / Used')} <span className="text-slate-800">{tra(selectedVehicleConditionFilterLabel)}</span> · {tra('Loan / Cash')} <span className="text-slate-800">{tra(selectedPurchaseMethodFilterLabel)}</span> · <span className="font-mono text-slate-800">{filteredVehicleDemandApplicationsCount}</span> {tr('单申请', 'applications', "permohonan")}
           </div>
 
@@ -258,15 +259,15 @@ function VehicleDemandSection({
             <button
               type="button"
               onClick={onToggleDetails}
-              className="inline-flex items-center rounded-lg bg-slate-100 px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-200 hover:text-slate-900"
+              className="inline-flex items-center rounded-control bg-slate-100 px-3 py-2 text-footnote font-bold text-slate-600 transition-colors hover:bg-slate-200 hover:text-slate-900"
             >
               {showDetails ? tr('收起明细', 'Hide Details', "Sembunyikan Butiran") : tr(`显示明细（${rows.length}）`, `Show Details (${rows.length})`, `Tunjukkan Butiran (${rows.length})`)}
             </button>
 
             {showDetails && (
               <div className="mt-4 overflow-x-auto">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-50/75 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                <table className="w-full text-left text-footnote">
+                  <thead className="bg-slate-50/75 text-micro uppercase text-slate-400">
                     <tr>
                       <th className="px-5 py-3">
                         <SortableHeader sortKey="label" label={tra(selectedVehicleDemandBreakdownLabel)} sortState={sortState} onSort={onSort} />
@@ -299,7 +300,7 @@ function VehicleDemandSection({
                       <tr key={row.key}>
                         <td className="px-5 py-4">
                           <p className="font-semibold text-slate-700">{row.label}</p>
-                          <p className="mt-0.5 text-[10px] font-semibold text-slate-400">{row.meta}</p>
+                          <p className="mt-0.5 text-caption text-slate-400">{row.meta}</p>
                         </td>
                         <td className="px-5 py-4 font-mono text-slate-600">{row.value}</td>
                         <td className="px-5 py-4 font-mono text-slate-600">{row.approvedUnits}</td>
@@ -309,7 +310,7 @@ function VehicleDemandSection({
                     ))}
                     {rows.length === 0 && (
                       <tr>
-                        <td colSpan={5} className="px-5 py-10 text-center text-sm text-slate-400">
+                        <td colSpan={5} className="px-5 py-10 text-center text-body text-slate-400">
                           {tr('还没有车辆需求数据', 'No vehicle demand data yet', "Belum ada data permintaan kenderaan")}
                         </td>
                       </tr>

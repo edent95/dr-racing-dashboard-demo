@@ -10,6 +10,9 @@ import { getFirebaseStorage } from '../lib/firebaseStorage';
 
 const STORAGE_UPLOAD_TIMEOUT_MS = 30000;
 const STORAGE_URL_TIMEOUT_MS = 10000;
+// 公开申请的文件在客户资料存进系统之后才逐个上传，超时只影响这一个文件，
+// 所以给慢速手机网络留足时间。
+const PUBLIC_INTAKE_UPLOAD_TIMEOUT_MS = 90000;
 
 function withStorageTimeout<T>(promise: Promise<T>, operation: string, timeoutMs: number): Promise<T> {
   return Promise.race([
@@ -24,6 +27,10 @@ function withStorageTimeout<T>(promise: Promise<T>, operation: string, timeoutMs
 
 function toStorageSegment(value: string): string {
   return encodeURIComponent(value.trim());
+}
+
+export function getPublicIntakeDocumentStoragePath(anonymousUid: string, documentSlot: string): string {
+  return `customer_documents/public/${toStorageSegment(anonymousUid)}/${toStorageSegment(documentSlot)}`;
 }
 
 async function ensureFreshStaffStorageTokens() {
@@ -73,7 +80,7 @@ export async function uploadPublicIntakeDocumentToStorage(
     return '';
   }
 
-  const storagePath = `customer_documents/public/${toStorageSegment(anonymousUid)}/${toStorageSegment(documentSlot)}`;
+  const storagePath = getPublicIntakeDocumentStoragePath(anonymousUid, documentSlot);
   const storageRef = ref(storage, storagePath);
 
   await withStorageTimeout(
@@ -83,7 +90,7 @@ export async function uploadPublicIntakeDocumentToStorage(
       }
     }),
     'public intake document upload',
-    STORAGE_UPLOAD_TIMEOUT_MS
+    PUBLIC_INTAKE_UPLOAD_TIMEOUT_MS
   );
 
   return storagePath;

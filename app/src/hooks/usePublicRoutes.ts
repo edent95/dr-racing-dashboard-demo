@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CustomerIntakeShortLink, WhatsAppTrackingClick, WhatsAppTrackingLink } from '../types';
 import { getPublicSiteOrigin, getSafePublicRouteTarget } from '../lib/publicUrls';
+import { trackPublicEvent } from '../lib/publicAnalytics';
 import { normalizeMalaysiaPhoneDigits as normalizePhoneNumber } from '../utils/malaysiaPhone';
 
 const resolveShortLinkFromRemote = async (code: string) => {
@@ -11,6 +12,11 @@ const resolveShortLinkFromRemote = async (code: string) => {
 const savePublicWhatsAppClickToRemote = async (click: WhatsAppTrackingClick) => {
   const module = await import('../services/publicRepository');
   return module.savePublicWhatsAppClickToFirebase(click);
+};
+
+const loadPublicTrackingLinkFromRemote = async (linkId: string) => {
+  const module = await import('../services/publicRepository');
+  return module.loadPublicTrackingLinkFromFirebase(linkId);
 };
 
 const buildWhatsAppSendUrl = (phoneNumber: string, message: string) => {
@@ -45,7 +51,7 @@ export function usePublicRoutes({
   const shortLinkCode = shortLinkMatch?.[1] || '';
   const isPublicRoutePath = isWhatsAppRedirectPath || isCustomerIntakePath || isShortLinkPath;
   const customerIntakeParams = useMemo(() => new URLSearchParams(search), [search]);
-  const [redirectStatus, setRedirectStatus] = useState<'waiting' | 'redirecting' | 'inactive' | 'missing'>('waiting');
+  const [redirectStatus, setRedirectStatus] = useState<'waiting' | 'redirecting' | 'inactive' | 'missing' | 'unavailable'>('waiting');
   const [redirectTargetUrl, setRedirectTargetUrl] = useState('');
   const [shortLinkRedirectStatus, setShortLinkRedirectStatus] = useState<'waiting' | 'redirecting' | 'missing'>('waiting');
   const [shortLinkRedirectTargetUrl, setShortLinkRedirectTargetUrl] = useState('');
@@ -70,10 +76,36 @@ export function usePublicRoutes({
     }
 
     hasProcessedTrackingRedirect.current = true;
+    void processTrackingRedirect();
+  }, [isWhatsAppRedirectPath, syncStatus, whatsAppTrackingLinks]);
 
+  const processTrackingRedirect = async () => {
     const params = new URLSearchParams(window.location.search);
     const linkId = params.get('id') || '';
-    const matchedLink = whatsAppTrackingLinks.find((link) => link.id === linkId);
+    const cachedLink = whatsAppTrackingLinks.find((link) => link.id === linkId);
+    let matchedLink = cachedLink;
+
+    if (linkId) {
+      // The stored record decides: a deleted or disabled link must not keep
+      // working through the phone number still written in old URLs.
+      try {
+        const remoteLink = await loadPublicTrackingLinkFromRemote(linkId);
+        if (remoteLink !== undefined) {
+          matchedLink = remoteLink || undefined;
+        }
+      } catch (error) {
+        // A cached copy may belong to a link that was since disabled or
+        // deleted, so it never decides the redirect on its own.
+        console.warn('WhatsApp link record could not be loaded.', error);
+        setRedirectStatus('unavailable');
+        return;
+      }
+
+      if (!matchedLink) {
+        setRedirectStatus('missing');
+        return;
+      }
+    }
 
     if (matchedLink && !matchedLink.active) {
       setRedirectStatus('inactive');
@@ -87,27 +119,44 @@ export function usePublicRoutes({
       return;
     }
 
-    const click: WhatsAppTrackingClick = {
-      id: `CLICK-${Date.now()}`,
-      link_id: linkId || 'direct',
-      label: matchedLink?.label || params.get('label') || 'Direct WhatsApp Link',
-      sales_name: matchedLink?.sales_name || params.get('sales') || '',
-      phone_number: phoneNumber,
-      channel: matchedLink?.channel || params.get('utm_source') || 'unknown',
-      medium: matchedLink?.medium || params.get('utm_medium') || 'unknown',
-      campaign: matchedLink?.campaign || params.get('utm_campaign') || 'unknown',
-      clicked_at: new Date().toISOString(),
-      referrer: document.referrer || '',
-      user_agent: navigator.userAgent || ''
-    };
+    // wa_clicks Rules accept a click only when every attribution field equals
+    // the stored public_tracking_links record, so copy them verbatim (an empty
+    // campaign used to become 'unknown' and the click was refused). Links with
+    // no stored record ('direct' /wa?phone=) cannot be attributed and are not
+    // written at all.
+    const click: WhatsAppTrackingClick | null = matchedLink && linkId
+      ? {
+        id: `CLICK-${Date.now()}`,
+        link_id: linkId,
+        label: matchedLink.label ?? '',
+        sales_name: matchedLink.sales_name ?? '',
+        phone_number: matchedLink.phone_number ?? '',
+        channel: matchedLink.channel ?? '',
+        medium: matchedLink.medium ?? '',
+        campaign: matchedLink.campaign ?? '',
+        clicked_at: new Date().toISOString(),
+        // Rules cap both at 500; Facebook referrers can be longer.
+        referrer: (document.referrer || '').slice(0, 500),
+        user_agent: (navigator.userAgent || '').slice(0, 500)
+      }
+      : null;
 
     setRedirectStatus('redirecting');
 
     const message = matchedLink?.message || params.get('text') || '';
     const whatsAppUrl = buildWhatsAppSendUrl(phoneNumber, message);
     setRedirectTargetUrl(whatsAppUrl);
+    // The redirect is a script navigation, not a link click, so index.html's
+    // click listener never sees it: report the same key event here.
+    trackPublicEvent('whatsapp_click', {
+      link_url: whatsAppUrl.split('?')[0],
+      page_path: window.location.pathname,
+      cta: matchedLink?.label || 'wa_redirect',
+      cta_location: 'wa_redirect',
+      transport_type: 'beacon'
+    });
 
-    savePublicWhatsAppClickToRemote(click)
+    (click ? savePublicWhatsAppClickToRemote(click) : Promise.resolve())
       .catch((error) => {
         console.warn('Public WhatsApp click save failed, redirecting anyway.', error);
       })
@@ -116,7 +165,7 @@ export function usePublicRoutes({
           window.location.href = whatsAppUrl;
         }, 250);
       });
-  }, [isWhatsAppRedirectPath, syncStatus, whatsAppTrackingLinks]);
+  };
 
   useEffect(() => {
     if (!isShortLinkPath || syncStatus === 'loading') {

@@ -3,10 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { browserLocalPersistence, browserSessionPersistence, EmailAuthProvider, onAuthStateChanged, reauthenticateWithCredential, sendPasswordResetEmail, setPersistence, signInAnonymously, signInWithEmailAndPassword, signOut, updatePassword, type User } from 'firebase/auth';
+import { beforeAuthStateChanged, browserLocalPersistence, browserSessionPersistence, EmailAuthProvider, onAuthStateChanged, reauthenticateWithCredential, sendPasswordResetEmail, setPersistence, signInAnonymously, signInWithEmailAndPassword, signOut, updatePassword, type User } from 'firebase/auth';
 import { getFirebaseAuth } from './firebaseAuth';
 import { ensureFirebaseAppCheckToken } from './firebase';
 import type { RoleAccountRole } from '../types';
+import { completeStaffMfaReauthentication, type RequestStaffTotp } from './staffMfa';
+import { getStaffPasswordProblem } from '../../shared/staffPasswordPolicy.mjs';
 export { hashPassword, verifyPassword } from './password';
 
 const VALID_ROLE_CLAIMS = new Set<RoleAccountRole>(['Super Admin', 'Operations Manager', 'Admin', 'Sales']);
@@ -82,23 +84,33 @@ export function onFirebaseAuthUserChanged(callback: (user: User | null) => void)
   return onAuthStateChanged(auth, callback);
 }
 
-export async function signInFirebaseStaff(email: string, password: string, remember = true) {
+export async function signInFirebaseStaff(email: string, password: string, remember = true, signal?: AbortSignal) {
+  signal?.throwIfAborted();
   const auth = getFirebaseAuth();
 
   if (!auth) {
     throw new Error('Firebase Auth is not configured.');
   }
 
-  // Firebase Auth itself does not require an App Check token. On localhost,
-  // allow the real staff credential + custom-claim check to complete even when
-  // this browser's App Check debug token has not been registered yet. Firestore
-  // and Storage still require App Check and remain protected.
+  // Production Auth enforces App Check; the local sandbox uses Auth emulation.
   if (!isLocalFirebaseHost()) {
     await ensureFirebaseAppCheckToken();
   }
+  signal?.throwIfAborted();
   await setPersistence(auth, remember ? browserLocalPersistence : browserSessionPersistence);
-  const credential = await signInWithEmailAndPassword(auth, email.trim().toLowerCase(), password);
-  return credential.user;
+  signal?.throwIfAborted();
+  // The SDK request cannot be cancelled. Block a late response before it sets
+  // the Auth user; the expired login page requires a reload before retrying.
+  const unsubscribe = signal ? beforeAuthStateChanged(auth, (user) => {
+    if (user) signal.throwIfAborted();
+  }) : () => {};
+  try {
+    const credential = await signInWithEmailAndPassword(auth, email.trim().toLowerCase(), password);
+    signal?.throwIfAborted();
+    return credential.user;
+  } finally {
+    unsubscribe();
+  }
 }
 
 export async function sendFirebaseStaffPasswordReset(email: string) {
@@ -115,7 +127,7 @@ export async function sendFirebaseStaffPasswordReset(email: string) {
   await sendPasswordResetEmail(auth, normalizedEmail);
 }
 
-export async function reauthenticateCurrentFirebaseStaff(password: string): Promise<User> {
+export async function reauthenticateCurrentFirebaseStaff(password: string, requestCode?: RequestStaffTotp): Promise<User> {
   const auth = getFirebaseAuth();
 
   if (!auth) {
@@ -128,20 +140,28 @@ export async function reauthenticateCurrentFirebaseStaff(password: string): Prom
     throw new Error('A signed-in Firebase staff account is required.');
   }
 
-  await reauthenticateWithCredential(
-    user,
-    EmailAuthProvider.credential(user.email, password)
-  );
+  try {
+    await reauthenticateWithCredential(user, EmailAuthProvider.credential(user.email, password));
+  } catch (error) {
+    await completeStaffMfaReauthentication(error, requestCode);
+  }
+  if (auth.currentUser?.uid !== user.uid) {
+    throw Object.assign(new Error('Account changed. Sign in again.'), { code: 'auth/user-mismatch' });
+  }
   await user.getIdToken(true);
   return user;
 }
 
-export async function changeCurrentFirebaseStaffPassword(currentPassword: string, newPassword: string) {
-  if (newPassword.length < 8) {
+export async function changeCurrentFirebaseStaffPassword(currentPassword: string, newPassword: string, requestCode?: RequestStaffTotp) {
+  const problem = getStaffPasswordProblem(newPassword);
+  if (problem === 'whitespace') {
+    throw new Error('New password must not contain spaces.');
+  }
+  if (problem === 'too_short') {
     throw new Error('New password must be at least 8 characters.');
   }
 
-  const user = await reauthenticateCurrentFirebaseStaff(currentPassword);
+  const user = await reauthenticateCurrentFirebaseStaff(currentPassword, requestCode);
   await updatePassword(user, newPassword);
   await user.getIdToken(true);
 }
@@ -179,6 +199,20 @@ export async function getCurrentFirebaseIdToken(forceRefresh = false) {
 
   await auth.authStateReady();
   return auth.currentUser?.getIdToken(forceRefresh) || '';
+}
+
+// Sales / Admin receive roleAccounts from the staff_dashboard projection with
+// email blanked, so the User page reads the login email from Auth instead.
+export async function getCurrentFirebaseStaffEmail() {
+  const auth = getFirebaseAuth();
+
+  if (!auth) {
+    return '';
+  }
+
+  await auth.authStateReady();
+  const user = auth.currentUser;
+  return user && !user.isAnonymous ? String(user.email || '') : '';
 }
 
 export async function signOutFirebaseStaff() {

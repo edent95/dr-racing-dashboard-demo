@@ -6,6 +6,8 @@
 import React from 'react';
 import { RoleAccount } from '../types';
 import StaffAvatar from './StaffAvatar';
+import { tr } from '../lib/i18n';
+import { isStaffLinkQueueHandler } from '../../shared/staffLinkQueue.mjs';
 
 interface StaffNameBadgeProps {
   name?: string;
@@ -23,12 +25,16 @@ export default function StaffNameBadge({
   roleAccounts,
   avatarClassName = 'h-7 w-7',
   className = '',
-  nameClassName = 'text-xs font-bold text-slate-700',
-  roleClassName = 'text-[10px] font-bold uppercase text-slate-400'
+  nameClassName = 'text-footnote font-semibold text-slate-700',
+  roleClassName = 'text-micro uppercase text-slate-400'
 }: StaffNameBadgeProps) {
-  const displayName = name?.trim() || '--';
-  const account = roleAccounts.find((item) => item.name === displayName);
-  const displayRole = role || account?.role || '';
+  // The reserved staff-link queue is not a person; show what it means.
+  const isQueue = isStaffLinkQueueHandler(name?.trim());
+  const displayName = isQueue
+    ? tr('待分配（原员工链接）', 'Unassigned (former staff link)', 'Belum ditugaskan (pautan kakitangan lama)')
+    : name?.trim() || '--';
+  const account = isQueue ? undefined : roleAccounts.find((item) => item.name === displayName);
+  const displayRole = isQueue ? '' : role || account?.role || '';
 
   return (
     <span className={`inline-flex min-w-0 items-center gap-2 ${className}`}>

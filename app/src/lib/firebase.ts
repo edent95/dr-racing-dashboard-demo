@@ -5,7 +5,8 @@
 
 import { initializeApp, type FirebaseApp } from 'firebase/app';
 import { getToken as getAppCheckToken, initializeAppCheck, ReCaptchaEnterpriseProvider, type AppCheck } from 'firebase/app-check';
-import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, type Firestore } from 'firebase/firestore';
+import { connectFirestoreEmulator, getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, type Firestore } from 'firebase/firestore';
+import { firebaseEmulatorHosts, useFirebaseEmulators } from './firebaseEmulators';
 import { firebaseConfig, FIREBASE_PROJECT_DISPLAY_NAME, isFirebaseConfigured } from './firebaseConfig';
 export { FIREBASE_PROJECT_DISPLAY_NAME, isFirebaseConfigured } from './firebaseConfig';
 
@@ -60,7 +61,9 @@ export function getFirebaseApp() {
 
   if (!firebaseApp) {
     firebaseApp = initializeApp(firebaseConfig, FIREBASE_PROJECT_DISPLAY_NAME);
-    initializeFirebaseAppCheck(firebaseApp);
+    if (!useFirebaseEmulators) {
+      initializeFirebaseAppCheck(firebaseApp);
+    }
   }
 
   return firebaseApp;
@@ -96,6 +99,13 @@ export function getFirebaseDb() {
 
   if (!app) {
     return null;
+  }
+
+  if (!firestoreDb && useFirebaseEmulators) {
+    // Sandbox: no persistent cache, so emulator data never mixes with a cache
+    // left behind by a production session on another origin.
+    firestoreDb = initializeFirestore(app, {});
+    connectFirestoreEmulator(firestoreDb, firebaseEmulatorHosts.firestore.host, firebaseEmulatorHosts.firestore.port);
   }
 
   if (!firestoreDb) {
