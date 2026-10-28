@@ -4,7 +4,7 @@
  */
 
 import React from 'react';
-import { Activity, BarChart3, ChevronDown, Layers3, PieChart } from 'lucide-react';
+import { Activity, BarChart3, ChevronDown, Layers3, PieChart, type LucideIcon } from 'lucide-react';
 import { tr, trAnalyticsLabel } from '../../../lib/i18n';
 
 const ANALYTICS_ZH: Record<string, string> = {
@@ -58,7 +58,7 @@ function getStatTitleBadgeClass(title: string, primary = false) {
   }
 
   if (primary) {
-    return 'bg-red-50 text-red-700';
+    return 'bg-brand-50 text-brand-ink';
   }
 
   return 'bg-slate-100 text-slate-600';
@@ -120,7 +120,7 @@ function AnalyticsChartPicker({ sectionId }: { sectionId: string }) {
 
   return (
     <div
-      className="flex items-center gap-1 rounded-xl bg-slate-100 p-1"
+      className="flex items-center gap-1 rounded-card bg-slate-100 p-1"
       role="group"
       aria-label={tr('图表类型', 'Chart type', 'Jenis carta')}
     >
@@ -135,9 +135,9 @@ function AnalyticsChartPicker({ sectionId }: { sectionId: string }) {
           title={preferences.forcedMode && option.value !== preferences.forcedMode
             ? tr('月度视图固定使用趋势明细', 'Monthly view uses monthly trend detail', 'Paparan bulanan menggunakan butiran trend bulanan')
             : tr(option.zh, option.en, option.ms)}
-          className={`inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[10px] font-bold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 ${
+          className={`inline-flex h-8 items-center gap-1.5 rounded-control px-2.5 text-micro tracking-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 ${
             activeMode === option.value
-              ? 'bg-indigo-600 text-white shadow-sm'
+              ? 'bg-indigo-600 text-white shadow-e1'
               : 'text-slate-500 hover:bg-white hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-slate-500'
           }`}
         >
@@ -171,7 +171,7 @@ export function CompareDeltaBadge({
   const deltaLabel = `${delta > 0 ? '+' : ''}${delta}${suffix}`;
 
   return (
-    <span className={`shrink-0 rounded-full px-2 py-1 font-mono text-[10px] font-bold ${
+    <span className={`shrink-0 rounded-full px-2 py-1 font-mono text-micro tracking-normal ${
       isFlat
         ? 'bg-slate-100 text-slate-500'
         : isPositive
@@ -204,15 +204,15 @@ export function AnalyticsSection({
   const lockedOpen = Boolean(preferences?.lockedOpen);
 
   return (
-    <section id={`analytics-section-${id}`} className="scroll-mt-28 overflow-hidden rounded-2xl bg-white/90 shadow-sm backdrop-blur">
+    <section id={`analytics-section-${id}`} className="scroll-mt-28 overflow-hidden rounded-panel bg-white/90 shadow-e1 backdrop-blur">
       <div className="flex flex-col gap-3 border-b border-slate-100 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
-        <div className="flex min-w-0 flex-1 items-center gap-3 rounded-xl text-left">
+        <div className="flex min-w-0 flex-1 items-center gap-3 rounded-card text-left">
           <span className="flex h-11 w-11 shrink-0 items-center justify-center">
             {icon}
           </span>
           <span className="min-w-0">
-            <span className="block text-[15px] font-bold text-slate-900">{title}</span>
-            <span className="block text-[11px] text-slate-400">{subtitle}</span>
+            <span className="block text-headline text-slate-900">{title}</span>
+            <span className="block text-caption text-slate-400">{subtitle}</span>
           </span>
         </div>
         <div className="flex shrink-0 items-center justify-between gap-2 pl-14 lg:pl-0">
@@ -222,7 +222,7 @@ export function AnalyticsSection({
               type="button"
               onClick={onToggle}
               aria-label={isOpen ? tr('收起分析', 'Collapse analysis', 'Tutup analisis') : tr('展开分析', 'Expand analysis', 'Kembangkan analisis')}
-              className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300"
+              className="rounded-control p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300"
             >
               <ChevronDown className={`h-4 w-4 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
             </button>
@@ -241,7 +241,7 @@ export function StatTile({
   subtitle,
   icon,
   tone,
-  valueClassName = 'text-xl',
+  valueClassName = 'text-title-3',
   comparison,
   badge,
   primary = false
@@ -258,34 +258,34 @@ export function StatTile({
   primary?: boolean;
 }) {
   return (
-    <div className={`rounded-xl p-4 ${primary ? 'bg-white ring-1 ring-indigo-100' : 'bg-white/70'}`}>
+    <div className={`rounded-card p-4 ${primary ? 'bg-white ring-1 ring-indigo-100' : 'bg-white/70'}`}>
       <div className="flex items-start justify-between gap-4">
         <div className="space-y-1">
-          <p className={`inline-flex max-w-full items-center rounded-md px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${getStatTitleBadgeClass(title, primary)}`}>{tra(title)}</p>
+          <p className={`inline-flex max-w-full items-center rounded-chip px-1.5 py-0.5 text-micro uppercase ${getStatTitleBadgeClass(title, primary)}`}>{tra(title)}</p>
           <div className="flex flex-wrap items-center gap-2">
             <p className={`${valueClassName} font-bold tracking-tight text-slate-900 tabular-nums`}>{value}</p>
             {badge}
           </div>
         </div>
-        <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-xl ${tone}`}>
+        <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-card ${tone}`}>
           {icon}
         </div>
       </div>
-      <p className="mt-2 text-xs text-slate-500">{tra(subtitle)}</p>
+      <p className="mt-2 text-footnote text-slate-500">{tra(subtitle)}</p>
       {comparison && (
-        <div className="mt-4 rounded-xl bg-slate-50 p-2">
+        <div className="mt-4 rounded-card bg-slate-50 p-2">
           <div className="mb-2 flex items-center justify-between gap-2">
-            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{tra('Compare')}</p>
+            <p className="text-micro uppercase text-slate-400">{tra('Compare')}</p>
             <CompareDeltaBadge delta={comparison.delta} suffix={comparison.suffix} inverse={comparison.inverse} />
           </div>
           <div className="grid grid-cols-2 gap-2">
-            <div className="min-w-0 rounded-lg bg-white px-2.5 py-2">
-              <p className="truncate text-[10px] font-bold uppercase tracking-wider text-slate-400">{comparison.primaryLabel}</p>
-              <p className="mt-1 truncate font-mono text-sm font-bold text-slate-900">{formatCompareValue(value, comparison.suffix)}</p>
+            <div className="min-w-0 rounded-control bg-white px-2.5 py-2">
+              <p className="truncate text-micro uppercase text-slate-400">{comparison.primaryLabel}</p>
+              <p className="mt-1 truncate font-mono text-headline text-slate-900">{formatCompareValue(value, comparison.suffix)}</p>
             </div>
-            <div className="min-w-0 rounded-lg bg-white px-2.5 py-2">
-              <p className="truncate text-[10px] font-bold uppercase tracking-wider text-slate-400">{comparison.secondaryLabel}</p>
-              <p className="mt-1 truncate font-mono text-sm font-bold text-slate-600">{formatCompareValue(comparison.secondaryValue, comparison.suffix)}</p>
+            <div className="min-w-0 rounded-control bg-white px-2.5 py-2">
+              <p className="truncate text-micro uppercase text-slate-400">{comparison.secondaryLabel}</p>
+              <p className="mt-1 truncate font-mono text-headline text-slate-600">{formatCompareValue(comparison.secondaryValue, comparison.suffix)}</p>
             </div>
           </div>
         </div>
@@ -294,8 +294,8 @@ export function StatTile({
   );
 }
 
-export function AssetIcon({ src, className = 'h-11 w-11' }: { src: string; className?: string }) {
-  return <img src={src} alt="" aria-hidden="true" className={`${className} object-contain`} />;
+export function AssetIcon({ icon: Icon, className = 'h-6 w-6' }: { icon: LucideIcon; className?: string }) {
+  return <Icon aria-hidden="true" className={`${className} text-current`} strokeWidth={1.75} />;
 }
 
 // 样本量诚实原则:分母 < SMALL_SAMPLE_THRESHOLD 时,百分比 / Top N 不具代表性。
@@ -311,7 +311,7 @@ export function SampleBadge({ total, threshold = SMALL_SAMPLE_THRESHOLD }: { tot
     return null;
   }
   return (
-    <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 font-mono text-[10px] font-bold text-slate-500">
+    <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 font-mono text-micro tracking-normal text-slate-500">
       {tr('样本小', 'Small sample', "Sampel kecil")} n={total}
     </span>
   );
@@ -339,12 +339,12 @@ export function MetaBar({
   const visibleItems = items.filter((item) => !(item.hideOnSmallSample && small));
 
   return (
-    <div className="mb-5 flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-xl bg-slate-50 px-4 py-2.5">
+    <div className="mb-5 flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-card bg-slate-50 px-4 py-2.5">
       {visibleItems.map((item, index) => (
         <span key={`${item.label}-${index}`} className="inline-flex items-center gap-1.5">
           {index > 0 && <span className="text-slate-300" aria-hidden="true">·</span>}
-          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{tra(item.label)}</span>
-          <span className="max-w-[12rem] truncate font-mono text-xs font-bold text-slate-800">{item.value}</span>
+          <span className="text-micro uppercase text-slate-400">{tra(item.label)}</span>
+          <span className="max-w-[12rem] truncate font-mono text-footnote font-bold text-slate-800">{item.value}</span>
         </span>
       ))}
       {typeof sample === 'number' && (
@@ -359,7 +359,7 @@ export function MetaBar({
 // 空态折叠:0 条数据时收敛成一行(≈48px),不再占满整块高度。
 export function EmptyChartRow({ text }: { text?: string }) {
   return (
-    <div className="flex h-12 items-center gap-2 rounded-xl border border-dashed border-slate-200 bg-slate-50/60 px-4 text-xs font-medium text-slate-400">
+    <div className="flex h-12 items-center gap-2 rounded-card border border-dashed border-slate-200 bg-slate-50/60 px-4 text-footnote font-medium text-slate-400">
       <span className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-slate-300" aria-hidden="true" />
       {text ?? tr('本周暂无数据', 'No data this period', "Tiada data tempoh ini")}
     </div>
@@ -370,7 +370,7 @@ export function MetricSummaryTile({
   title,
   value,
   comparison,
-  valueClassName = 'font-mono text-2xl'
+  valueClassName = 'font-mono text-title-2'
 }: {
   title: string;
   value: string | number;
@@ -378,21 +378,21 @@ export function MetricSummaryTile({
   valueClassName?: string;
 }) {
   return (
-    <div className="rounded-xl bg-slate-50 px-4 py-3">
+    <div className="rounded-card bg-slate-50 px-4 py-3">
       <div className="flex items-start justify-between gap-2">
-        <p className="min-w-0 truncate text-[10px] font-bold uppercase tracking-wider text-slate-400">{tra(title)}</p>
+        <p className="min-w-0 truncate text-micro uppercase text-slate-400">{tra(title)}</p>
         {comparison && <CompareDeltaBadge delta={comparison.delta} suffix={comparison.suffix} inverse={comparison.inverse} />}
       </div>
       <p className={`mt-1 truncate ${valueClassName} font-bold text-slate-900`}>{formatCompareValue(value, comparison?.suffix)}</p>
       {comparison && (
         <div className="mt-3 grid grid-cols-2 gap-2">
-          <div className="min-w-0 rounded-lg bg-white px-2.5 py-2">
-            <p className="truncate text-[10px] font-bold uppercase tracking-wider text-slate-400">{comparison.primaryLabel}</p>
-            <p className="mt-1 truncate font-mono text-xs font-bold text-slate-900">{formatCompareValue(value, comparison.suffix)}</p>
+          <div className="min-w-0 rounded-control bg-white px-2.5 py-2">
+            <p className="truncate text-micro uppercase text-slate-400">{comparison.primaryLabel}</p>
+            <p className="mt-1 truncate font-mono text-footnote font-bold text-slate-900">{formatCompareValue(value, comparison.suffix)}</p>
           </div>
-          <div className="min-w-0 rounded-lg bg-white px-2.5 py-2">
-            <p className="truncate text-[10px] font-bold uppercase tracking-wider text-slate-400">{comparison.secondaryLabel}</p>
-            <p className="mt-1 truncate font-mono text-xs font-bold text-slate-600">{formatCompareValue(comparison.secondaryValue, comparison.suffix)}</p>
+          <div className="min-w-0 rounded-control bg-white px-2.5 py-2">
+            <p className="truncate text-micro uppercase text-slate-400">{comparison.secondaryLabel}</p>
+            <p className="mt-1 truncate font-mono text-footnote font-bold text-slate-600">{formatCompareValue(comparison.secondaryValue, comparison.suffix)}</p>
           </div>
         </div>
       )}
@@ -422,19 +422,19 @@ export function CompareSummaryTile({
     : undefined;
 
   return (
-    <div className="rounded-xl bg-slate-50 px-4 py-3">
+    <div className="rounded-card bg-slate-50 px-4 py-3">
       <div className="flex items-center justify-between gap-2">
-        <p className="min-w-0 truncate text-[10px] font-bold uppercase tracking-wider text-slate-400">{tra(title)}</p>
+        <p className="min-w-0 truncate text-micro uppercase text-slate-400">{tra(title)}</p>
         <CompareDeltaBadge delta={delta} suffix={suffix} inverse={inverse} />
       </div>
       <div className="mt-3 grid grid-cols-2 gap-2">
-        <div className="min-w-0 rounded-lg bg-white px-3 py-2">
-          <p className="truncate text-[10px] font-bold uppercase tracking-wider text-slate-400">{primaryLabel}</p>
-          <p className="mt-1 truncate font-mono text-sm font-bold text-slate-900">{formatCompareValue(primaryValue, suffix)}</p>
+        <div className="min-w-0 rounded-control bg-white px-3 py-2">
+          <p className="truncate text-micro uppercase text-slate-400">{primaryLabel}</p>
+          <p className="mt-1 truncate font-mono text-headline text-slate-900">{formatCompareValue(primaryValue, suffix)}</p>
         </div>
-        <div className="min-w-0 rounded-lg bg-white px-3 py-2">
-          <p className="truncate text-[10px] font-bold uppercase tracking-wider text-slate-400">{secondaryLabel}</p>
-          <p className="mt-1 truncate font-mono text-sm font-bold text-slate-600">{formatCompareValue(secondaryValue, suffix)}</p>
+        <div className="min-w-0 rounded-control bg-white px-3 py-2">
+          <p className="truncate text-micro uppercase text-slate-400">{secondaryLabel}</p>
+          <p className="mt-1 truncate font-mono text-headline text-slate-600">{formatCompareValue(secondaryValue, suffix)}</p>
         </div>
       </div>
     </div>

@@ -10,6 +10,7 @@ import type {
   EmergencyContact,
   PurchaseMethod
 } from '../types';
+import { getStartFromDuration, parseYearsMonthsText } from './customerApplicationForm';
 
 type PasteSection = 'personal' | 'contact_1' | 'contact_2' | 'employment' | 'status';
 
@@ -31,6 +32,8 @@ export type ParsedCustomerPaste = {
   preferences: Partial<CustomerPreferences>;
   matched_fields: string[];
   skipped_labels: string[];
+  /** Lines with no label the parser knows (an unknown heading, a stray note); never glued onto a value. */
+  unknown_lines: string[];
   warnings: string[];
 };
 
@@ -45,6 +48,64 @@ const normalizeLabel = (value: string) => value
 const digitsOnly = (value: string) => value.replace(/\D/g, '');
 
 const firstNumber = (value: string) => value.match(/\d+(?:\.\d+)?/)?.[0] || value.trim();
+
+/** "2 TAHUN 3 BULAN" -> whole years plus the start year/month that many months ago. */
+const parseDuration = (value: string, now: Date) => {
+  const duration = parseYearsMonthsText(value);
+  if (!duration) return null;
+  const start = getStartFromDuration(duration.years, duration.months, now);
+  return { years: String(duration.years), startYear: start.year, startMonth: start.month };
+};
+
+// A line copied out of a WhatsApp chat starts with "[16/10/26, 10:30] Ali: " (iOS)
+// or "16/10/2026, 10:30 am - Ali: " (Android); the form text follows it.
+const WHATSAPP_PREFIX_PATTERNS = [
+  /^\[\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4},?\s+\d{1,2}[:.]\d{2}(?:[:.]\d{2})?\s*(?:[AP]\.?M\.?)?\]\s*[^:]{1,40}:\s*/i,
+  /^\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4},?\s+\d{1,2}[:.]\d{2}(?:[:.]\d{2})?\s*(?:[AP]\.?M\.?)?\s+-\s+[^:]{1,40}:\s*/i
+];
+
+const stripWhatsAppDecoration = (line: string) => {
+  const withoutPrefix = WHATSAPP_PREFIX_PATTERNS.reduce((current, pattern) => current.replace(pattern, ''), line)
+    // A full-width colon typed on a Chinese keyboard.
+    .replace(/[：﹕]/g, ':');
+  // WhatsApp bold / italic markers and list bullets around a label or value.
+  return withoutPrefix
+    .replace(/^[\s*_~•\-–]+/, '')
+    // "1. NAMA PENUH : ..." / "2) NO IC : ..." — numbered form questions.
+    .replace(/^\(?\d{1,2}[.)]\s*(?=[A-Za-z*_~])/, '')
+    .replace(/^[\s*_~]+/, '')
+    .replace(/[*_~]+(?=\s*:)/g, '')
+    .replace(/:\s*[*_~]+/, ': ')
+    .replace(/[*_~]+$/, '')
+    .trim();
+};
+
+// "NAMA PENUH - Ali" / "NO IC = 990101..." when the form has no colon. Only a short
+// label of letters counts, so "A-3-01 jalan" or an IC with dashes stays a value.
+const DASH_LABEL_PATTERN = /^([A-Za-z][A-Za-z /().']{1,40}?)\s+[-–=]\s+(.+)$/;
+
+// Words that make a line without a colon read as a heading, not as the next line
+// of an address.
+const HEADING_WORDS = /\b(MAKLUMAT|BUTIRAN|BAHAGIAN|SECTION|WARIS|KENALAN|RUJUKAN|PENJAMIN|REFERENCE|EMERGENCY|PEKERJAAN|MAJIKAN|EMPLOYMENT|PERIBADI|PERSONAL|PEMOHON|DETAIL|DETAILS|INFO)\b/;
+
+// Only an address runs over several lines in these forms; any other value is one line.
+const isMultiLineLabel = (label: string) => label.includes('ALAMAT') || label.includes('ADDRESS');
+
+const MAIN_PHONE_LABELS = new Set([
+  'NO TELEFON',
+  'NO TEL',
+  'TEL',
+  'TELEFON',
+  'PHONE',
+  'PHONE NUMBER',
+  'NO HP',
+  'NO H/P',
+  'H/P',
+  'HP',
+  'WHATSAPP',
+  'NO WHATSAPP',
+  'NOMBOR WHATSAPP'
+]);
 
 const normalizeMaritalStatus = (value: string) => {
   const normalized = normalizeLabel(value);
@@ -87,36 +148,55 @@ const normalizeRace = (value: string) => {
   return value.trim();
 };
 
-const resolveSectionHeader = (line: string): PasteSection | undefined => {
+const CONTACT_HEADING = /^(?:MAKLUMAT )?(?:EMERGENCY CONTACT|KENALAN KECEMASAN|KENALAN|WARIS(?: TERDEKAT)?|SAUDARA(?: TERDEKAT)?|RUJUKAN|REFERENCE|PENJAMIN)(?: (1|2|PERTAMA|KEDUA|SATU|DUA))?$/;
+
+// contactsSeen: how many contact headings came before, so an unnumbered "WARIS"
+// heading means the first contact and the next one the second.
+const resolveSectionHeader = (line: string, contactsSeen: number): PasteSection | undefined => {
   const normalized = normalizeLabel(line);
-  if (/^(EMERGENCY CONTACT|KENALAN KECEMASAN) 1$/.test(normalized)) return 'contact_1';
-  if (/^(EMERGENCY CONTACT|KENALAN KECEMASAN) 2$/.test(normalized)) return 'contact_2';
-  if (normalized.includes('MAKLUMAT SYARIKAT') || normalized.includes('MAKLUMAT PEKERJAAN')) return 'employment';
+  const contact = normalized.match(CONTACT_HEADING);
+  if (contact) {
+    const which = contact[1];
+    if (which === '1' || which === 'PERTAMA' || which === 'SATU') return 'contact_1';
+    if (which === '2' || which === 'KEDUA' || which === 'DUA') return 'contact_2';
+    return contactsSeen === 0 ? 'contact_1' : 'contact_2';
+  }
+  if (
+    /^(?:MAKLUMAT|BUTIRAN) (?:SYARIKAT|PEKERJAAN|KERJA|MAJIKAN)\b/.test(normalized)
+    || /^(?:PEKERJAAN|EMPLOYMENT(?: DETAILS| INFO)?|EMPLOYER)$/.test(normalized)
+  ) return 'employment';
   if (normalized === 'STATUS') return 'status';
-  if (normalized.includes('ISI DETAIL MAKLUMAT') || normalized.includes('MAKLUMAT PERIBADI')) return 'personal';
+  if (
+    normalized.includes('ISI DETAIL MAKLUMAT')
+    || /^(?:MAKLUMAT|BUTIRAN) (?:PERIBADI|PEMOHON|DIRI)\b/.test(normalized)
+    || /^PERSONAL(?: DETAILS| INFO| INFORMATION)?$/.test(normalized)
+  ) return 'personal';
   return undefined;
 };
 
-const collectParsedLines = (text: string): ParsedLine[] => {
+const collectParsedLines = (text: string): { parsedLines: ParsedLine[]; unknownLines: string[] } => {
   const parsedLines: ParsedLine[] = [];
+  const unknownLines: string[] = [];
   let section: PasteSection = 'personal';
+  let contactsSeen = 0;
   let lastParsedLine: ParsedLine | undefined;
 
   text.replace(/\r\n?/g, '\n').split('\n').forEach((rawLine) => {
-    const line = rawLine.trim();
+    const line = stripWhatsAppDecoration(rawLine.trim());
     if (!line) {
       lastParsedLine = undefined;
       return;
     }
 
-    const nextSection = resolveSectionHeader(line);
+    const nextSection = resolveSectionHeader(line, contactsSeen);
     if (nextSection) {
       section = nextSection;
+      if (nextSection === 'contact_1' || nextSection === 'contact_2') contactsSeen += 1;
       lastParsedLine = undefined;
       return;
     }
 
-    const match = line.match(/^([^:]+?)\s*:\s*(.*)$/);
+    const match = line.match(/^([^:]+?)\s*:\s*(.*)$/) || line.match(DASH_LABEL_PATTERN);
     if (match) {
       const label = normalizeLabel(match[1]);
       const value = match[2].trim();
@@ -129,15 +209,24 @@ const collectParsedLines = (text: string): ParsedLine[] => {
       return;
     }
 
-    if (lastParsedLine && !/^RESPONSE\s*#/i.test(line) && normalizeLabel(line) !== 'YAMI') {
-      lastParsedLine.value = `${lastParsedLine.value} ${line}`.trim();
+    if (/^RESPONSE\s*#/i.test(line) || normalizeLabel(line) === 'YAMI') {
+      return;
     }
+    // A line without a label continues only an address, and never when it reads
+    // like a heading: "Ali" + "MAKLUMAT KERJA" used to become one contact name and
+    // push the whole employment block into the contact.
+    if (lastParsedLine && isMultiLineLabel(lastParsedLine.label) && !HEADING_WORDS.test(normalizeLabel(line))) {
+      lastParsedLine.value = `${lastParsedLine.value} ${line}`.trim();
+      return;
+    }
+    lastParsedLine = undefined;
+    unknownLines.push(line);
   });
 
-  return parsedLines;
+  return { parsedLines, unknownLines };
 };
 
-export function parseCustomerPasteText(text: string): ParsedCustomerPaste {
+export function parseCustomerPasteText(text: string, now: Date = new Date()): ParsedCustomerPaste {
   const result: ParsedCustomerPaste = {
     personal_info: {},
     emergency_contacts: [{}, {}],
@@ -145,6 +234,7 @@ export function parseCustomerPasteText(text: string): ParsedCustomerPaste {
     preferences: {},
     matched_fields: [],
     skipped_labels: [],
+    unknown_lines: [],
     warnings: []
   };
   const matchedFields = new Set<string>();
@@ -152,7 +242,9 @@ export function parseCustomerPasteText(text: string): ParsedCustomerPaste {
   const warnings = new Set<string>();
   const markMatched = (field: string) => matchedFields.add(field);
 
-  collectParsedLines(text).forEach(({ section, label, value }) => {
+  const { parsedLines, unknownLines } = collectParsedLines(text);
+  result.unknown_lines = unknownLines;
+  parsedLines.forEach(({ section, label, value }) => {
     if (section === 'contact_1' || section === 'contact_2') {
       const contactIndex = section === 'contact_1' ? 0 : 1;
       const contact = result.emergency_contacts[contactIndex];
@@ -167,7 +259,7 @@ export function parseCustomerPasteText(text: string): ParsedCustomerPaste {
       } else if (label.includes('ALAMAT')) {
         contact.full_address = value;
         markMatched(`${fieldPrefix}.full_address`);
-      } else if (label.includes('TELEFON') || label.includes('PHONE')) {
+      } else if (label.includes('TELEFON') || label.includes('PHONE') || MAIN_PHONE_LABELS.has(label)) {
         contact.phone_no = digitsOnly(value);
         markMatched(`${fieldPrefix}.phone_no`);
       } else {
@@ -177,7 +269,7 @@ export function parseCustomerPasteText(text: string): ParsedCustomerPaste {
     }
 
     if (section === 'employment') {
-      if (label === 'NAMA SYARIKAT' || label === 'COMPANY NAME') {
+      if (label === 'NAMA SYARIKAT' || label === 'NAMA MAJIKAN' || label === 'COMPANY NAME' || label === 'EMPLOYER') {
         result.employment_details.company_name = value;
         markMatched('employment_details.company_name');
       } else if (label.includes('JENIS PERNIAGAAN') || label.includes('BUSINESS TYPE')) {
@@ -185,13 +277,15 @@ export function parseCustomerPasteText(text: string): ParsedCustomerPaste {
       } else if (label.includes('JAWATAN') || label === 'POSITION') {
         result.employment_details.position = value;
         markMatched('employment_details.position');
-      } else if (label.includes('KERJA BERAPA') || label.includes('TEMPOH BEKERJA') || label.includes('YEARS EMPLOYED')) {
-        result.employment_details.years_employed = firstNumber(value);
-        markMatched('employment_details.years_employed');
-        if (/\b(BULAN|MONTHS?)\b/i.test(value)) {
-          warnings.add('Employment duration was supplied in months; verify the Years Employed value.');
+      } else if (label.includes('KERJA BERAPA') || label.includes('TEMPOH BEKERJA') || label.includes('TEMPOH KERJA') || label.includes('TEMPOH BERKHIDMAT') || label.includes('YEARS EMPLOYED')) {
+        const duration = parseDuration(value, now);
+        result.employment_details.years_employed = duration ? duration.years : value.trim();
+        if (duration) {
+          result.employment_details.employment_start_year = duration.startYear;
+          result.employment_details.employment_start_month = duration.startMonth;
         }
-      } else if (label.includes('ALAMAT') && label.includes('SYARIKAT')) {
+        markMatched('employment_details.years_employed');
+      } else if (label.includes('ALAMAT') && (label.includes('SYARIKAT') || label.includes('MAJIKAN') || label.includes('PEJABAT') || label.includes('KERJA'))) {
         result.employment_details.company_address = value;
         markMatched('employment_details.company_address');
       } else if (label.includes('TELEFON PEJABAT') || label.includes('OFFICE PHONE')) {
@@ -237,7 +331,7 @@ export function parseCustomerPasteText(text: string): ParsedCustomerPaste {
     } else if (label === 'NOMBOR IC' || label === 'NO IC' || label === 'IC') {
       result.ic_no = digitsOnly(value);
       markMatched('ic_no');
-    } else if (label.includes('NOMBOR TELEFON') || label === 'NO TELEFON' || label === 'PHONE NUMBER') {
+    } else if (label.includes('NOMBOR TELEFON') || label.includes('TELEFON BIMBIT') || MAIN_PHONE_LABELS.has(label)) {
       result.phone_no = digitsOnly(value);
       markMatched('phone_no');
     } else if (label === 'JANTINA' || label === 'GENDER') {
@@ -249,6 +343,9 @@ export function parseCustomerPasteText(text: string): ParsedCustomerPaste {
     } else if (label.includes('STATUS PERKAHWINAN') || label === 'MARITAL STATUS') {
       result.personal_info.marital_status = normalizeMaritalStatus(value);
       markMatched('personal_info.marital_status');
+    } else if (label.includes('BILANGAN ANAK') || label === 'ANAK' || label.includes('NUMBER OF CHILDREN')) {
+      result.personal_info.number_of_children = digitsOnly(value).slice(0, 2) || '0';
+      markMatched('personal_info.number_of_children');
     } else if (label === 'NAMA BANK' || label === 'BANK NAME') {
       result.personal_info.bank_name = value;
       markMatched('personal_info.bank_name');
@@ -260,17 +357,23 @@ export function parseCustomerPasteText(text: string): ParsedCustomerPaste {
       markMatched('personal_info.email');
     } else if (
       label === 'ALAMAT PENUH'
+      || label === 'ALAMAT'
       || label === 'FULL ADDRESS'
       || label === 'ALAMAT TETAP IC'
       || label === 'PERMANENT ADDRESS IC'
     ) {
       result.personal_info.full_address = value;
       markMatched('personal_info.full_address');
-    } else if (label === 'ALAMAT KEDIAMAN' || label === 'RESIDENT ADDRESS') {
+    } else if (label === 'ALAMAT KEDIAMAN' || label === 'ALAMAT RUMAH' || label === 'ALAMAT SEKARANG' || label === 'RESIDENT ADDRESS') {
       result.personal_info.resident_address = value;
       markMatched('personal_info.resident_address');
     } else if (label.includes('MENETAP BERAPA') || label.includes('YEARS AT RESIDENCE')) {
-      result.personal_info.years_at_residence = firstNumber(value);
+      const duration = parseDuration(value, now);
+      result.personal_info.years_at_residence = duration ? duration.years : value.trim();
+      if (duration) {
+        result.personal_info.residence_start_year = duration.startYear;
+        result.personal_info.residence_start_month = duration.startMonth;
+      }
       markMatched('personal_info.years_at_residence');
     } else if (label.includes('STATUS KEDIAMAN') || label === 'HOUSING STATUS') {
       result.personal_info.housing_status = normalizeHousingStatus(value);

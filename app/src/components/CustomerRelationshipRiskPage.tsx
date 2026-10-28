@@ -21,6 +21,7 @@ import { createRawLeadImportFingerprint } from '../utils/rawLeadImportExclusions
 import { normalizeMalaysiaPhoneNationalDigits } from '../utils/malaysiaPhone';
 import StaffAvatar from './StaffAvatar';
 import ToggleOptionGroup from './ToggleOptionGroup';
+import { hasAdminWorkAccess } from '../utils/staffRoles';
 
 type RiskKind = 'application_duplicate' | 'lead_duplicate' | 'lead_application_match';
 type RiskSeverity = 'high' | 'warning' | 'relationship';
@@ -152,7 +153,7 @@ const getSeverity = (kind: RiskKind, field: CustomerRiskField): RiskSeverity => 
 
 const getSourcePillClass = (label: string): string => {
   const value = (label || '').toLowerCase();
-  if (value.includes('申请') || value.includes('application')) return 'bg-red-50 text-red-700';
+  if (value.includes('申请') || value.includes('application')) return 'bg-brand-50 text-brand-ink';
   if (value.includes('tiktok')) return 'bg-slate-900 text-white';
   if (value.includes('facebook')) return 'bg-blue-50 text-blue-700';
   if (value.includes('instagram')) return 'bg-pink-50 text-pink-700';
@@ -209,7 +210,7 @@ export default function CustomerRelationshipRiskPage({
   const [pendingDeleteLeadId, setPendingDeleteLeadId] = useState('');
   const [metaStatus, setMetaStatus] = useState<'loading' | 'ready' | 'readonly' | 'saving' | 'error'>('loading');
   const canViewAll = currentStaffRole === 'Super Admin';
-  const canViewAllPublicRelationships = currentStaffRole === 'Super Admin' || currentStaffRole === 'Admin';
+  const canViewAllPublicRelationships = hasAdminWorkAccess(currentStaffRole);
   const canManageRelationshipMeta = canViewAllPublicRelationships && metaStatus === 'ready';
   const canDeleteDuplicatedLeads = canManageRelationshipMeta;
 
@@ -525,17 +526,17 @@ export default function CustomerRelationshipRiskPage({
   return (
     <div className="space-y-6">
       <section>
-        <h2 className="text-xl font-bold tracking-tight text-slate-900">{tr('潜在客户关系', 'Potential Customer Relationships', "Hubungan Pelanggan Berpotensi")}</h2>
-        <p className="mt-1 text-xs font-light text-slate-500">{tr('一组关联人只建立一个案件，集中核对所有相同资料。', 'One case per related group, with every matching field in one place.', "Satu kes bagi setiap kumpulan berkaitan, dengan semua medan sepadan di satu tempat.")}</p>
+        <h2 className="text-title-2 text-slate-900">{tr('潜在客户关系', 'Potential Customer Relationships', "Hubungan Pelanggan Berpotensi")}</h2>
+        <p className="mt-1 text-footnote font-normal text-slate-500">{tr('一组关联人只建立一个案件，集中核对所有相同资料。', 'One case per related group, with every matching field in one place.', "Satu kes bagi setiap kumpulan berkaitan, dengan semua medan sepadan di satu tempat.")}</p>
       </section>
 
       {metaStatus === 'error' && (
-        <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs font-semibold text-rose-700">
+        <div className="rounded-card border border-rose-200 bg-rose-50 px-4 py-3 text-footnote text-rose-700">
           {tr('关系案件云端资料加载或保存失败；为防止覆盖现有评论与结案记录，编辑已停用。请刷新后重试。', 'Relationship case metadata could not be loaded or saved. Editing is disabled to prevent overwriting existing comments and case history. Refresh to retry.', "Metadata kes hubungan gagal dimuatkan atau disimpan. Penyuntingan dilumpuhkan untuk mengelakkan ulasan dan sejarah kes sedia ada ditulis ganti. Muat semula untuk mencuba lagi.")}
         </div>
       )}
       {(metaStatus === 'loading' || metaStatus === 'saving') && (
-        <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold text-slate-600">
+        <div className="rounded-card border border-slate-200 bg-slate-50 px-4 py-3 text-footnote text-slate-600">
           {metaStatus === 'loading'
             ? tr('正在载入关系案件云端资料…', 'Loading relationship case metadata…', "Memuatkan metadata kes hubungan…")
             : tr('正在保存关系案件…', 'Saving relationship case…', "Menyimpan kes hubungan…")}
@@ -549,45 +550,45 @@ export default function CustomerRelationshipRiskPage({
           { label: tr('调查中', 'Investigating', "Dalam Siasatan"), value: statusCounts.investigating, tone: 'text-amber-600', icon: <Search className="h-5 w-5 text-amber-500" /> },
           { label: tr('已结案', 'Closed', "Ditutup"), value: statusCounts.closed, tone: 'text-emerald-600', icon: <CheckCircle2 className="h-5 w-5 text-emerald-500" /> }
         ].map((card) => (
-          <div key={card.label} className="rounded-xl border border-slate-100 bg-white p-4 shadow-sm">
+          <div key={card.label} className="rounded-card border border-slate-100 bg-white p-4 shadow-e1">
             <div className="flex items-start justify-between gap-2">
-              <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-600">{card.label}</span>
+              <span className="rounded-chip bg-slate-100 px-1.5 py-0.5 text-micro uppercase text-slate-600">{card.label}</span>
               {card.icon}
             </div>
-            <p className={`mt-2 text-2xl font-bold ${card.tone}`}>{card.value.toLocaleString()}</p>
+            <p className={`mt-2 text-title-2 ${card.tone}`}>{card.value.toLocaleString()}</p>
           </div>
         ))}
       </section>
 
-      <section className="rounded-xl border border-slate-100 bg-white p-4 shadow-sm">
+      <section className="rounded-card border border-slate-100 bg-white p-4 shadow-e1">
         <div className="flex flex-wrap gap-2">
           {(Object.keys(STATUS_LABELS) as RelationshipCaseStatus[]).map((status) => (
-            <button key={status} type="button" onClick={() => setStatusFilter(status)} className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-bold transition-colors ${statusFilter === status ? 'bg-red-800 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>
+            <button key={status} type="button" onClick={() => setStatusFilter(status)} className={`inline-flex items-center gap-2 rounded-control px-3 py-2 text-footnote font-bold transition-colors ${statusFilter === status ? 'bg-brand text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>
               {tr(STATUS_LABELS[status][0], STATUS_LABELS[status][1], STATUS_LABELS[status][2])}
-              <span className={`rounded-full px-1.5 py-0.5 text-[9px] ${statusFilter === status ? 'bg-white/15' : 'bg-white'}`}>{statusCounts[status]}</span>
+              <span className={`rounded-full px-1.5 py-0.5 text-micro tracking-normal ${statusFilter === status ? 'bg-white/15' : 'bg-white'}`}>{statusCounts[status]}</span>
             </button>
           ))}
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
           <label className="relative min-w-[240px] flex-1">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-            <input value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} placeholder={tr('搜索姓名、电话、编号或相同资料', 'Search name, phone, ID or matched value', "Cari nama, telefon, ID atau nilai sepadan")} className="h-10 w-full rounded-lg bg-slate-50 pl-9 pr-3 text-xs outline-none ring-1 ring-slate-100 focus:ring-red-100" />
+            <input value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} placeholder={tr('搜索姓名、电话、编号或相同资料', 'Search name, phone, ID or matched value', "Cari nama, telefon, ID atau nilai sepadan")} className="h-10 w-full rounded-control bg-slate-50 pl-9 pr-3 text-footnote outline-none ring-1 ring-slate-100 focus:ring-brand-100" />
           </label>
-          <ToggleOptionGroup value={kindFilter} onChange={(value) => setKindFilter(value as 'all' | RiskKind)} ariaLabel={tr('关系类型', 'Relationship type', "Jenis hubungan")} className="min-w-[190px] rounded-lg bg-slate-50 p-1 ring-1 ring-slate-100" options={[
+          <ToggleOptionGroup value={kindFilter} onChange={(value) => setKindFilter(value as 'all' | RiskKind)} ariaLabel={tr('关系类型', 'Relationship type', "Jenis hubungan")} className="min-w-[190px] rounded-control bg-slate-50 p-1 ring-1 ring-slate-100" options={[
             { value: 'all', label: tr('全部关系类型', 'All relationship types', "Semua jenis hubungan") },
             ...Object.entries(KIND_LABELS).map(([value, labels]) => ({ value, label: tr(labels[0], labels[1], labels[2]) }))
           ]} />
-          <ToggleOptionGroup value={fieldFilter} onChange={(value) => setFieldFilter(value as 'all' | CustomerRiskField)} ariaLabel={tr('资料类型', 'Data field', "Medan data")} className="min-w-[150px] rounded-lg bg-slate-50 p-1 ring-1 ring-slate-100" options={[
+          <ToggleOptionGroup value={fieldFilter} onChange={(value) => setFieldFilter(value as 'all' | CustomerRiskField)} ariaLabel={tr('资料类型', 'Data field', "Medan data")} className="min-w-[150px] rounded-control bg-slate-50 p-1 ring-1 ring-slate-100" options={[
             { value: 'all', label: tr('全部资料', 'All fields', "Semua medan") },
             ...Object.entries(FIELD_LABELS).map(([value, labels]) => ({ value, label: tr(labels[0], labels[1], labels[2]) }))
           ]} />
-          {(canViewAll || canViewAllPublicRelationships) && <ToggleOptionGroup value={staffFilter} onChange={setStaffFilter} ariaLabel={tr('员工筛选', 'Staff filter', "Penapis kakitangan")} className="min-w-[170px] rounded-lg bg-slate-50 p-1 ring-1 ring-slate-100" options={staffOptions} />}
+          {(canViewAll || canViewAllPublicRelationships) && <ToggleOptionGroup value={staffFilter} onChange={setStaffFilter} ariaLabel={tr('员工筛选', 'Staff filter', "Penapis kakitangan")} className="min-w-[170px] rounded-control bg-slate-50 p-1 ring-1 ring-slate-100" options={staffOptions} />}
         </div>
         <div className="mt-3 flex flex-wrap gap-2">
           {([['all', tr('全部等级', 'All severity', "Semua tahap")], ['high', tr('高风险', 'High Risk', "Berisiko Tinggi")], ['warning', tr('提醒', 'Warning', "Amaran")], ['relationship', tr('关系', 'Relationship', "Hubungan")]] as const).map(([value, label]) => (
-            <button key={value} type="button" onClick={() => setSeverityFilter(value)} className={`rounded-full px-3 py-1.5 text-[11px] font-bold ${severityFilter === value ? 'bg-red-800 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>{label}</button>
+            <button key={value} type="button" onClick={() => setSeverityFilter(value)} className={`rounded-full px-3 py-1.5 text-caption font-semibold ${severityFilter === value ? 'bg-brand text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>{label}</button>
           ))}
-          <span className="ml-auto self-center text-[10px] font-semibold text-slate-400">{tr(`${filteredCases.length} 个案件`, `${filteredCases.length} cases`, `${filteredCases.length} kes`)}</span>
+          <span className="ml-auto self-center text-caption text-slate-400">{tr(`${filteredCases.length} 个案件`, `${filteredCases.length} cases`, `${filteredCases.length} kes`)}</span>
         </div>
       </section>
 
@@ -601,42 +602,42 @@ export default function CustomerRelationshipRiskPage({
           const isOverSla = isActive && (item.severity === 'high' ? ageDays >= 2 : ageDays >= 5);
 
           return (
-            <article key={item.id} className={`rounded-xl border bg-white p-4 shadow-sm ${item.severity === 'high' ? 'border-rose-100' : item.severity === 'warning' ? 'border-amber-100' : 'border-blue-100'}`}>
+            <article key={item.id} className={`rounded-card border bg-white p-4 shadow-e1 ${item.severity === 'high' ? 'border-rose-100' : item.severity === 'warning' ? 'border-amber-100' : 'border-blue-100'}`}>
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className={`rounded-full px-2 py-1 text-[9px] font-bold uppercase ${item.severity === 'high' ? 'bg-rose-50 text-rose-600' : item.severity === 'warning' ? 'bg-amber-50 text-amber-700' : 'bg-blue-50 text-blue-700'}`}>{item.severity === 'high' ? tr('高风险', 'High Risk', "Berisiko Tinggi") : item.severity === 'warning' ? tr('提醒', 'Warning', "Amaran") : tr('关系', 'Relationship', "Hubungan")}</span>
-                    <span className="rounded-full bg-slate-100 px-2 py-1 text-[9px] font-bold text-slate-600">{tr(KIND_LABELS[item.kind][0], KIND_LABELS[item.kind][1], KIND_LABELS[item.kind][2])}</span>
-                    <span className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[9px] font-bold ${isOverSla ? 'bg-rose-50 text-rose-700' : 'bg-slate-100 text-slate-500'}`}><Clock3 className="h-3 w-3" />{formatElapsed(ageDays, state.status === 'closed')}</span>
-                    {state.resolution && <span className="rounded-full bg-emerald-50 px-2 py-1 text-[9px] font-bold text-emerald-700">{tr(RESOLUTION_LABELS[state.resolution][0], RESOLUTION_LABELS[state.resolution][1], RESOLUTION_LABELS[state.resolution][2])}</span>}
+                    <span className={`rounded-full px-2 py-1 text-micro uppercase ${item.severity === 'high' ? 'bg-rose-50 text-rose-600' : item.severity === 'warning' ? 'bg-amber-50 text-amber-700' : 'bg-blue-50 text-blue-700'}`}>{item.severity === 'high' ? tr('高风险', 'High Risk', "Berisiko Tinggi") : item.severity === 'warning' ? tr('提醒', 'Warning', "Amaran") : tr('关系', 'Relationship', "Hubungan")}</span>
+                    <span className="rounded-full bg-slate-100 px-2 py-1 text-micro tracking-normal text-slate-600">{tr(KIND_LABELS[item.kind][0], KIND_LABELS[item.kind][1], KIND_LABELS[item.kind][2])}</span>
+                    <span className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-micro tracking-normal ${isOverSla ? 'bg-rose-50 text-rose-700' : 'bg-slate-100 text-slate-500'}`}><Clock3 className="h-3 w-3" />{formatElapsed(ageDays, state.status === 'closed')}</span>
+                    {state.resolution && <span className="rounded-full bg-emerald-50 px-2 py-1 text-micro tracking-normal text-emerald-700">{tr(RESOLUTION_LABELS[state.resolution][0], RESOLUTION_LABELS[state.resolution][1], RESOLUTION_LABELS[state.resolution][2])}</span>}
                   </div>
                   <div className="mt-2 flex flex-wrap gap-1.5">
-                    {item.matches.map((match) => <span key={`${match.field}:${match.value}`} className={`rounded-full px-2 py-1 text-[9px] font-bold ${FIELD_PILL_CLASS[match.field]}`}>{tr(FIELD_LABELS[match.field][0], FIELD_LABELS[match.field][1], FIELD_LABELS[match.field][2])} · {match.value}</span>)}
+                    {item.matches.map((match) => <span key={`${match.field}:${match.value}`} className={`rounded-full px-2 py-1 text-micro tracking-normal ${FIELD_PILL_CLASS[match.field]}`}>{tr(FIELD_LABELS[match.field][0], FIELD_LABELS[match.field][1], FIELD_LABELS[match.field][2])} · {match.value}</span>)}
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center justify-end gap-2">
                   {isActive && canManageRelationshipMeta ? (
-                    <ToggleOptionGroup value={state.assigned_to} onChange={(value) => updateCaseState(view, { assigned_to: value, status: value && state.status === 'new' ? 'investigating' : state.status })} ariaLabel={tr('案件负责人', 'Case owner', "Pemilik kes")} className="min-w-[155px] rounded-lg bg-slate-50 p-1 ring-1 ring-slate-100" options={assignmentOptions} />
+                    <ToggleOptionGroup value={state.assigned_to} onChange={(value) => updateCaseState(view, { assigned_to: value, status: value && state.status === 'new' ? 'investigating' : state.status })} ariaLabel={tr('案件负责人', 'Case owner', "Pemilik kes")} className="min-w-[155px] rounded-control bg-slate-50 p-1 ring-1 ring-slate-100" options={assignmentOptions} />
                   ) : state.assigned_to ? (
-                    <span className="inline-flex items-center gap-1.5 rounded-full bg-violet-50 px-2 py-1 text-[10px] font-bold text-violet-700">
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-violet-50 px-2 py-1 text-micro tracking-normal text-violet-700">
                       <StaffAvatar name={state.assigned_to} avatarDataUrl={assignedAccount?.avatar_data_url} className="h-5 w-5" textClassName="text-[7px]" />{state.assigned_to}
                     </span>
                   ) : isActive && canManageRelationshipMeta ? (
-                    <button type="button" onClick={() => updateCaseState(view, { assigned_to: currentStaffName, status: 'investigating' })} className="rounded-lg bg-violet-50 px-2.5 py-1.5 text-[10px] font-bold text-violet-700">{tr('由我处理', 'Assign to me', "Tugaskan kepada saya")}</button>
+                    <button type="button" onClick={() => updateCaseState(view, { assigned_to: currentStaffName, status: 'investigating' })} className="rounded-control bg-violet-50 px-2.5 py-1.5 text-micro tracking-normal text-violet-700">{tr('由我处理', 'Assign to me', "Tugaskan kepada saya")}</button>
                   ) : null}
-                  {canManageRelationshipMeta && state.status === 'new' && <button type="button" onClick={() => updateCaseState(view, { status: 'investigating', assigned_to: state.assigned_to || currentStaffName })} className="rounded-lg bg-amber-600 px-2.5 py-1.5 text-[10px] font-bold text-white">{tr('开始调查', 'Start investigation', "Mulakan siasatan")}</button>}
-                  {canManageRelationshipMeta && isActive && comments.length > 0 && <button type="button" onClick={() => setClosingCaseId(closingCaseId === item.id ? '' : item.id)} className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-2.5 py-1.5 text-[10px] font-bold text-white"><Archive className="h-3 w-3" />{tr('结案', 'Close Case', "Tutup Kes")}</button>}
-                  {canManageRelationshipMeta && isActive && <button type="button" onClick={() => updateCaseState(view, { status: 'hidden' })} className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-[10px] font-bold text-slate-400 ring-1 ring-slate-100"><EyeOff className="h-3 w-3" />{tr('隐藏', 'Hide', "Sembunyi")}</button>}
-                  {canManageRelationshipMeta && state.status === 'closed' && <button type="button" onClick={() => updateCaseState(view, { status: comments.length > 0 ? 'investigating' : 'new', resolution: undefined, closed_by: undefined, closed_at: undefined })} className="inline-flex items-center gap-1 rounded-lg bg-white px-2 py-1.5 text-[10px] font-bold text-slate-500 ring-1 ring-slate-100"><ArchiveRestore className="h-3 w-3" />{tr('重新开启', 'Reopen', "Buka semula")}</button>}
-                  {canManageRelationshipMeta && state.status === 'hidden' && <button type="button" onClick={() => updateCaseState(view, { status: comments.length > 0 ? 'investigating' : 'new' })} className="inline-flex items-center gap-1 rounded-lg bg-white px-2 py-1.5 text-[10px] font-bold text-slate-500 ring-1 ring-slate-100"><ArchiveRestore className="h-3 w-3" />{tr('恢复', 'Restore', "Pulihkan")}</button>}
+                  {canManageRelationshipMeta && state.status === 'new' && <button type="button" onClick={() => updateCaseState(view, { status: 'investigating', assigned_to: state.assigned_to || currentStaffName })} className="rounded-control bg-amber-600 px-2.5 py-1.5 text-micro tracking-normal text-white">{tr('开始调查', 'Start investigation', "Mulakan siasatan")}</button>}
+                  {canManageRelationshipMeta && isActive && comments.length > 0 && <button type="button" onClick={() => setClosingCaseId(closingCaseId === item.id ? '' : item.id)} className="inline-flex items-center gap-1 rounded-control bg-emerald-600 px-2.5 py-1.5 text-micro tracking-normal text-white"><Archive className="h-3 w-3" />{tr('结案', 'Close Case', "Tutup Kes")}</button>}
+                  {canManageRelationshipMeta && isActive && <button type="button" onClick={() => updateCaseState(view, { status: 'hidden' })} className="inline-flex items-center gap-1 rounded-control px-2 py-1.5 text-micro tracking-normal text-slate-400 ring-1 ring-slate-100"><EyeOff className="h-3 w-3" />{tr('隐藏', 'Hide', "Sembunyi")}</button>}
+                  {canManageRelationshipMeta && state.status === 'closed' && <button type="button" onClick={() => updateCaseState(view, { status: comments.length > 0 ? 'investigating' : 'new', resolution: undefined, closed_by: undefined, closed_at: undefined })} className="inline-flex items-center gap-1 rounded-control bg-white px-2 py-1.5 text-micro tracking-normal text-slate-500 ring-1 ring-slate-100"><ArchiveRestore className="h-3 w-3" />{tr('重新开启', 'Reopen', "Buka semula")}</button>}
+                  {canManageRelationshipMeta && state.status === 'hidden' && <button type="button" onClick={() => updateCaseState(view, { status: comments.length > 0 ? 'investigating' : 'new' })} className="inline-flex items-center gap-1 rounded-control bg-white px-2 py-1.5 text-micro tracking-normal text-slate-500 ring-1 ring-slate-100"><ArchiveRestore className="h-3 w-3" />{tr('恢复', 'Restore', "Pulihkan")}</button>}
                 </div>
               </div>
 
               {closingCaseId === item.id && (
-                <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg bg-emerald-50 p-3 ring-1 ring-emerald-100">
-                  <span className="text-[10px] font-bold text-emerald-800">{tr('选择结案结果', 'Select resolution', "Pilih keputusan")}</span>
-                  <ToggleOptionGroup value={resolutionDrafts[item.id] || ''} onChange={(value) => setResolutionDrafts((current) => ({ ...current, [item.id]: value as RelationshipResolution }))} ariaLabel={tr('结案结果', 'Resolution', "Keputusan")} className="min-w-[250px] rounded-lg bg-white p-1 ring-1 ring-emerald-100" options={resolutionOptions} />
-                  <button type="button" disabled={!resolutionDrafts[item.id]} onClick={() => handleCloseCase(view)} className="rounded-lg bg-emerald-700 px-3 py-2 text-[10px] font-bold text-white disabled:bg-emerald-200">{tr('确认结案', 'Confirm close', "Sahkan tutup")}</button>
+                <div className="mt-3 flex flex-wrap items-center gap-2 rounded-control bg-emerald-50 p-3 ring-1 ring-emerald-100">
+                  <span className="text-micro tracking-normal text-emerald-800">{tr('选择结案结果', 'Select resolution', "Pilih keputusan")}</span>
+                  <ToggleOptionGroup value={resolutionDrafts[item.id] || ''} onChange={(value) => setResolutionDrafts((current) => ({ ...current, [item.id]: value as RelationshipResolution }))} ariaLabel={tr('结案结果', 'Resolution', "Keputusan")} className="min-w-[250px] rounded-control bg-white p-1 ring-1 ring-emerald-100" options={resolutionOptions} />
+                  <button type="button" disabled={!resolutionDrafts[item.id]} onClick={() => handleCloseCase(view)} className="rounded-control bg-emerald-700 px-3 py-2 text-micro tracking-normal text-white disabled:bg-emerald-200">{tr('确认结案', 'Confirm close', "Sahkan tutup")}</button>
                 </div>
               )}
 
@@ -646,31 +647,31 @@ export default function CustomerRelationshipRiskPage({
                   const sourceLead = person.lead || (person.source === 'lead' ? rawLeadById.get(person.id) : undefined);
                   const values = getPersonFieldValues(sourceLead && !person.lead ? { ...person, lead: sourceLead } : person);
                   return (
-                    <div key={`${item.id}:${person.source}:${person.id}`} className="rounded-lg bg-slate-50 p-3 ring-1 ring-slate-100">
+                    <div key={`${item.id}:${person.source}:${person.id}`} className="rounded-control bg-slate-50 p-3 ring-1 ring-slate-100">
                       <div className="flex items-start gap-3">
-                        <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${person.source === 'application' ? 'bg-red-50 text-red-700' : 'bg-blue-50 text-blue-700'}`}>{person.source === 'application' ? <ShieldAlert className="h-4 w-4" /> : <Users className="h-4 w-4" />}</div>
+                        <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-control ${person.source === 'application' ? 'bg-brand-50 text-brand-ink' : 'bg-blue-50 text-blue-700'}`}>{person.source === 'application' ? <ShieldAlert className="h-4 w-4" /> : <Users className="h-4 w-4" />}</div>
                         <div className="min-w-0 flex-1">
                           <div className="flex flex-wrap items-center gap-1.5">
-                            <p className="truncate text-xs font-bold text-slate-800" title={person.name}>{person.name}</p>
-                            <span className={`rounded-full px-1.5 py-0.5 text-[8px] font-bold ${getSourcePillClass(person.sourceLabel)}`}>{person.sourceLabel}</span>
-                            {person.privateOwner && <span className="rounded-full bg-violet-50 px-1.5 py-0.5 text-[8px] font-bold text-violet-700">{tr('私人关联', 'Private Link', "Pautan Peribadi")}</span>}
+                            <p className="truncate text-footnote font-bold text-slate-800" title={person.name}>{person.name}</p>
+                            <span className={`rounded-full px-1.5 py-0.5 text-micro tracking-normal ${getSourcePillClass(person.sourceLabel)}`}>{person.sourceLabel}</span>
+                            {person.privateOwner && <span className="rounded-full bg-violet-50 px-1.5 py-0.5 text-micro tracking-normal text-violet-700">{tr('私人关联', 'Private Link', "Pautan Peribadi")}</span>}
                           </div>
-                          <p className="mt-0.5 text-[9px] font-medium text-slate-400">{person.id}{person.date ? ` · ${new Date(person.date).toLocaleDateString(getAppLocale())}` : ''}</p>
-                          <span className="mt-1 inline-flex items-center gap-1.5 text-[10px] font-bold text-violet-600"><StaffAvatar name={person.handler} avatarDataUrl={handlerAccount?.avatar_data_url} className="h-5 w-5" textClassName="text-[7px]" />{person.handler}</span>
+                          <p className="mt-0.5 text-micro tracking-normal font-medium text-slate-400">{person.id}{person.date ? ` · ${new Date(person.date).toLocaleDateString(getAppLocale())}` : ''}</p>
+                          <span className="mt-1 inline-flex items-center gap-1.5 text-micro tracking-normal text-violet-600"><StaffAvatar name={person.handler} avatarDataUrl={handlerAccount?.avatar_data_url} className="h-5 w-5" textClassName="text-[7px]" />{person.handler}</span>
                         </div>
                         <div className="flex shrink-0 items-center gap-1.5">
                           {item.kind === 'lead_duplicate' && sourceLead && canDeleteDuplicatedLeads && (
                             pendingDeleteLeadId === sourceLead.id ? (
                               <>
-                                <button type="button" onClick={() => handleDeleteDuplicatedLead(sourceLead)} className="rounded-lg bg-rose-600 px-2.5 py-2 text-[9px] font-bold text-white">{tr('确认删除', 'Confirm delete', "Sahkan padam")}</button>
-                                <button type="button" onClick={() => setPendingDeleteLeadId('')} className="rounded-lg bg-white px-2.5 py-2 text-[9px] font-bold text-slate-500 ring-1 ring-slate-100">{tr('取消', 'Cancel', "Batal")}</button>
+                                <button type="button" onClick={() => handleDeleteDuplicatedLead(sourceLead)} className="rounded-control bg-rose-600 px-2.5 py-2 text-micro tracking-normal text-white">{tr('确认删除', 'Confirm delete', "Sahkan padam")}</button>
+                                <button type="button" onClick={() => setPendingDeleteLeadId('')} className="rounded-control bg-white px-2.5 py-2 text-micro tracking-normal text-slate-500 ring-1 ring-slate-100">{tr('取消', 'Cancel', "Batal")}</button>
                               </>
                             ) : (
-                              <button type="button" onClick={() => setPendingDeleteLeadId(sourceLead.id)} className="inline-flex h-8 items-center gap-1 rounded-lg bg-white px-2 text-[9px] font-bold text-rose-600 ring-1 ring-rose-100 hover:bg-rose-50" title={tr('删除并排除未来导入', 'Delete and exclude from future imports', "Padam dan kecualikan daripada import akan datang")}><Trash2 className="h-3.5 w-3.5" />{tr('删除名单', 'Delete Lead', "Padam Prospek")}</button>
+                              <button type="button" onClick={() => setPendingDeleteLeadId(sourceLead.id)} className="inline-flex h-8 items-center gap-1 rounded-control bg-white px-2 text-micro tracking-normal text-rose-600 ring-1 ring-rose-100 hover:bg-rose-50" title={tr('删除并排除未来导入', 'Delete and exclude from future imports', "Padam dan kecualikan daripada import akan datang")}><Trash2 className="h-3.5 w-3.5" />{tr('删除名单', 'Delete Lead', "Padam Prospek")}</button>
                             )
                           )}
                           {(person.application ? canViewAllPublicRelationships || person.handler === currentStaffName : !person.privateOwner || person.privateOwner === currentStaffName || canViewAll) && (
-                            <button type="button" onClick={() => person.application ? onOpenApplication(person.application) : onOpenLeadPool()} className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white text-slate-400 ring-1 ring-slate-100 hover:text-red-700" title={person.source === 'application' ? tr('打开贷款申请', 'Open application', "Buka permohonan") : tr('打开潜在客户', 'Open lead pool', "Buka kumpulan prospek")}><ArrowUpRight className="h-4 w-4" /></button>
+                            <button type="button" onClick={() => person.application ? onOpenApplication(person.application) : onOpenLeadPool()} className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control bg-white text-slate-400 ring-1 ring-slate-100 hover:text-brand-ink" title={person.source === 'application' ? tr('打开贷款申请', 'Open application', "Buka permohonan") : tr('打开潜在客户', 'Open lead pool', "Buka kumpulan prospek")}><ArrowUpRight className="h-4 w-4" /></button>
                           )}
                         </div>
                       </div>
@@ -679,9 +680,9 @@ export default function CustomerRelationshipRiskPage({
                           const displayValues = values[field].filter(Boolean);
                           const isMatched = displayValues.some((value) => item.matches.some((match) => match.field === field && normalizeRiskValue(field, value) === match.value));
                           return (
-                            <div key={field} className={`rounded-md px-2 py-1.5 ${isMatched ? FIELD_PILL_CLASS[field] : 'bg-white text-slate-500'}`}>
-                              <p className="text-[8px] font-bold uppercase opacity-70">{tr(FIELD_LABELS[field][0], FIELD_LABELS[field][1], FIELD_LABELS[field][2])}</p>
-                              <p className="mt-0.5 truncate font-mono text-[9px] font-semibold" title={displayValues.join(' / ')}>{displayValues.join(' / ') || tr('未填写', 'Not filled', "Belum diisi")}</p>
+                            <div key={field} className={`rounded-chip px-2 py-1.5 ${isMatched ? FIELD_PILL_CLASS[field] : 'bg-white text-slate-500'}`}>
+                              <p className="text-micro uppercase opacity-70">{tr(FIELD_LABELS[field][0], FIELD_LABELS[field][1], FIELD_LABELS[field][2])}</p>
+                              <p className="mt-0.5 truncate font-mono text-caption" title={displayValues.join(' / ')}>{displayValues.join(' / ') || tr('未填写', 'Not filled', "Belum diisi")}</p>
                             </div>
                           );
                         })}
@@ -691,21 +692,21 @@ export default function CustomerRelationshipRiskPage({
                 })}
               </div>
 
-              <button type="button" onClick={() => setExpandedCases((current) => ({ ...current, [item.id]: !current[item.id] }))} className="mt-3 flex items-center gap-1.5 border-t border-slate-100 pt-2 text-[10px] font-bold text-slate-400 hover:text-slate-600">
+              <button type="button" onClick={() => setExpandedCases((current) => ({ ...current, [item.id]: !current[item.id] }))} className="mt-3 flex items-center gap-1.5 border-t border-slate-100 pt-2 text-micro tracking-normal text-slate-400 hover:text-slate-600">
                 <MessageSquare className="h-3 w-3" />{comments.length > 0 ? tr(`${comments.length} 条评论`, `${comments.length} comments`, `${comments.length} ulasan`) : tr('添加调查评论', 'Add investigation comment', "Tambah ulasan siasatan")}<span className="font-medium text-slate-300">· {isExpanded ? tr('收起', 'Hide', "Sembunyi") : tr('展开', 'Open', "Buka")}</span>
               </button>
               {isExpanded && (
                 <div className="mt-2" onDoubleClick={(event) => event.stopPropagation()}>
                   {comments.map((comment) => (
-                    <div key={comment.id} className="mb-2 rounded-lg bg-slate-50 px-3 py-2">
-                      <div className="flex items-center justify-between gap-2"><span className="text-[10px] font-bold text-violet-600">{comment.staff_name || tr('员工', 'Staff', "Kakitangan")}</span><span className="text-[9px] font-medium text-slate-400">{comment.created_at ? new Date(comment.created_at).toLocaleString(getAppLocale(), { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}</span></div>
-                      <p className="mt-1 whitespace-pre-wrap break-words text-xs text-slate-700">{comment.text}</p>
+                    <div key={comment.id} className="mb-2 rounded-control bg-slate-50 px-3 py-2">
+                      <div className="flex items-center justify-between gap-2"><span className="text-micro tracking-normal text-violet-600">{comment.staff_name || tr('员工', 'Staff', "Kakitangan")}</span><span className="text-micro tracking-normal font-medium text-slate-400">{comment.created_at ? new Date(comment.created_at).toLocaleString(getAppLocale(), { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}</span></div>
+                      <p className="mt-1 whitespace-pre-wrap break-words text-footnote text-slate-700">{comment.text}</p>
                     </div>
                   ))}
                   {canManageRelationshipMeta && state.status !== 'closed' && state.status !== 'hidden' && (
                     <div className="mt-2 flex items-start gap-2">
-                      <textarea value={commentDrafts[item.id] || ''} onChange={(event) => setCommentDrafts((drafts) => ({ ...drafts, [item.id]: event.target.value }))} rows={1} placeholder={tr('记录调查结果…', 'Record investigation findings…', "Catat dapatan siasatan…")} className="min-h-[38px] flex-1 resize-y rounded-lg bg-slate-50 px-3 py-2 text-xs outline-none ring-1 ring-slate-100 focus:ring-red-100" />
-                      <button type="button" onClick={() => handleAddComment(view)} disabled={!(commentDrafts[item.id] || '').trim()} className="shrink-0 rounded-lg bg-red-800 px-3 py-2 text-[11px] font-bold text-white disabled:bg-slate-200 disabled:text-slate-400">{tr('提交', 'Submit', "Hantar")}</button>
+                      <textarea value={commentDrafts[item.id] || ''} onChange={(event) => setCommentDrafts((drafts) => ({ ...drafts, [item.id]: event.target.value }))} rows={1} placeholder={tr('记录调查结果…', 'Record investigation findings…', "Catat dapatan siasatan…")} className="min-h-[38px] flex-1 resize-y rounded-control bg-slate-50 px-3 py-2 text-footnote outline-none ring-1 ring-slate-100 focus:ring-brand-100" />
+                      <button type="button" onClick={() => handleAddComment(view)} disabled={!(commentDrafts[item.id] || '').trim()} className="shrink-0 rounded-control bg-brand px-3 py-2 text-caption font-semibold text-white disabled:bg-slate-200 disabled:text-slate-400">{tr('提交', 'Submit', "Hantar")}</button>
                     </div>
                   )}
                 </div>
@@ -714,8 +715,8 @@ export default function CustomerRelationshipRiskPage({
           );
         })}
 
-        {filteredCases.length === 0 && <div className="rounded-xl border border-dashed border-slate-200 bg-white px-6 py-14 text-center"><Link2 className="mx-auto h-8 w-8 text-slate-300" /><p className="mt-3 text-sm font-bold text-slate-700">{tr('这个状态没有关系案件', 'No relationship cases in this status', "Tiada kes hubungan dalam status ini")}</p></div>}
-        {filteredCases.length > 6 && <div className="flex gap-2">{visibleCount < filteredCases.length && <button type="button" onClick={() => setVisibleCount((count) => count + 6)} className="flex-1 rounded-xl bg-slate-100 px-4 py-3 text-xs font-bold text-slate-600">{tr(`显示更多（还有 ${filteredCases.length - visibleCount} 个）`, `Show more (${filteredCases.length - visibleCount} remaining)`, `Tunjukkan lagi (${filteredCases.length - visibleCount} berbaki)`)}</button>}{visibleCount > 6 && <button type="button" onClick={() => setVisibleCount(6)} className="rounded-xl bg-white px-4 py-3 text-xs font-bold text-slate-500 ring-1 ring-slate-100">{tr('收起', 'Show less', "Tunjukkan kurang")}</button>}</div>}
+        {filteredCases.length === 0 && <div className="rounded-card border border-dashed border-slate-200 bg-white px-6 py-14 text-center"><Link2 className="mx-auto h-8 w-8 text-slate-300" /><p className="mt-3 text-headline text-slate-700">{tr('这个状态没有关系案件', 'No relationship cases in this status', "Tiada kes hubungan dalam status ini")}</p></div>}
+        {filteredCases.length > 6 && <div className="flex gap-2">{visibleCount < filteredCases.length && <button type="button" onClick={() => setVisibleCount((count) => count + 6)} className="flex-1 rounded-card bg-slate-100 px-4 py-3 text-footnote font-bold text-slate-600">{tr(`显示更多（还有 ${filteredCases.length - visibleCount} 个）`, `Show more (${filteredCases.length - visibleCount} remaining)`, `Tunjukkan lagi (${filteredCases.length - visibleCount} berbaki)`)}</button>}{visibleCount > 6 && <button type="button" onClick={() => setVisibleCount(6)} className="rounded-card bg-white px-4 py-3 text-footnote font-bold text-slate-500 ring-1 ring-slate-100">{tr('收起', 'Show less', "Tunjukkan kurang")}</button>}</div>}
       </section>
     </div>
   );

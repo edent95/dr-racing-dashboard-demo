@@ -1,10 +1,12 @@
 import { useEffect, useMemo } from 'react';
 import { getLoanPendingAction, getLoanPendingWith, LoanStatus, type CalendarNote, type CustomMission, type CustomerRawMatch, type LoanApplication, type NotificationItem, type RawCustomerLead, type RoleAccount, type RoleAccountRole, type RoleNavAccessSetting, type VehicleCatalogItem } from '../types';
-import { resolveTaskAssignmentRole, type TaskAssignmentKey } from '../data/roleNavAccess';
+import { resolveEffectiveTaskAssignmentRole, resolveTaskAssignmentRole, type TaskAssignmentKey } from '../data/roleNavAccess';
 import type { DashboardState } from '../services/dashboardRepository';
 import type { StaffSession } from './useStaffSessionAuth';
 import { shouldTrackRejectedLoanMissingCode } from '../utils/rejectCodes';
 import { getApplicationIdsRequiringVehicleStock } from '../utils/vehicleStock';
+import { newId } from '../utils/id';
+import { getNextDeliveryStep } from '../utils/deliveryChecklist';
 
 type NotificationCandidate = Omit<NotificationItem, 'id' | 'created_at' | 'read_by' | 'resolved_at'> & { created_at?: string };
 
@@ -19,7 +21,7 @@ const parseNotificationDate = (value: string) => {
   return new Date(value);
 };
 
-export const createNotificationId = () => `NOTIF-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+export const createNotificationId = () => newId('NOTIF');
 
 export const uniqueStrings = (values: string[]) => Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
 
@@ -189,7 +191,7 @@ const formatCustomMissionProgressValue = (mission: CustomMission, value: number)
   return `${value} approved`;
 };
 
-const buildNotificationCandidates = ({
+export const buildNotificationCandidates = ({
   applications,
   calendarNotes,
   rawCustomerLeads,
@@ -321,16 +323,9 @@ const buildNotificationCandidates = ({
       });
     });
 
-  const getTaskRecipientRoles = (taskKey: TaskAssignmentKey): RoleAccountRole[] => {
-    const assignedRole = resolveTaskAssignmentRole(taskKey, roleNavAccess);
-    const hasActiveAssignedRole = roleAccounts.some((account) => (
-      account.status === 'Active' && account.role === assignedRole
-    ));
-
-    return assignedRole === 'Super Admin' || hasActiveAssignedRole
-      ? [assignedRole]
-      : ['Super Admin'];
-  };
+  const getTaskRecipientRoles = (taskKey: TaskAssignmentKey): RoleAccountRole[] => (
+    [resolveEffectiveTaskAssignmentRole(taskKey, roleNavAccess, roleAccounts)]
+  );
   const getTaskRecipients = (taskKey: TaskAssignmentKey, namedOwners: string[] = []) => {
     const [effectiveRole] = getTaskRecipientRoles(taskKey);
     const configuredRole = resolveTaskAssignmentRole(taskKey, roleNavAccess);
@@ -395,7 +390,7 @@ const buildNotificationCandidates = ({
         type: 'vehicle_stock_required',
         severity: 'warning',
         title: 'Stock and costing required',
-        message: `${application.handler_name} completed ${application.applicant_name}'s application, but "${application.vehicle_model}" has no available stock. Add a stock unit and record its cost.`,
+        message: `${application.applicant_name}'s deal is approved, but "${application.vehicle_model}" has no available stock. Find the bike or order it outside, then add it with its cost.`,
         recipient_staff_names: [],
         recipient_roles: getTaskRecipientRoles('stock_replenishment'),
         target_type: 'loan',
@@ -482,6 +477,38 @@ const buildNotificationCandidates = ({
         created_at: application.pending_since || application.submitted_at,
         dedupe_key: `loan_approved:${application.id}:${pendingKey}`
       });
+    }
+
+    // Delivery checklist (meeting 2026-10-13): whoever owns the next step hears
+    // about it, the same people the Home card shows it to. created_at is when the
+    // previous step was recorded, so steps that were already waiting before this
+    // shipped are not pushed again.
+    if (application.status === LoanStatus.APPROVE && application.deal_finance?.sale_status !== 'Cancelled' && application.delivery_checklist?.updated_at) {
+      const nextStep = getNextDeliveryStep(application.delivery_checklist);
+      if (nextStep) {
+        const names = [
+          ...(nextStep.owners.includes('Sales') ? [application.handler_name] : []),
+          ...(nextStep.owners.includes('Admin') ? [application.admin_owner_name || ''] : [])
+        ];
+        const recipientStaffNames = uniqueStrings(names);
+        // The Operations check goes to the Operations Manager role (owner 2026-10-18).
+        const recipientRoles: RoleAccountRole[] = nextStep.owners.includes('Operations Manager') ? ['Operations Manager'] : [];
+        if (recipientStaffNames.length > 0 || recipientRoles.length > 0) {
+          candidates.push({
+            type: 'delivery_step_due',
+            severity: 'warning',
+            title: 'Your delivery checklist step',
+            message: `${application.applicant_name}: ${nextStep.label[1]} is next on the delivery checklist.`,
+            recipient_staff_names: recipientStaffNames,
+            recipient_roles: recipientRoles,
+            target_type: 'loan',
+            target_id: application.id,
+            target_label: application.applicant_name,
+            created_at: application.delivery_checklist.updated_at,
+            dedupe_key: `delivery_step_due:${application.id}:${nextStep.key}`
+          });
+        }
+      }
     }
 
     if (isDueByToday(application.customer_call_back_at) && ![LoanStatus.APPROVE, LoanStatus.CANCELLED].includes(application.status)) {

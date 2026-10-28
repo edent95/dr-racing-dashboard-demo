@@ -4,6 +4,7 @@ import App from './App.tsx';
 import './index.css';
 import {clearRequestedFirestoreCacheBeforeStartup} from './lib/firebaseCacheCleanup.ts';
 import {BrandedDialogProvider} from './components/BrandedDialogProvider.tsx';
+import {EnvironmentBadge} from './components/EnvironmentBadge.tsx';
 
 const CHUNK_RELOAD_SIGNATURE_KEY = 'dr_racing_last_chunk_reload_signature';
 
@@ -33,6 +34,12 @@ window.addEventListener('unhandledrejection', (event) => {
 });
 
 async function bootstrap() {
+  try {
+    await clearRequestedFirestoreCacheBeforeStartup();
+  } catch (error) {
+    console.warn('Firestore logout cache cleanup will retry on the next load.', error);
+  }
+
   // Public demo build only (VITE_DEMO_MODE=true): seed fixed anonymized sample
   // data and a demo session before the app boots. Statically eliminated from
   // normal builds because Vite inlines the env value at build time.
@@ -41,17 +48,12 @@ async function bootstrap() {
     seedDemoEnvironment();
   }
 
-  try {
-    await clearRequestedFirestoreCacheBeforeStartup();
-  } catch (error) {
-    console.warn('Firestore logout cache cleanup will retry on the next load.', error);
-  }
-
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
       <BrandedDialogProvider>
         <App />
       </BrandedDialogProvider>
+      <EnvironmentBadge />
     </StrictMode>,
   );
 }

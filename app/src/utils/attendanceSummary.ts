@@ -1,6 +1,7 @@
 import type { AttendanceEvent } from '../services/dashboardRepository';
 import {
   normalizeAttendancePolicy,
+  resolveAttendancePolicyForAccount,
   type ApprovalRequest,
   type AttendancePolicy,
   type AttendanceWeeklySchedule,
@@ -295,7 +296,7 @@ export function buildDailyAttendanceSummary(
 }
 
 export function buildMonthlyAttendanceSummary(
-  account: Pick<RoleAccount, 'name' | 'role' | 'avatar_data_url'>,
+  account: Pick<RoleAccount, 'name' | 'role' | 'avatar_data_url'> & { id?: string },
   events: AttendanceEvent[],
   selectedMonth: string,
   attendancePolicy: AttendancePolicy,
@@ -311,13 +312,14 @@ export function buildMonthlyAttendanceSummary(
       .flatMap((schedule) => schedule.days.map((day) => day.date))
   ].filter((dateKey) => dateKey.startsWith(`${selectedMonth}-`)))]
     .sort();
+  const accountPolicy = resolveAttendancePolicyForAccount(attendancePolicy, account.id);
   const dailySummaries = dateKeys.map((dateKey) => buildDailyAttendanceSummary(
     account.name,
     account.role,
     account.avatar_data_url,
     events,
     dateKey,
-    attendancePolicy,
+    accountPolicy,
     schedules,
     requests
   ));

@@ -118,11 +118,11 @@ export default function NotificationCenter({
   );
 
   return (
-    <section data-testid="notification-center" className="fixed right-6 top-20 z-50 flex h-[620px] w-[430px] max-h-[calc(100vh-6rem)] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-2xl shadow-slate-200/70">
+    <section data-testid="notification-center" className="fixed right-6 top-20 z-50 flex h-[620px] w-[430px] max-h-[calc(100vh-6rem)] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-panel border border-slate-100 bg-white shadow-e3 shadow-slate-200/70">
       <header className="flex items-start justify-between border-b border-slate-100 px-5 py-4">
         <div>
-          <p className="text-sm font-bold text-slate-900">{tr('通知中心', 'Notification Center', 'Pusat Pemberitahuan')}</p>
-          <p className="mt-1 text-[11px] font-medium text-slate-400">
+          <p className="text-headline text-slate-900">{tr('通知中心', 'Notification Center', 'Pusat Pemberitahuan')}</p>
+          <p className="mt-1 text-caption font-medium text-slate-400">
             {tr(
               `${tasks.length} 个任务 · ${tasks.length} 条处理中`,
               `${tasks.length} tasks · ${tasks.length} active`,
@@ -133,7 +133,7 @@ export default function NotificationCenter({
         <button
           type="button"
           onClick={onClose}
-          className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-100 text-slate-400 transition-colors hover:bg-slate-50 hover:text-slate-800"
+          className="inline-flex h-9 w-9 items-center justify-center rounded-control border border-slate-100 text-slate-400 transition-colors hover:bg-slate-50 hover:text-slate-800"
           title={tr('关闭通知', 'Close notifications', 'Tutup pemberitahuan')}
         >
           <X className="h-4 w-4" />
@@ -147,9 +147,9 @@ export default function NotificationCenter({
               key={filter.key}
               type="button"
               onClick={() => setActiveFilter(filter.key)}
-              className={`rounded-full px-3 py-1.5 text-[11px] font-bold transition-colors ${
+              className={`rounded-full px-3 py-1.5 text-caption font-semibold transition-colors ${
                 activeFilter === filter.key
-                  ? 'bg-red-800 text-white'
+                  ? 'bg-brand text-white'
                   : 'bg-slate-100 text-slate-500 hover:bg-slate-200 hover:text-slate-900'
               }`}
             >
@@ -157,22 +157,22 @@ export default function NotificationCenter({
             </button>
           ))}
         </div>
-        <p className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-[10px] font-semibold text-slate-400 ring-1 ring-slate-100">
+        <p className="mt-3 rounded-control bg-slate-50 px-3 py-2 text-caption text-slate-400 ring-1 ring-slate-100">
           {tr(
-            '这里只显示当前 Task Inbox 内可见的待办；已隐藏或已完成的项目不会出现。',
-            'This mirrors the visible tasks in Task Inbox. Hidden and completed items are excluded.',
-            'Paparan ini sama seperti tugasan yang kelihatan dalam Task Inbox. Item tersembunyi dan selesai tidak dipaparkan.'
+            '这里只显示当前首页内可见的待办；已隐藏或已完成的项目不会出现。',
+            'This mirrors the visible tasks on Home. Hidden and completed items are excluded.',
+            'Paparan ini sama seperti tugasan yang kelihatan di Laman Utama. Item tersembunyi dan selesai tidak dipaparkan.'
           )}
         </p>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
         {filteredTasks.length === 0 ? (
-          <div className="flex h-full min-h-64 flex-col items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50/60 px-6 text-center">
+          <div className="flex h-full min-h-64 flex-col items-center justify-center rounded-card border border-dashed border-slate-200 bg-slate-50/60 px-6 text-center">
             <Bell className="h-7 w-7 text-slate-300" />
-            <p className="mt-3 text-sm font-bold text-slate-700">{tr('没有待办', 'No tasks', 'Tiada tugasan')}</p>
-            <p className="mt-1 text-xs leading-relaxed text-slate-400">
-              {tr('当前筛选没有 Task Inbox 待办。', 'This filter has no Task Inbox item.', 'Penapis ini tiada item Task Inbox.')}
+            <p className="mt-3 text-headline text-slate-700">{tr('没有待办', 'No tasks', 'Tiada tugasan')}</p>
+            <p className="mt-1 text-footnote leading-relaxed text-slate-400">
+              {tr('当前筛选没有首页待办。', 'This filter has no Home item.', 'Penapis ini tiada item Laman Utama.')}
             </p>
           </div>
         ) : (
@@ -181,13 +181,13 @@ export default function NotificationCenter({
               const severity = severityClassMap[task.severity];
 
               return (
-                <article key={task.id} className={`rounded-xl border bg-white p-3 shadow-sm ${severity.border}`}>
+                <article key={task.id} className={`rounded-card border bg-white p-3 shadow-e1 ${severity.border}`}>
                   <div className="flex items-start gap-3">
-                    <div className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${severity.iconBg} ${severity.iconText}`}>
+                    <div className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-card ${severity.iconBg} ${severity.iconText}`}>
                       {getTaskIcon(task)}
                     </div>
                     <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-1.5 text-[10px] font-bold text-slate-400">
+                      <div className="flex flex-wrap items-center gap-1.5 text-micro tracking-normal text-slate-400">
                         <span>{task.categoryLabel || getCategoryLabel(task.category)}</span>
                         <span>·</span>
                         <span>{task.badgeLabel || tr(severity.zh, severity.en, severity.ms)}</span>
@@ -198,15 +198,15 @@ export default function NotificationCenter({
                           </>
                         )}
                       </div>
-                      <p className="mt-2 truncate text-xs font-bold text-slate-900" title={task.title}>{task.title}</p>
-                      <p className="mt-1 line-clamp-3 text-[11px] leading-relaxed text-slate-500">{task.context}</p>
-                      {task.meta && <p className="mt-2 text-[10px] font-bold text-slate-400">{task.meta}</p>}
+                      <p className="mt-2 truncate text-footnote font-bold text-slate-900" title={task.title}>{task.title}</p>
+                      <p className="mt-1 line-clamp-3 text-caption leading-relaxed text-slate-500">{task.context}</p>
+                      {task.meta && <p className="mt-2 text-micro tracking-normal text-slate-400">{task.meta}</p>}
                       <button
                         type="button"
                         onClick={() => onOpenTaskInbox(task.id)}
-                        className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-red-800 px-3 py-2 text-[11px] font-bold text-white transition-colors hover:bg-red-900"
+                        className="mt-3 inline-flex items-center gap-1.5 rounded-control bg-brand px-3 py-2 text-caption font-semibold text-white transition-colors hover:bg-brand-deep"
                       >
-                        {tr('打开 Task Inbox', 'Open Task Inbox', 'Buka Task Inbox')}
+                        {tr('打开首页', 'Open Home', 'Buka Laman Utama')}
                         <ChevronRight className="h-3.5 w-3.5" />
                       </button>
                     </div>

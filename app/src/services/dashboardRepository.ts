@@ -3,14 +3,18 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { and, collection, deleteDoc, doc, getDoc, getDocs, limit, onSnapshot, or, orderBy, query, runTransaction, serverTimestamp, setDoc, where, type Firestore, type QuerySnapshot } from 'firebase/firestore';
-import { ApprovalRequest, AuditLogEntry, BankDefinition, CalendarNote, CalendarTaskComment, ChannelMarketingSpend, CommissionRules, CustomMission, CustomerIntakeShortLink, ErrorCodeDefinition, FinanceProfile, LoanApplication, MarketingTagRelationship, MonthlySettlementSnapshot, NotificationItem, PayslipDocument, RawCustomerLead, RewardTeam, RoleAccount, RoleNavAccessSetting, RolePermissionSetting, StaffDefaultAvatar, TagNormalizationRule, VehicleCategory, VehicleCatalogItem, WhatsAppTrackingClick, WhatsAppTrackingLink, type AttendancePolicy, type AttendanceWeeklySchedule, normalizeAttendancePolicy } from '../types';
+import { and, collection, deleteDoc, deleteField, doc, getDoc, getDocFromServer, getDocs, getDocsFromServer, limit, onSnapshot, or, orderBy, query, runTransaction, serverTimestamp, setDoc, updateDoc, where, writeBatch, type Firestore, type QuerySnapshot } from 'firebase/firestore';
+import { ApprovalRequest, AuditLogEntry, type DeliveryPayment, type StockOrder, BankDefinition, CalendarNote, CalendarTaskComment, ChannelMarketingSpend, CommissionRules, CustomMission, CustomerIntakeShortLink, ErrorCodeDefinition, FinanceProfile, LoanApplication, MarketingTagRelationship, MonthlySettlementSnapshot, NotificationItem, PayslipDocument, RawCustomerLead, RoleAccount, RoleNavAccessSetting, StaffDefaultAvatar, TagNormalizationRule, VehicleCategory, VehicleCatalogItem, WhatsAppTrackingClick, WhatsAppTrackingLink, type AttendancePolicy, type AttendanceWeeklySchedule, normalizeAttendancePolicy, withoutAttendanceNetworkIps } from '../types';
 import { getFirebaseDb, isFirebaseConfigured } from '../lib/firebase';
 import { ensureFirebaseAuthUser, getFirebaseUserRoleClaim, getFirebaseUserStaffIdentityClaims } from '../lib/auth';
 import { normalizeDocumentChecklist } from '../utils/documentChecklist';
 import { stripUndefinedFirestoreValues } from '../utils/firestorePayload';
+import { withoutSyncMetadata } from '../utils/latestListPatch';
+import { newId } from '../utils/id';
+import { appendCommentOnce } from '../utils/calendarTaskComments';
 import { isOperationsLead, isOperationsManager } from '../utils/staffRoles';
-import { buildRoleAccessCapabilities } from '../data/roleNavAccess';
+import { buildRoleAccessCapabilities, resolveNavAccess, type RoleAccessCapabilities } from '../data/roleNavAccess';
+import { buildAdminExtraShopsByName, buildStaffShopsByName, getSameShopPoolHandlerNames, readAdminCrossShopPoolPreference } from '../utils/adminUnclaimedPool';
 
 export interface DashboardState {
   version?: number;
@@ -19,7 +23,6 @@ export interface DashboardState {
   rawCustomerLeads?: RawCustomerLead[];
   errorCodeDefinitions: ErrorCodeDefinition[];
   roleAccounts: RoleAccount[];
-  rolePermissions?: RolePermissionSetting[];
   roleNavAccess?: RoleNavAccessSetting[];
   defaultAvatarLibrary?: StaffDefaultAvatar[];
   whatsAppTrackingLinks: WhatsAppTrackingLink[];
@@ -27,7 +30,6 @@ export interface DashboardState {
   whatsAppDefaultMessage?: string;
   customerIntakeShortLinks?: CustomerIntakeShortLink[];
   customMissions?: CustomMission[];
-  rewardTeams?: RewardTeam[];
   approvalRequests?: ApprovalRequest[];
   calendarNotes?: CalendarNote[];
   notifications?: NotificationItem[];
@@ -58,6 +60,11 @@ const FIREBASE_TIMEOUT_MS = 15000;
 const FIREBASE_COLLECTION_SYNC_CONCURRENCY = 12;
 
 let lastKnownDashboardStateVersion: number | null = null;
+// Legacy dashboard_state.calendarNotes that could not be copied into
+// calendar_tasks yet. Kept in the shared document until the copy succeeds.
+// null = this browser has not loaded the shared document yet, so the field is
+// left untouched (merge) instead of being cleared.
+let legacyCalendarNotesPendingMigration: CalendarNote[] | null = null;
 
 export class DashboardStateVersionConflictError extends Error {
   currentVersion: number;
@@ -84,6 +91,64 @@ export class CollectionItemVersionConflictError extends Error {
     this.itemId = itemId;
     this.currentVersion = currentVersion;
     this.expectedVersion = expectedVersion;
+  }
+}
+
+// Firestore Rules refused one split-collection write. Retrying cannot help, so
+// the save must fail loudly instead of reporting success while the edit lives
+// only in this browser (the callers' rollback paths depend on a false result).
+export class CollectionItemPermissionDeniedError extends Error {
+  collectionName: string;
+  itemId: string;
+
+  constructor(collectionName: string, itemId: string, cause?: unknown) {
+    super(`${collectionName}/${itemId} was rejected by Firestore Rules.`);
+    this.name = 'CollectionItemPermissionDeniedError';
+    this.collectionName = collectionName;
+    this.itemId = itemId;
+    this.cause = cause;
+  }
+}
+
+function isFirestorePermissionDenied(error: unknown) {
+  return Boolean(
+    error
+    && typeof error === 'object'
+    && (error as { code?: unknown }).code === 'permission-denied'
+  );
+}
+
+// Firestore refuses documents over 1 MiB. dashboard_state grows with the
+// settings lists, avatars and the bounded click copy; past the limit every
+// Super Admin save and every server transaction on it would fail at once.
+// Refuse early with a clear error, leaving headroom for fields this save
+// does not send (merge keeps them).
+const DASHBOARD_STATE_SAFE_BYTES = 900 * 1024;
+
+export class DashboardStateTooLargeError extends Error {
+  estimatedBytes: number;
+
+  constructor(estimatedBytes: number) {
+    super(`dashboard_state would be about ${Math.round(estimatedBytes / 1024)} KiB, over the safe limit of ${DASHBOARD_STATE_SAFE_BYTES / 1024} KiB.`);
+    this.name = 'DashboardStateTooLargeError';
+    this.estimatedBytes = estimatedBytes;
+  }
+}
+
+function assertDashboardStateFitsDocumentLimit(payload: Record<string, unknown>) {
+  let json = '';
+  try {
+    json = JSON.stringify(payload, (_key, value) => (
+      value && typeof value === 'object' && !Array.isArray(value) && Object.getPrototypeOf(value) !== Object.prototype
+        ? null
+        : value
+    ));
+  } catch {
+    return;
+  }
+  const estimatedBytes = new TextEncoder().encode(json).length;
+  if (estimatedBytes > DASHBOARD_STATE_SAFE_BYTES) {
+    throw new DashboardStateTooLargeError(estimatedBytes);
   }
 }
 
@@ -148,6 +213,26 @@ function normalizeCollectionItemVersion(data: Record<string, unknown> | undefine
   return Number.isFinite(version) && version >= 0 ? Math.floor(version) : 0;
 }
 
+// A server endpoint (e.g. /api/staff/avatar) bumped dashboard_state by exactly
+// one version for this browser's own change. Advance the local expectation only
+// when nothing else was written in between; otherwise keep the stale version
+// so the next save surfaces a real conflict and reloads.
+export function acknowledgeServerDashboardStateVersion(version: number) {
+  if (
+    Number.isFinite(version)
+    && lastKnownDashboardStateVersion !== null
+    && lastKnownDashboardStateVersion === Math.floor(version) - 1
+  ) {
+    lastKnownDashboardStateVersion = Math.floor(version);
+  }
+}
+
+// The dashboard_state version this browser last read or wrote; sent to server
+// endpoints that write dashboard_state so a stale tab is refused.
+export function getKnownDashboardStateVersion(): number | null {
+  return lastKnownDashboardStateVersion;
+}
+
 function getExpectedDashboardStateVersion(state: DashboardState): number | null {
   return typeof state.version === 'number' && Number.isFinite(state.version)
     ? Math.floor(state.version)
@@ -178,13 +263,20 @@ function sanitizeRoleAccountsForStaffProjection(accounts: RoleAccount[]): RoleAc
       role: account.role,
       status: account.status,
       avatar_data_url: account.avatar_data_url || '',
-      default_avatar_id: account.default_avatar_id || ''
+      default_avatar_id: account.default_avatar_id || '',
+      // Admin browsers rebuild their shop scope (own + extra shops) from this list.
+      ...(account.extra_shop_ids?.length ? { extra_shop_ids: account.extra_shop_ids } : {})
     }));
 }
 
+// Sales / Admin read this projection; dealer cost and margin are for Super
+// Admin and Operations Manager only (they read dashboard_state). Zero rather
+// than delete: a missing profit_amount is re-derived as selling - cost.
 function sanitizeVehicleCatalogForStaffProjection(catalog: VehicleCatalogItem[]): VehicleCatalogItem[] {
   return (catalog || []).map((item) => ({
     ...item,
+    cost_price: 0,
+    profit_amount: 0,
     stock_units: (item.stock_units || []).map((unit) => ({
       ...unit,
       chassis_number: '',
@@ -223,8 +315,26 @@ async function syncPublicTrackingLinksToFirebase(db: Firestore, links: WhatsAppT
 async function syncPublicReadableConfigToFirebase(db: Firestore, state: DashboardState, version: number) {
   const updatedAt = serverTimestamp();
 
+  // Server endpoints (/api/staff/avatar, /api/staff/whatsapp-links, account
+  // edits) write roleAccounts and WhatsApp links into these projections from
+  // the latest dashboard_state. If one already committed a newer version after
+  // this save, its projections are newer than this state: leave those fields
+  // (and /wa routing docs) alone instead of overwriting them with this copy.
+  const latestSnapshot = await withFirebaseTimeout(
+    getDoc(doc(db, DASHBOARD_STATE_COLLECTION, DASHBOARD_STATE_DOCUMENT)),
+    'dashboard version check'
+  );
+  const superseded = normalizeDashboardStateVersion(latestSnapshot.data() as Partial<DashboardState>) > version;
+  const serverOwnedFields = superseded
+    ? {}
+    : {
+        roleAccounts: sanitizeRoleAccountsForStaffProjection(state.roleAccounts || []),
+        whatsAppTrackingLinks: state.whatsAppTrackingLinks || [],
+        version
+      };
+
   await Promise.all([
-    withFirebaseTimeout(
+    superseded ? Promise.resolve() : withFirebaseTimeout(
       setDoc(
         doc(db, PUBLIC_CONFIG_COLLECTION, LOGIN_DIRECTORY_DOCUMENT),
         stripUndefinedValues({
@@ -241,9 +351,12 @@ async function syncPublicReadableConfigToFirebase(db: Firestore, state: Dashboar
         doc(db, PUBLIC_CONFIG_COLLECTION, PUBLIC_DASHBOARD_DOCUMENT),
         stripUndefinedValues({
           bankDefinitions: state.bankDefinitions || [],
-          whatsAppTrackingLinks: state.whatsAppTrackingLinks || [],
+          // Any signed-in visitor (anonymous included) can read this
+          // document, so it no longer carries the WhatsApp link list (Sales
+          // names and phones). /wa reads one public_tracking_links/{id}.
+          whatsAppTrackingLinks: [],
+          ...(superseded ? {} : { version }),
           whatsAppDefaultMessage: state.whatsAppDefaultMessage,
-          version,
           updatedAt
         }) as Record<string, unknown>,
         { merge: true }
@@ -255,11 +368,12 @@ async function syncPublicReadableConfigToFirebase(db: Firestore, state: Dashboar
         doc(db, PUBLIC_CONFIG_COLLECTION, STAFF_DASHBOARD_DOCUMENT),
         stripUndefinedValues({
           errorCodeDefinitions: state.errorCodeDefinitions || [],
-          roleAccounts: sanitizeRoleAccountsForStaffProjection(state.roleAccounts || []),
-          rolePermissions: state.rolePermissions || [],
+          ...serverOwnedFields,
           roleNavAccess: state.roleNavAccess || [],
           roleAccessCapabilities: buildRoleAccessCapabilities(state.roleNavAccess),
-          whatsAppTrackingLinks: state.whatsAppTrackingLinks || [],
+          // Sales / Admin read only this projection; without it their User page
+          // offers just the built-in avatars, not the Super Admin library.
+          defaultAvatarLibrary: state.defaultAvatarLibrary || [],
           whatsAppDefaultMessage: state.whatsAppDefaultMessage,
           vehicleTags: state.vehicleTags || [],
           vehicleBrandTags: state.vehicleBrandTags || [],
@@ -272,19 +386,34 @@ async function syncPublicReadableConfigToFirebase(db: Firestore, state: Dashboar
             ? {
                 staff_experience_points: (
                   state.commissionRules as CommissionRules & { staff_experience_points?: Record<string, number> }
-                ).staff_experience_points || {}
+                ).staff_experience_points || {},
+                // Sales see the commission structures on the Commission Ledger (owner 2026-10-24); rates only, no names or amounts.
+                ...(state.commissionRules.commission_tier_plans ? { commission_tier_plans: state.commissionRules.commission_tier_plans } : {}),
+                ...(state.commissionRules.commission_tiers ? { commission_tiers: state.commissionRules.commission_tiers } : {})
               }
             : undefined,
-          attendancePolicy: normalizeAttendancePolicy(state.attendancePolicy),
-          version,
+          attendancePolicy: withoutAttendanceNetworkIps(normalizeAttendancePolicy(state.attendancePolicy)),
+          staffShopsByName: buildStaffShopsByName(state.roleAccounts || [], normalizeAttendancePolicy(state.attendancePolicy)),
+          adminExtraShopsByName: buildAdminExtraShopsByName(state.roleAccounts || [], normalizeAttendancePolicy(state.attendancePolicy)),
           updatedAt
         }) as Record<string, unknown>,
-        { merge: false }
+        // A superseded save merges so it keeps the newer server-owned fields.
+        { merge: superseded }
       ),
       'staff dashboard projection save'
     ),
-    syncPublicTrackingLinksToFirebase(db, state.whatsAppTrackingLinks || [])
+    superseded ? Promise.resolve() : syncPublicTrackingLinksToFirebase(db, state.whatsAppTrackingLinks || [])
   ]);
+}
+
+async function isSignedInSuperAdmin() {
+  const user = await ensureFirebaseAuthUser();
+  if (!user || user.isAnonymous) return false;
+  try {
+    return await getFirebaseUserRoleClaim(user) === 'Super Admin';
+  } catch {
+    return false;
+  }
 }
 
 async function canSyncPublicReadableConfig() {
@@ -331,11 +460,14 @@ const CALENDAR_TASKS_COLLECTION = 'calendar_tasks';
 const ATTENDANCE_EVENTS_COLLECTION = 'attendance_events';
 const ATTENDANCE_INCIDENT_RESOLUTIONS_COLLECTION = 'attendance_incident_resolutions';
 const ATTENDANCE_SCHEDULES_COLLECTION = 'attendance_schedules';
+// Monthly salary, split out of attendance_schedules: Super Admin only (owner
+// decision 2026-10-06). One document per schedule row, keyed by the row id.
+const ATTENDANCE_SALARIES_COLLECTION = 'attendance_salaries';
 const STAFF_LEAVE_REQUESTS_COLLECTION = 'staff_leave_requests';
 // 匿名客户设备(/wa)只能 create 到这个独立集合;员工端 load 时合并
 // 进 whatsAppTrackingClicks,不再让公开页面整份写 dashboard_state。
 const WA_CLICKS_COLLECTION = 'wa_clicks';
-const WA_CLICKS_LIMIT = 500;
+const DASHBOARD_STATE_CLICKS_LIMIT = 500;
 const STOCK_RESERVATIONS_COLLECTION = 'vehicle_stock_reservations';
 
 export interface AttendanceEvent {
@@ -346,6 +478,7 @@ export interface AttendanceEvent {
   occurred_at: string;
   note: string;
   created_at: string;
+  team_id?: string;
 }
 
 export interface AttendanceIncidentResolution {
@@ -356,6 +489,7 @@ export interface AttendanceIncidentResolution {
   resolved_by: string;
   resolved_role: string;
   resolved_at: string;
+  team_id?: string;
 }
 
 type VehicleStockReservation = {
@@ -456,6 +590,7 @@ async function syncCollectionDiff<T extends { id: string }>(
   nextIds.forEach((id) => pendingDeletionIds.delete(id));
   let allSucceeded = true;
   let firstConflict: CollectionItemVersionConflictError | null = null;
+  let firstPermissionDenied: CollectionItemPermissionDeniedError | null = null;
 
   const writes = items
     .filter((item) => item.id)
@@ -511,6 +646,9 @@ async function syncCollectionDiff<T extends { id: string }>(
       if (error instanceof CollectionItemVersionConflictError && !firstConflict) {
         firstConflict = error;
       }
+      if (isFirestorePermissionDenied(error) && !firstPermissionDenied) {
+        firstPermissionDenied = new CollectionItemPermissionDeniedError(collectionName, item.id, error);
+      }
       allSucceeded = false;
     }
   });
@@ -552,9 +690,16 @@ async function syncCollectionDiff<T extends { id: string }>(
       if (error instanceof CollectionItemVersionConflictError && !firstConflict) {
         firstConflict = error;
       }
+      if (isFirestorePermissionDenied(error) && !firstPermissionDenied) {
+        firstPermissionDenied = new CollectionItemPermissionDeniedError(collectionName, id, error);
+      }
       allSucceeded = false;
     }
   });
+
+  if (firstPermissionDenied) {
+    throw firstPermissionDenied;
+  }
 
   if (firstConflict) {
     throw firstConflict;
@@ -566,20 +711,24 @@ async function syncCollectionDiff<T extends { id: string }>(
 // Claim-on-open must be a single-document transaction. A normal queued
 // dashboard save is deliberately optimistic and can let two Admin browsers
 // both believe they won before Firestore rejects the later write. This helper
-// commits only the ownership field allowed by isAdminCustomerClaimAllowed,
-// then aligns the split-collection sync cache with the exact local object that
-// App will place in state so the following audit save does not rewrite it.
+// commits only the ownership field allowed by isAdminCustomerClaimAllowed.
+//
+// The claimed application it returns is built from the SERVER snapshot read
+// inside the transaction, not from the caller's local copy: that copy can be
+// older than the server (another staff member edited the row after this
+// browser last synced it). The split-collection sync cache is aligned with that
+// exact server-based object and version, and App must place it in state, so a
+// later save starts from the server's data instead of writing the stale local
+// object over the other edit with a matching version.
 export async function claimUnassignedAdminApplicationFromFirebase(
   application: LoanApplication,
   adminName: string
 ): Promise<LoanApplication> {
-  const claimedApplication: LoanApplication = {
-    ...application,
-    admin_owner_name: adminName
-  };
-
   if (!isFirebaseConfigured) {
-    return claimedApplication;
+    return {
+      ...application,
+      admin_owner_name: adminName
+    };
   }
 
   const db = await getAuthedDb();
@@ -594,18 +743,20 @@ export async function claimUnassignedAdminApplicationFromFirebase(
   }
 
   const customerRef = doc(db, CUSTOMERS_COLLECTION, application.id);
-  const nextVersion = await withFirebaseTimeout(
+  const { claimedApplication, nextVersion } = await withFirebaseTimeout(
     runTransaction(db, async (transaction) => {
       const snapshot = await transaction.get(customerRef);
       if (!snapshot.exists()) {
         throw new Error(`Application ${application.id} no longer exists.`);
       }
 
-      const data = snapshot.data() as LoanApplication & { _sync_version?: unknown };
+      const data = snapshot.data() as LoanApplication & { updatedAt?: unknown; _sync_version?: unknown };
+      const serverApplication = withoutSyncMetadata<LoanApplication>(data as unknown as Record<string, unknown>, application.id);
+      const currentVersion = normalizeCollectionItemVersion(data as unknown as Record<string, unknown>);
       const currentOwner = String(data.admin_owner_name || '');
       if (currentOwner) {
         if (currentOwner === adminName) {
-          return normalizeCollectionItemVersion(data as unknown as Record<string, unknown>);
+          return { claimedApplication: serverApplication, nextVersion: currentVersion };
         }
         throw new AdminApplicationClaimConflictError(application.id);
       }
@@ -613,13 +764,16 @@ export async function claimUnassignedAdminApplicationFromFirebase(
         throw new AdminApplicationClaimConflictError(application.id);
       }
 
-      const version = normalizeCollectionItemVersion(data as unknown as Record<string, unknown>) + 1;
+      const version = currentVersion + 1;
       transaction.update(customerRef, {
         admin_owner_name: adminName,
         _sync_version: version,
         updatedAt: serverTimestamp()
       });
-      return version;
+      return {
+        claimedApplication: { ...serverApplication, admin_owner_name: adminName },
+        nextVersion: version
+      };
     }),
     'Admin application claim'
   );
@@ -628,6 +782,90 @@ export async function claimUnassignedAdminApplicationFromFirebase(
   lastSyncedCustomerJson.set(application.id, stableStringify(claimedApplication));
   lastCheckedCustomerReferences.set(application.id, claimedApplication);
   return claimedApplication;
+}
+
+export class CustomerAssignmentError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'CustomerAssignmentError';
+    this.status = status;
+  }
+}
+
+// SEO / staff-link-queue applications are assigned to a Sales through
+// POST /api/staff/customer-assignments (Super Admin and Operations Manager);
+// Rules refuse the direct client write. The server bumps _sync_version by one,
+// so the sync cache is aligned with the returned object exactly like the
+// Admin claim above, and the following dashboard save does not rewrite it.
+export async function assignCustomerHandlerThroughServer(
+  application: LoanApplication,
+  target: { id: string; name: string }
+): Promise<LoanApplication> {
+  const assignedApplication: LoanApplication = {
+    ...application,
+    handler_name: target.name,
+    handler_role: 'Sales'
+  };
+
+  if (!isFirebaseConfigured) {
+    return assignedApplication;
+  }
+
+  const firebaseUser = await ensureFirebaseAuthUser();
+  if (!firebaseUser || firebaseUser.isAnonymous) {
+    throw new CustomerAssignmentError(401, 'Missing Firebase staff session.');
+  }
+  const expectedVersion = lastSyncedCustomerVersion.get(application.id);
+  if (expectedVersion === undefined) {
+    throw new CollectionItemVersionConflictError(CUSTOMERS_COLLECTION, application.id, -1, -1);
+  }
+
+  const token = await firebaseUser.getIdToken();
+  const response = await withFirebaseTimeout(
+    fetch('/api/staff/customer-assignments', {
+      method: 'POST',
+      cache: 'no-store',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ customerId: application.id, targetAccountId: target.id, expectedVersion })
+    }),
+    'customer assignment'
+  );
+  const payload = await response.json().catch(() => ({})) as { error?: string; handlerName?: string; version?: number };
+  if (!response.ok) {
+    if (response.status === 409 && /changed on another device/i.test(String(payload.error || ''))) {
+      throw new CollectionItemVersionConflictError(CUSTOMERS_COLLECTION, application.id, -1, expectedVersion);
+    }
+    throw new CustomerAssignmentError(response.status, String(payload.error || `Assignment failed (${response.status}).`));
+  }
+
+  const version = Number(payload.version);
+  const confirmedApplication: LoanApplication = payload.handlerName && payload.handlerName !== target.name
+    ? { ...assignedApplication, handler_name: payload.handlerName }
+    : assignedApplication;
+  if (Number.isFinite(version)) {
+    lastSyncedCustomerVersion.set(application.id, Math.floor(version));
+  }
+  lastSyncedCustomerJson.set(application.id, stableStringify(confirmedApplication));
+  lastCheckedCustomerReferences.set(application.id, confirmedApplication);
+  return confirmedApplication;
+}
+
+// isValidStaffAuditCreate caps these strings. A long calendar title or user
+// agent used to make the row fail on every save forever; trim instead.
+function fitAuditLogToRules(log: AuditLogEntry): AuditLogEntry {
+  const cap = (value: unknown, max: number) => (typeof value === 'string' ? value.slice(0, max) : value);
+  return {
+    ...log,
+    action: cap(log.action, 160),
+    target_type: cap(log.target_type, 160),
+    target_id: cap(log.target_id, 160),
+    target_label: cap(log.target_label, 300),
+    ip_address: cap(log.ip_address, 80),
+    user_agent: cap(log.user_agent, 500),
+    changes: Array.isArray(log.changes) ? log.changes.slice(0, 100) : log.changes
+  } as AuditLogEntry;
 }
 
 async function appendAuditLogsToFirebase(
@@ -674,7 +912,7 @@ async function appendAuditLogsToFirebase(
       await withFirebaseTimeout(
         setDoc(
           auditRef,
-          stripUndefinedValues({ ...log, updatedAt: serverTimestamp() }) as Record<string, unknown>
+          stripUndefinedValues({ ...fitAuditLogToRules(log), updatedAt: serverTimestamp() }) as Record<string, unknown>
         ),
         'audit log save'
       );
@@ -742,6 +980,40 @@ async function loadCollectionItems<T extends { id: string }>(
   }
 }
 
+// Admin reads own rows, every row whose handler is in one of the Admin's shops
+// (handler names from the published staffShopsByName map, extra shops from
+// adminExtraShopsByName), and the unclaimed
+// Admin-review pool: the own shop's is already covered by the same-shop clause,
+// every shop's when Super Admin allows it and this Admin opted in. Before Super
+// Admin first publishes staffShopsByName there is no same-shop access and the
+// pool stays shared, so it is queried unfiltered as before. Must mirror
+// isAdminSameShopCustomerData / isUnownedAdminPendingReview in firestore.rules.
+async function buildAdminCustomersQuery(db: Firestore, staffName: string) {
+  const projection = await withFirebaseTimeout(
+    getDoc(doc(db, PUBLIC_CONFIG_COLLECTION, STAFF_DASHBOARD_DOCUMENT)),
+    'admin pool scope load'
+  ).then((snapshot) => snapshot.data() || {}).catch(() => ({} as Record<string, unknown>));
+  const hasShopMap = Boolean(projection.staffShopsByName && typeof projection.staffShopsByName === 'object');
+  const shopsByName = (hasShopMap ? projection.staffShopsByName : {}) as Record<string, string>;
+  const capabilities = (projection.roleAccessCapabilities || {}) as Partial<RoleAccessCapabilities>;
+  const showAllShopsPool = !hasShopMap
+    || (capabilities.admin_cross_shop_unclaimed_pool === true && readAdminCrossShopPoolPreference());
+  const extraShopsByName = (projection.adminExtraShopsByName && typeof projection.adminExtraShopsByName === 'object'
+    ? projection.adminExtraShopsByName
+    : {}) as Record<string, string[]>;
+  const sameShopHandlers = hasShopMap ? getSameShopPoolHandlerNames(shopsByName, staffName, extraShopsByName) : [];
+
+  return query(
+    collection(db, CUSTOMERS_COLLECTION),
+    or(
+      where('handler_name', '==', staffName),
+      where('admin_owner_name', '==', staffName),
+      ...(sameShopHandlers.length > 0 ? [where('handler_name', 'in', sameShopHandlers)] : []),
+      ...(showAllShopsPool ? [and(where('admin_owner_name', '==', ''), where('pending_with', '==', 'Admin'))] : [])
+    )
+  );
+}
+
 async function loadStaffOwnedCustomers(
   db: Firestore,
   staffName: string,
@@ -752,19 +1024,7 @@ async function loadStaffOwnedCustomers(
   lastCheckedCustomerReferences.clear();
 
   const ownedCustomersQuery = staffRole === 'Admin'
-    ? query(
-      collection(db, CUSTOMERS_COLLECTION),
-      or(
-        where('handler_name', '==', staffName),
-        where('admin_owner_name', '==', staffName),
-        // Unassigned Admin-review pool: a Loan waiting for Admin with no owner
-        // yet is visible to every Active Admin until one claims it.
-        and(
-          where('admin_owner_name', '==', ''),
-          where('pending_with', '==', 'Admin')
-        )
-      )
-    )
+    ? await buildAdminCustomersQuery(db, staffName)
     : query(collection(db, CUSTOMERS_COLLECTION), where('handler_name', '==', staffName));
   const snapshot = await withFirebaseTimeout(
     getDocs(ownedCustomersQuery),
@@ -876,7 +1136,11 @@ export async function subscribeToCalendarTasksFromFirebase(
   const staffName = typeof tokenResult?.claims.staffName === 'string'
     ? tokenResult.claims.staffName
     : '';
-  const calendarTasksSource = isOperationsLead(typeof staffRole === 'string' ? staffRole : '')
+  // Same scope as loadCalendarTasks and firestore.rules: only Super Admin
+  // reads every calendar task; everyone else (Operations Manager included)
+  // listens to the tasks assigned to them. A whole-collection listener for
+  // Operations Manager is refused by Rules and stops with a toast.
+  const calendarTasksSource = staffRole === 'Super Admin'
     ? collection(db, CALENDAR_TASKS_COLLECTION)
     : staffName
       ? query(collection(db, CALENDAR_TASKS_COLLECTION), where('assigned_to', '==', staffName))
@@ -924,6 +1188,30 @@ export async function saveCalendarNoteToFirebase(note: CalendarNote) {
   await writeCalendarTask(db, note);
 }
 
+// Completing / reopening a task writes ONLY the completion fields. The old
+// whole-note setDoc(merge:false) replaced `comments` with the local copy, so a
+// Super Admin completing a task dropped any reply that arrived after the last
+// snapshot. It is also the only shape Rules accept from the assignee
+// (affectedKeys hasOnly completed_at / completed_by / updatedAt).
+export async function setCalendarTaskCompletionInFirebase(
+  noteId: string,
+  completion: { completed_at?: string; completed_by?: string }
+) {
+  if (!isFirebaseConfigured) return;
+
+  const db = await getAuthedDb();
+  if (!db) return;
+
+  await withFirebaseTimeout(
+    updateDoc(doc(db, CALENDAR_TASKS_COLLECTION, noteId), {
+      completed_at: completion.completed_at ? completion.completed_at : deleteField(),
+      completed_by: completion.completed_by ? completion.completed_by : deleteField(),
+      updatedAt: serverTimestamp()
+    }),
+    'calendar task completion save'
+  );
+}
+
 export async function appendCalendarTaskCommentToFirebase(
   noteId: string,
   comment: CalendarTaskComment
@@ -942,11 +1230,15 @@ export async function appendCalendarTaskCommentToFirebase(
       }
 
       const currentComments = (snapshot.data().comments || []) as CalendarTaskComment[];
-      const nextComments = [...currentComments, comment];
-      transaction.update(taskRef, {
-        comments: nextComments,
-        updatedAt: serverTimestamp()
-      });
+      // The caller reuses one id per reply, so a retry after a timeout whose
+      // transaction did commit finds the comment already there: no duplicate.
+      const { comments: nextComments, appended } = appendCommentOnce(currentComments, comment);
+      if (appended) {
+        transaction.update(taskRef, {
+          comments: nextComments,
+          updatedAt: serverTimestamp()
+        });
+      }
       return nextComments;
     }),
     'calendar task comment append'
@@ -967,7 +1259,8 @@ export async function deleteCalendarNoteFromFirebase(noteId: string) {
 
 export async function subscribeToAttendanceEventsFromFirebase(
   onEvents: (events: AttendanceEvent[]) => void,
-  onError?: (error: Error) => void
+  onError?: (error: Error) => void,
+  adminTeamId?: string
 ): Promise<() => void> {
   const db = await getAuthedDb();
   if (!db) return () => undefined;
@@ -980,10 +1273,11 @@ export async function subscribeToAttendanceEventsFromFirebase(
   const staffName = typeof tokenResult?.claims.staffName === 'string'
     ? tokenResult.claims.staffName
     : '';
-  const canExportTeamData = isOperationsLead(typeof role === 'string' ? role : '') || role === 'Admin';
-  const source = canExportTeamData
+  const source = isOperationsLead(typeof role === 'string' ? role : '')
     ? collection(db, ATTENDANCE_EVENTS_COLLECTION)
-    : staffName
+    : role === 'Admin' && adminTeamId
+      ? query(collection(db, ATTENDANCE_EVENTS_COLLECTION), where('team_id', '==', adminTeamId))
+      : staffName
       ? query(collection(db, ATTENDANCE_EVENTS_COLLECTION), where('staff_name', '==', staffName))
       : null;
 
@@ -1015,6 +1309,39 @@ export async function subscribeToAttendanceEventsFromFirebase(
   );
 }
 
+export interface AttendanceNetworkCheck {
+  team_id: string;
+  required: boolean;
+  allowed: boolean;
+  ip_address: string;
+}
+
+// Office IP lists stay server-side; the server compares the caller's team
+// network with the IP it sees. Returns null when the check cannot be reached.
+export async function fetchAttendanceNetworkCheck(): Promise<AttendanceNetworkCheck | null> {
+  if (!isFirebaseConfigured) return null;
+  try {
+    const firebaseUser = await ensureFirebaseAuthUser();
+    if (!firebaseUser || firebaseUser.isAnonymous) return null;
+    const token = await firebaseUser.getIdToken();
+    const response = await fetch('/api/attendance/network-check', {
+      method: 'POST',
+      cache: 'no-store',
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (!response.ok) return null;
+    const data = await response.json() as Partial<AttendanceNetworkCheck>;
+    return {
+      team_id: String(data.team_id || 'main'),
+      required: Boolean(data.required),
+      allowed: Boolean(data.allowed),
+      ip_address: String(data.ip_address || '')
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function saveAttendanceEventToFirebase(event: AttendanceEvent) {
   if (!isFirebaseConfigured) return;
   const db = await getAuthedDb();
@@ -1032,7 +1359,8 @@ export async function saveAttendanceEventToFirebase(event: AttendanceEvent) {
 
 export async function subscribeToAttendanceIncidentResolutionsFromFirebase(
   onResolutions: (resolutions: AttendanceIncidentResolution[]) => void,
-  onError?: (error: Error) => void
+  onError?: (error: Error) => void,
+  adminTeamId?: string
 ): Promise<() => void> {
   const db = await getAuthedDb();
   if (!db) return () => undefined;
@@ -1040,12 +1368,14 @@ export async function subscribeToAttendanceIncidentResolutionsFromFirebase(
   const firebaseUser = await ensureFirebaseAuthUser();
   if (!firebaseUser) return () => undefined;
   const identity = await getFirebaseUserStaffIdentityClaims(firebaseUser, true);
-  if (identity.role !== 'Super Admin' && identity.role !== 'Admin') {
+  if (identity.role !== 'Super Admin' && (identity.role !== 'Admin' || !adminTeamId)) {
     return () => undefined;
   }
 
   return onSnapshot(
-    collection(db, ATTENDANCE_INCIDENT_RESOLUTIONS_COLLECTION),
+    identity.role === 'Admin'
+      ? query(collection(db, ATTENDANCE_INCIDENT_RESOLUTIONS_COLLECTION), where('team_id', '==', adminTeamId))
+      : collection(db, ATTENDANCE_INCIDENT_RESOLUTIONS_COLLECTION),
     (snapshot) => {
       const resolutions: AttendanceIncidentResolution[] = [];
       snapshot.forEach((docSnapshot) => {
@@ -1103,7 +1433,8 @@ export async function saveAttendanceIncidentResolutionToFirebase(
 
 export async function subscribeToAttendanceSchedulesFromFirebase(
   onSchedules: (schedules: AttendanceWeeklySchedule[]) => void,
-  onError?: (error: Error) => void
+  onError?: (error: Error) => void,
+  adminTeamId?: string
 ): Promise<() => void> {
   const db = await getAuthedDb();
   if (!db) return () => undefined;
@@ -1116,9 +1447,16 @@ export async function subscribeToAttendanceSchedulesFromFirebase(
   const staffName = typeof tokenResult?.claims.staffName === 'string'
     ? tokenResult.claims.staffName
     : '';
-  const source = isOperationsLead(typeof role === 'string' ? role : '') || role === 'Admin'
+  // Schedule rows carry monthly_salary, and firestore.rules lets only Super
+  // Admin read every row (owner decision 2026-10-06: salary is Super Admin
+  // only). The same-team Admin reads their team; everyone else, Operations
+  // Manager included, listens to their own row. A whole-collection listener
+  // for Operations Manager is refused by Rules and stops with a toast.
+  const source = role === 'Super Admin'
     ? collection(db, ATTENDANCE_SCHEDULES_COLLECTION)
-    : staffName
+    : role === 'Admin' && adminTeamId
+      ? query(collection(db, ATTENDANCE_SCHEDULES_COLLECTION), where('team_id', '==', adminTeamId))
+      : staffName
       ? query(collection(db, ATTENDANCE_SCHEDULES_COLLECTION), where('staff_name', '==', staffName))
       : null;
 
@@ -1142,24 +1480,68 @@ export async function subscribeToAttendanceSchedulesFromFirebase(
   );
 }
 
+// The roster row never carries the salary: Rules refuse `monthly_salary` on
+// attendance_schedules. Super Admin's save writes the salary to its own
+// Super Admin-only document in the same batch; anyone else's save leaves
+// salaries alone.
 export async function saveAttendanceWeeklyScheduleToFirebase(schedule: AttendanceWeeklySchedule) {
   if (!isFirebaseConfigured) return;
   const db = await getAuthedDb();
   if (!db) return;
 
-  await withFirebaseTimeout(
-    setDoc(
-      doc(db, ATTENDANCE_SCHEDULES_COLLECTION, schedule.id),
-      stripUndefinedValues({ ...schedule, updatedAt: serverTimestamp() }) as Record<string, unknown>,
-      { merge: false }
-    ),
-    'attendance schedule save'
+  const { monthly_salary: monthlySalary, ...roster } = schedule;
+  const batch = writeBatch(db);
+  batch.set(
+    doc(db, ATTENDANCE_SCHEDULES_COLLECTION, schedule.id),
+    stripUndefinedValues({ ...roster, updatedAt: serverTimestamp() }) as Record<string, unknown>
+  );
+  if (await isSignedInSuperAdmin()) {
+    batch.set(
+      doc(db, ATTENDANCE_SALARIES_COLLECTION, schedule.id),
+      stripUndefinedValues({
+        id: schedule.id,
+        week_start: schedule.week_start,
+        staff_name: schedule.staff_name,
+        monthly_salary: Math.max(0, Math.min(1000000, Number(monthlySalary) || 0)),
+        updated_by: schedule.updated_by,
+        updated_role: schedule.updated_role,
+        updated_at: schedule.updated_at,
+        updatedAt: serverTimestamp()
+      }) as Record<string, unknown>
+    );
+  }
+  await withFirebaseTimeout(batch.commit(), 'attendance schedule save');
+}
+
+export type AttendanceSalaries = Record<string, number>;
+
+// Super Admin only; resolves to a no-op listener for everyone else, whom
+// Rules would refuse anyway.
+export async function subscribeToAttendanceSalariesFromFirebase(
+  onSalaries: (salaries: AttendanceSalaries) => void,
+  onError?: (error: Error) => void
+): Promise<() => void> {
+  const db = await getAuthedDb();
+  if (!db || !(await isSignedInSuperAdmin())) return () => undefined;
+
+  return onSnapshot(
+    collection(db, ATTENDANCE_SALARIES_COLLECTION),
+    (snapshot) => {
+      const salaries: AttendanceSalaries = {};
+      snapshot.forEach((docSnapshot) => {
+        const salary = Number(docSnapshot.data().monthly_salary);
+        salaries[docSnapshot.id] = Number.isFinite(salary) ? salary : 0;
+      });
+      onSalaries(salaries);
+    },
+    (error) => onError?.(error)
   );
 }
 
 export async function subscribeToStaffLeaveRequestsFromFirebase(
   onRequests: (requests: ApprovalRequest[]) => void,
-  onError?: (error: Error) => void
+  onError?: (error: Error) => void,
+  adminTeamId?: string
 ): Promise<() => void> {
   const db = await getAuthedDb();
   if (!db) return () => undefined;
@@ -1172,10 +1554,11 @@ export async function subscribeToStaffLeaveRequestsFromFirebase(
   const staffName = typeof tokenResult?.claims.staffName === 'string'
     ? tokenResult.claims.staffName
     : '';
-  const canExportTeamData = isOperationsLead(typeof role === 'string' ? role : '') || role === 'Admin';
-  const source = canExportTeamData
+  const source = isOperationsLead(typeof role === 'string' ? role : '')
     ? collection(db, STAFF_LEAVE_REQUESTS_COLLECTION)
-    : staffName
+    : role === 'Admin' && adminTeamId
+      ? query(collection(db, STAFF_LEAVE_REQUESTS_COLLECTION), where('team_id', '==', adminTeamId))
+      : staffName
       ? query(collection(db, STAFF_LEAVE_REQUESTS_COLLECTION), where('requester_name', '==', staffName))
       : null;
 
@@ -1237,19 +1620,7 @@ export async function subscribeToCustomerChangesFromFirebase(
   const customersSource = isOperationsLead(typeof staffRole === 'string' ? staffRole : '')
     ? collection(db, CUSTOMERS_COLLECTION)
     : staffName && staffRole === 'Admin'
-    ? query(
-      collection(db, CUSTOMERS_COLLECTION),
-      or(
-        where('handler_name', '==', staffName),
-        where('admin_owner_name', '==', staffName),
-        // Unassigned Admin-review pool: a Loan waiting for Admin with no owner
-        // yet streams to every Active Admin until one claims it.
-        and(
-          where('admin_owner_name', '==', ''),
-          where('pending_with', '==', 'Admin')
-        )
-      )
-    )
+    ? await buildAdminCustomersQuery(db, staffName)
     : staffName && staffRole === 'Sales'
       ? query(collection(db, CUSTOMERS_COLLECTION), where('handler_name', '==', staffName))
       : null;
@@ -1445,9 +1816,10 @@ function mergeWhatsAppClicks(
     }
   });
 
+  // No cap here: analytics totals and period comparisons need every visitor
+  // record. Only the browser cache is trimmed (useDashboardPersistence).
   return Array.from(byId.values())
-    .sort((a, b) => String(b.clicked_at || '').localeCompare(String(a.clicked_at || '')))
-    .slice(0, WA_CLICKS_LIMIT);
+    .sort((a, b) => String(b.clicked_at || '').localeCompare(String(a.clicked_at || '')));
 }
 
 async function loadVehicleStockReservations(db: Firestore): Promise<VehicleStockReservation[]> {
@@ -1489,6 +1861,14 @@ function applyVehicleStockReservations(
   }));
 }
 
+function canOperationsManagerReadAuditLogs(data: Record<string, unknown> | undefined) {
+  return resolveNavAccess(
+    'Operations Manager',
+    'audit',
+    Array.isArray(data?.roleNavAccess) ? data.roleNavAccess as RoleNavAccessSetting[] : []
+  );
+}
+
 export async function loadDashboardStateFromFirebase(): Promise<DashboardState | null> {
   if (!isFirebaseConfigured) {
     return null;
@@ -1512,7 +1892,8 @@ export async function loadDashboardStateFromFirebase(): Promise<DashboardState |
   const scopedStaffRole = staffRole === 'Admin' || staffRole === 'Sales'
     ? staffRole
     : null;
-  const collectionRawLeadsPromise = canViewAllStaff
+  // Operations Manager works every lead like Admin / Sales work their own (owner 2026-10-20).
+  const collectionRawLeadsPromise = canViewOperationsData
     ? loadCollectionItems<RawCustomerLead>(db, RAW_LEADS_COLLECTION, lastSyncedRawLeadJson, lastSyncedRawLeadVersion, lastCheckedRawLeadReferences)
     : scopedStaffRole && staffName
       ? loadStaffOwnedRawLeads(db, staffName)
@@ -1535,22 +1916,31 @@ export async function loadDashboardStateFromFirebase(): Promise<DashboardState |
     : scopedStaffRole && staffName
       ? loadStaffOwnedCustomers(db, staffName, scopedStaffRole)
       : Promise.resolve([] as LoanApplication[]);
-  const auditLogsPromise = canViewOperationsData || (scopedStaffRole && staffName)
-    ? loadAuditLogsFromFirebase(db, staffName, canViewOperationsData)
-    : Promise.resolve([] as AuditLogEntry[]);
+  const dashboardSnapshotPromise = withFirebaseTimeout(getDoc(doc(db, dashboardCollection, dashboardDocument)), 'load');
+  // Operations Manager's Audit Log switch is enforced by Rules; check it on the
+  // loaded settings first instead of running a query the Rules would refuse.
+  const auditLogsPromise = staffRole === 'Operations Manager'
+    ? dashboardSnapshotPromise.then((dashboardSnapshot) => (
+      canOperationsManagerReadAuditLogs(dashboardSnapshot.data())
+        ? loadAuditLogsFromFirebase(db, staffName, true)
+        : [] as AuditLogEntry[]
+    ))
+    : canViewOperationsData || (scopedStaffRole && staffName)
+      ? loadAuditLogsFromFirebase(db, staffName, canViewOperationsData)
+      : Promise.resolve([] as AuditLogEntry[]);
   const waClicksPromise = canViewAllStaff
     ? loadCollectionItems<WhatsAppTrackingClick>(db, WA_CLICKS_COLLECTION).catch(() => [] as WhatsAppTrackingClick[])
-    : scopedStaffRole && staffName
+    : (scopedStaffRole || canViewOperationsData) && staffName
       ? loadStaffOwnedWhatsAppClicks(db, staffName).catch(() => [] as WhatsAppTrackingClick[])
       : Promise.resolve([] as WhatsAppTrackingClick[]);
   const shortLinksPromise = canViewAllStaff
     ? Promise.resolve(null)
-    : scopedStaffRole && staffName
+    : (scopedStaffRole || canViewOperationsData) && staffName
       ? loadStaffOwnedShortLinks(db, staffName)
       : Promise.resolve([] as CustomerIntakeShortLink[]);
 
   const [snapshot, collectionCustomers, collectionRawLeads, collectionAuditLogs, collectionWaClicks, stockReservations, staffShortLinks, collectionCalendarTasks] = await Promise.all([
-    withFirebaseTimeout(getDoc(doc(db, dashboardCollection, dashboardDocument)), 'load'),
+    dashboardSnapshotPromise,
     customersPromise,
     collectionRawLeadsPromise,
     auditLogsPromise,
@@ -1588,9 +1978,13 @@ export async function loadDashboardStateFromFirebase(): Promise<DashboardState |
         FIREBASE_COLLECTION_SYNC_CONCURRENCY,
         (note) => writeCalendarTask(db, note)
       );
+      legacyCalendarNotesPendingMigration = [];
     } catch (error) {
+      legacyCalendarNotesPendingMigration = legacyCalendarNotes.filter((note) => !collectionCalendarTaskIds.has(note.id));
       console.warn('Legacy calendar task migration will retry on the next Super Admin load.', error);
     }
+  } else if (canViewAllStaff) {
+    legacyCalendarNotesPendingMigration = [];
   }
 
   lastKnownDashboardStateVersion = version;
@@ -1610,7 +2004,6 @@ export async function loadDashboardStateFromFirebase(): Promise<DashboardState |
       : Array.isArray(data.rawCustomerLeads) ? data.rawCustomerLeads : [],
     errorCodeDefinitions: Array.isArray(data.errorCodeDefinitions) ? data.errorCodeDefinitions : [],
     roleAccounts: Array.isArray(data.roleAccounts) ? data.roleAccounts : [],
-    rolePermissions: Array.isArray(data.rolePermissions) ? data.rolePermissions : [],
     roleNavAccess: Array.isArray(data.roleNavAccess) ? data.roleNavAccess : [],
     defaultAvatarLibrary: Array.isArray(data.defaultAvatarLibrary) ? data.defaultAvatarLibrary : [],
     whatsAppTrackingLinks: Array.isArray(data.whatsAppTrackingLinks) ? data.whatsAppTrackingLinks : [],
@@ -1625,11 +2018,12 @@ export async function loadDashboardStateFromFirebase(): Promise<DashboardState |
       ? Array.isArray(data.customerIntakeShortLinks) ? data.customerIntakeShortLinks : []
       : staffShortLinks || [],
     customMissions: Array.isArray(data.customMissions) ? data.customMissions : [],
-    rewardTeams: Array.isArray(data.rewardTeams) ? data.rewardTeams : [],
     approvalRequests: Array.isArray(data.approvalRequests) ? data.approvalRequests : [],
     calendarNotes: resolvedCalendarNotes,
     notifications: Array.isArray(data.notifications) ? data.notifications : [],
-    auditLogs: !canViewOperationsData || collectionAuditLogs.length > 0
+    auditLogs: staffRole === 'Operations Manager' && !canOperationsManagerReadAuditLogs(data)
+      ? []
+      : !canViewOperationsData || collectionAuditLogs.length > 0
       ? collectionAuditLogs
       : Array.isArray(data.auditLogs) ? data.auditLogs : [],
     vehicleTags: Array.isArray(data.vehicleTags) ? data.vehicleTags : [],
@@ -1798,12 +2192,19 @@ function stripApplicationDocumentData(applications: LoanApplication[]): LoanAppl
 export async function saveDealFinanceWithStockReservationToFirebase(
   application: LoanApplication,
   previousStockUnitId: string,
-  updatedBy: string
-) {
-  if (!isFirebaseConfigured) return;
+  updatedBy: string,
+  options: {
+    /** Written in the same transaction (a bike ordered outside that arrived, owner review 2026-10-19). */
+    stockOrder?: StockOrder;
+    /** Finance actions must not rewrite normalised application-information defaults. */
+    financeOnly?: boolean;
+    expectedFinanceUpdatedAt?: string;
+  } = {}
+): Promise<LoanApplication> {
+  if (!isFirebaseConfigured) return application;
   const db = await getAuthedDb();
   const firebaseUser = await ensureFirebaseAuthUser();
-  if (!db || !firebaseUser || firebaseUser.isAnonymous) return;
+  if (!db || !firebaseUser || firebaseUser.isAnonymous) throw new Error('Sign in before updating deal finance.');
 
   // Must match firestore.rules: vehicle_stock_reservations and settlement
   // writes belong to the operational lead roles only. Failing fast here gives
@@ -1822,6 +2223,9 @@ export async function saveDealFinanceWithStockReservationToFirebase(
     finance?.stock_unit_id || ''
   ].filter(Boolean)));
   const sanitizedApplication = stripApplicationDocumentData([application])[0];
+  const customerWrite = stripUndefinedValues(options.financeOnly
+    ? { deal_finance: sanitizedApplication.deal_finance, vehicle_plate: sanitizedApplication.vehicle_plate }
+    : sanitizedApplication) as Record<string, unknown>;
   const expectedVersion = lastSyncedCustomerVersion.get(application.id) || 0;
   const customerRef = doc(db, CUSTOMERS_COLLECTION, application.id);
   const reservationRefs = affectedStockUnitIds.map((stockUnitId) => (
@@ -1829,7 +2233,7 @@ export async function saveDealFinanceWithStockReservationToFirebase(
   ));
   const now = new Date().toISOString();
 
-  const nextVersion = await withFirebaseTimeout(
+  const confirmed = await withFirebaseTimeout(
     runTransaction(db, async (transaction) => {
       const customerSnapshot = await transaction.get(customerRef);
       const reservationSnapshots = await Promise.all(reservationRefs.map((reference) => transaction.get(reference)));
@@ -1838,6 +2242,11 @@ export async function saveDealFinanceWithStockReservationToFirebase(
         : 0;
 
       if (!customerSnapshot.exists() || currentVersion !== expectedVersion) {
+        throw new CollectionItemVersionConflictError(CUSTOMERS_COLLECTION, application.id, currentVersion, expectedVersion);
+      }
+
+      if (options.expectedFinanceUpdatedAt !== undefined
+        && (customerSnapshot.data().deal_finance?.updated_at || '') !== options.expectedFinanceUpdatedAt) {
         throw new CollectionItemVersionConflictError(CUSTOMERS_COLLECTION, application.id, currentVersion, expectedVersion);
       }
 
@@ -1879,23 +2288,39 @@ export async function saveDealFinanceWithStockReservationToFirebase(
       });
 
       const version = currentVersion + 1;
-      transaction.set(
-        customerRef,
-        stripUndefinedValues({
-          ...sanitizedApplication,
-          _sync_version: version,
-          updatedAt: serverTimestamp()
-        }) as Record<string, unknown>,
-        { merge: false }
-      );
-      return version;
+      const payload = { ...customerWrite, _sync_version: version, updatedAt: serverTimestamp() };
+      if (options.financeOnly) transaction.update(customerRef, payload);
+      else transaction.set(customerRef, payload, { merge: false });
+      if (options.stockOrder) {
+        transaction.set(
+          doc(db, STOCK_ORDERS_COLLECTION, options.stockOrder.application_id),
+          { ...toStockOrder(options.stockOrder as unknown as Record<string, unknown>), updatedAt: serverTimestamp() }
+        );
+      }
+      return { version, application: withoutSyncMetadata<LoanApplication>(options.financeOnly ? { ...customerSnapshot.data(), ...customerWrite } : customerWrite, application.id) };
     }),
     'deal finance stock reservation'
-  );
+  ).catch(async (error) => {
+    if (error instanceof StockReservationConflictError || error instanceof CollectionItemVersionConflictError) throw error;
+    try {
+      const snapshot = await withFirebaseTimeout(getDocFromServer(customerRef), 'finance save confirmation');
+      const data = snapshot.exists() ? snapshot.data() : undefined;
+      // Confirm the fields this transaction wrote, never an unacknowledged local view.
+      if (data && !snapshot.metadata.hasPendingWrites && !snapshot.metadata.fromCache
+        && normalizeCollectionItemVersion(data) === expectedVersion + 1
+        && stableStringify(withoutSyncMetadata(options.financeOnly ? { deal_finance: data.deal_finance, vehicle_plate: data.vehicle_plate } : data, application.id)) === stableStringify(withoutSyncMetadata(customerWrite, application.id))) {
+        return { version: expectedVersion + 1, application: withoutSyncMetadata<LoanApplication>(data, application.id) };
+      }
+    } catch {
+      // Keep the original failure when the server cannot confirm the write.
+    }
+    throw error;
+  });
 
-  lastSyncedCustomerVersion.set(application.id, nextVersion);
-  lastSyncedCustomerJson.set(application.id, stableStringify(sanitizedApplication));
+  lastSyncedCustomerVersion.set(application.id, confirmed.version);
+  lastSyncedCustomerJson.set(application.id, stableStringify(confirmed.application));
   lastCheckedCustomerReferences.delete(application.id);
+  return confirmed.application;
 }
 
 export async function loadApplicationDocumentsFromFirebase(documentIds: string[]): Promise<Map<string, string>> {
@@ -2071,7 +2496,6 @@ export async function saveDashboardStateToFirebase(state: DashboardState) {
   const applications = Array.isArray(state.applications) ? state.applications : [];
   const rawLeads = Array.isArray(state.rawCustomerLeads) ? state.rawCustomerLeads : [];
   const auditLogs = Array.isArray(state.auditLogs) ? state.auditLogs : [];
-  const calendarNotes = Array.isArray(state.calendarNotes) ? state.calendarNotes : [];
   const strippedApplications = stripApplicationDocumentData(applications);
   const hasPendingNewCustomerDocumentUploads = applications.some((application) => (
     (application.payslip_documents || []).some(isPendingNewCustomerDocumentUpload)
@@ -2111,10 +2535,12 @@ export async function saveDashboardStateToFirebase(state: DashboardState) {
     isolateCollectionConflict(syncCollectionDiff(db, CUSTOMERS_COLLECTION, initiallyPublishedApplications, lastSyncedCustomerJson, lastSyncedCustomerVersion, pendingCustomerDeletionIds, lastCheckedCustomerReferences)),
     isolateCollectionConflict(syncCollectionDiff(db, RAW_LEADS_COLLECTION, rawLeads, lastSyncedRawLeadJson, lastSyncedRawLeadVersion, pendingRawLeadDeletionIds, lastCheckedRawLeadReferences)),
     appendAuditLogsToFirebase(db, auditLogs, staffIdentity.staffName, staffIdentity.role),
-    staffRole === 'Super Admin' ? saveDailyStatsToFirebase(db, state) : Promise.resolve(),
-    staffRole === 'Super Admin'
-      ? runWithConcurrency(calendarNotes, FIREBASE_COLLECTION_SYNC_CONCURRENCY, (note) => writeCalendarTask(db, note))
-      : Promise.resolve()
+    // Calendar tasks are NOT re-written here. Every task action (create,
+    // complete, reply, delete) writes its own calendar_tasks document, so a
+    // whole-list setDoc on every Super Admin save only replaced replies and
+    // completions that had not reached this browser yet, and brought deleted
+    // tasks back.
+    staffRole === 'Super Admin' ? saveDailyStatsToFirebase(db, state) : Promise.resolve()
   ]);
 
   // Create/update the owner-scoped customer before uploading its files because
@@ -2207,13 +2633,22 @@ export async function saveDashboardStateToFirebase(state: DashboardState) {
         // Firebase mode authenticates through Firebase Auth. Never mirror
         // local fallback password hashes into the shared state document.
         roleAccounts: (state.roleAccounts || []).map((account) => ({ ...account, password_hash: '' })),
+        // The full visitor list lives in wa_clicks and in memory for analytics;
+        // the shared document keeps only a bounded recent copy (1 MB limit).
+        whatsAppTrackingClicks: (state.whatsAppTrackingClicks || []).slice(0, DASHBOARD_STATE_CLICKS_LIMIT),
+        // calendar_tasks is the only copy of calendar tasks. The shared
+        // document keeps only legacy notes whose migration has not succeeded,
+        // so a deleted task can no longer come back from a stale copy here.
+        calendarNotes: legacyCalendarNotesPendingMigration ?? undefined,
         projectName: 'Dr Racing Dashboard',
         updatedAt: serverTimestamp()
       };
 
+      const cleanedPayload = stripUndefinedValues(dashboardPayload) as Record<string, unknown>;
+      assertDashboardStateFitsDocumentLimit(cleanedPayload);
       transaction.set(
         stateRef,
-        stripUndefinedValues(dashboardPayload) as Record<string, unknown>,
+        cleanedPayload,
         { merge: true }
       );
 
@@ -2227,4 +2662,373 @@ export async function saveDashboardStateToFirebase(state: DashboardState) {
     await syncPublicReadableConfigToFirebase(db, state, nextVersion);
   }
   if (collectionConflict) throw collectionConflict;
+}
+
+// Delivery payments (owner meeting 2026-10-13): one row per payment Sales
+// collect, in delivery_payments. Rules: read like application_documents (so
+// the query filters application_id), created by the file's handler or an
+// Operations lead, voided once with a reason, never deleted. Without
+// Firebase (local mode, e2e) the rows live in localStorage.
+const DELIVERY_PAYMENTS_COLLECTION = 'delivery_payments';
+const LOCAL_DELIVERY_PAYMENTS_KEY = 'dr_racing_delivery_payments';
+
+type LocalDeliveryPayment = DeliveryPayment & { receipt_data_url?: string };
+
+const readLocalDeliveryPayments = (): LocalDeliveryPayment[] => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(LOCAL_DELIVERY_PAYMENTS_KEY) || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const writeLocalDeliveryPayments = (payments: LocalDeliveryPayment[]) => {
+  localStorage.setItem(LOCAL_DELIVERY_PAYMENTS_KEY, JSON.stringify(payments));
+};
+
+const toDeliveryPayment = (data: Record<string, unknown>): DeliveryPayment => ({
+  id: String(data.id || ''),
+  application_id: String(data.application_id || ''),
+  amount: Number(data.amount) || 0,
+  method: (String(data.method || 'Other') as DeliveryPayment['method']),
+  received_at: String(data.received_at || ''),
+  recorded_by: String(data.recorded_by || ''),
+  recorded_by_role: data.recorded_by_role as DeliveryPayment['recorded_by_role'],
+  recorded_at: String(data.recorded_at || ''),
+  note: String(data.note || ''),
+  receipt_document_id: String(data.receipt_document_id || ''),
+  voided_at: String(data.voided_at || ''),
+  voided_by: String(data.voided_by || ''),
+  void_reason: String(data.void_reason || '')
+});
+
+export async function listDeliveryPayments(applicationId: string): Promise<DeliveryPayment[]> {
+  const db = await getAuthedDb();
+  const sortByReceived = (payments: DeliveryPayment[]) => [...payments].sort((left, right) => left.recorded_at.localeCompare(right.recorded_at));
+  if (!db) {
+    return sortByReceived(readLocalDeliveryPayments().filter((payment) => payment.application_id === applicationId));
+  }
+  const snapshot = await withFirebaseTimeout(
+    getDocsFromServer(query(collection(db, DELIVERY_PAYMENTS_COLLECTION), where('application_id', '==', applicationId))),
+    'delivery payments read'
+  );
+  // Server reads can still include local writes whose acknowledgement is pending.
+  if (snapshot.metadata.fromCache || snapshot.metadata.hasPendingWrites) {
+    throw new Error('Delivery payments are still waiting for server confirmation');
+  }
+  return sortByReceived(snapshot.docs.map((item) => toDeliveryPayment(item.data())));
+}
+
+/** The receipt goes to customer_documents/{application}/{receipt id}, the file's own Storage folder. */
+export async function createDeliveryPayment(payment: DeliveryPayment, receiptDataUrl = ''): Promise<DeliveryPayment> {
+  const db = await getAuthedDb();
+  // Separate upload attempts cannot overwrite the receipt of an in-flight payment.
+  const receiptDocumentId = receiptDataUrl ? newId('RECEIPT') : '';
+  const saved = { ...payment, receipt_document_id: receiptDocumentId };
+  // Existing rows are immutable apart from voiding: a retry confirms the original.
+  const existing = (await listDeliveryPayments(payment.application_id)).find((row) => row.id === payment.id);
+  if (existing) return existing;
+  if (!db) {
+    const rows = readLocalDeliveryPayments();
+    const confirmed = rows.find((row) => row.id === payment.id);
+    if (confirmed) return confirmed;
+    writeLocalDeliveryPayments([...rows, { ...saved, receipt_data_url: receiptDataUrl || undefined }]);
+    return saved;
+  }
+  if (receiptDataUrl) {
+    const { uploadApplicationDocumentToStorage } = await import('./applicationDocumentStorage');
+    await uploadApplicationDocumentToStorage(payment.application_id, receiptDocumentId, receiptDataUrl);
+  }
+  try {
+    await withFirebaseTimeout(
+      setDoc(doc(db, DELIVERY_PAYMENTS_COLLECTION, payment.id), { ...saved, updatedAt: serverTimestamp() }),
+      'delivery payment write'
+    );
+    return saved;
+  } catch (error) {
+    try {
+      const confirmed = (await listDeliveryPayments(payment.application_id)).find((row) => row.id === payment.id);
+      if (confirmed) return confirmed;
+    } catch {
+      // Preserve the write failure when a server read cannot resolve it.
+    }
+    throw error;
+  }
+}
+
+/**
+ * Whether a payment id is on the server, for a write whose acknowledgement
+ * timed out. Reads the server, not the cache: the persistent cache already
+ * shows a write that is still queued. Uses the application_id query because
+ * Rules can only read an existing row (a get of a missing id is denied).
+ */
+export async function findDeliveryPaymentOnServer(applicationId: string, paymentId: string): Promise<DeliveryPayment | null> {
+  return (await listDeliveryPayments(applicationId)).find((row) => row.id === paymentId) || null;
+}
+
+const STOCK_ORDERS_COLLECTION = 'stock_orders';
+const LOCAL_STOCK_ORDERS_KEY = 'dr_racing_stock_orders';
+
+const readLocalStockOrders = (): StockOrder[] => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(LOCAL_STOCK_ORDERS_KEY) || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const toStockOrder = (data: Record<string, unknown>): StockOrder => ({
+  application_id: String(data.application_id || ''),
+  vehicle_model: String(data.vehicle_model || ''),
+  colour: String(data.colour || ''),
+  condition: String(data.condition || ''),
+  supplier: String(data.supplier || ''),
+  eta: String(data.eta || ''),
+  note: String(data.note || ''),
+  status: (['Ordered', 'Arrived', 'Cancelled'].includes(String(data.status)) ? data.status : 'Ordered') as StockOrder['status'],
+  ordered_at: String(data.ordered_at || ''),
+  ordered_by: String(data.ordered_by || ''),
+  updated_at: String(data.updated_at || ''),
+  updated_by: String(data.updated_by || '')
+});
+
+/** Bikes being sourced for approved deals (Operations leads only; Firestore Rules refuse everyone else). */
+export async function listStockOrders(): Promise<StockOrder[]> {
+  const db = await getAuthedDb();
+  if (!db) return readLocalStockOrders();
+  const snapshot = await withFirebaseTimeout(getDocs(collection(db, STOCK_ORDERS_COLLECTION)), 'stock orders read');
+  return snapshot.docs.map((item) => toStockOrder(item.data()));
+}
+
+/** Creates or replaces the stock order of one application. */
+export async function saveStockOrder(order: StockOrder): Promise<StockOrder> {
+  const db = await getAuthedDb();
+  const saved = toStockOrder(order as unknown as Record<string, unknown>);
+  if (!db) {
+    localStorage.setItem(LOCAL_STOCK_ORDERS_KEY, JSON.stringify([
+      ...readLocalStockOrders().filter((item) => item.application_id !== saved.application_id),
+      saved
+    ]));
+    return saved;
+  }
+  await withFirebaseTimeout(
+    setDoc(doc(db, STOCK_ORDERS_COLLECTION, saved.application_id), { ...saved, updatedAt: serverTimestamp() }),
+    'stock order write'
+  );
+  return saved;
+}
+
+export async function voidDeliveryPayment(payment: DeliveryPayment, voidedBy: string, reason: string): Promise<DeliveryPayment> {
+  const db = await getAuthedDb();
+  const current = (await listDeliveryPayments(payment.application_id)).find((row) => row.id === payment.id);
+  if (!current) throw new Error('Payment no longer exists');
+  if (current.voided_at) return current;
+  const voided = { ...current, voided_at: new Date().toISOString(), voided_by: voidedBy, void_reason: reason.trim() };
+  if (!db) {
+    writeLocalDeliveryPayments(readLocalDeliveryPayments().map((item) => (item.id === payment.id ? { ...item, ...voided } : item)));
+    return voided;
+  }
+  try {
+    await withFirebaseTimeout(
+      updateDoc(doc(db, DELIVERY_PAYMENTS_COLLECTION, payment.id), {
+        voided_at: voided.voided_at,
+        voided_by: voided.voided_by,
+        void_reason: voided.void_reason,
+        updatedAt: serverTimestamp()
+      }),
+      'delivery payment void'
+    );
+    return voided;
+  } catch (error) {
+    try {
+      const confirmed = (await listDeliveryPayments(payment.application_id)).find((row) => row.id === payment.id);
+      if (confirmed?.voided_at) return confirmed;
+    } catch {
+      // Keep an unresolved void retryable until the server confirms it.
+    }
+    throw error;
+  }
+}
+
+/** A data URL (or '') for showing the receipt photo. */
+export async function loadDeliveryReceipt(payment: DeliveryPayment): Promise<string> {
+  if (!payment.receipt_document_id) return '';
+  const db = await getAuthedDb();
+  if (!db) {
+    return readLocalDeliveryPayments().find((item) => item.id === payment.id)?.receipt_data_url || '';
+  }
+  const { loadApplicationDocumentFromStorage } = await import('./applicationDocumentStorage');
+  return loadApplicationDocumentFromStorage(`customer_documents/${encodeURIComponent(payment.application_id)}/${encodeURIComponent(payment.receipt_document_id)}`);
+}
+
+// Delivery checklist attachments (HP PDF, motor photo, K1, policy, signed
+// agreement...): the file goes to customer_documents/{application}/{id} and an
+// application_documents row holds its metadata, exactly like an application
+// document; the step keeps the ids. They stay out of payslip_documents, so the
+// application's document checklist never counts them.
+export interface DeliveryAttachment {
+  id: string;
+  application_id: string;
+  document_key: string;
+  file_name: string;
+  file_type: string;
+  file_size: number;
+  uploaded_by: string;
+  uploaded_at: string;
+  storage_path: string;
+}
+
+const LOCAL_DELIVERY_ATTACHMENTS_KEY = 'dr_racing_delivery_attachments';
+type LocalDeliveryAttachment = DeliveryAttachment & { file_data_url: string };
+
+const readLocalDeliveryAttachments = (): LocalDeliveryAttachment[] => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(LOCAL_DELIVERY_ATTACHMENTS_KEY) || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+export async function createDeliveryAttachment(
+  application: Pick<LoanApplication, 'id' | 'handler_name'>,
+  documentKey: string,
+  file: { name: string; type: string; size: number; dataUrl: string },
+  uploadedBy: string
+): Promise<DeliveryAttachment> {
+  const id = `DELIVERY-DOC-${application.id}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  const attachment: DeliveryAttachment = {
+    id,
+    application_id: application.id,
+    document_key: documentKey,
+    file_name: file.name.slice(0, 255),
+    file_type: file.type,
+    file_size: Math.max(1, Math.round(file.size)),
+    uploaded_by: uploadedBy,
+    uploaded_at: new Date().toISOString(),
+    storage_path: ''
+  };
+  const db = await getAuthedDb();
+  if (!db) {
+    localStorage.setItem(LOCAL_DELIVERY_ATTACHMENTS_KEY, JSON.stringify([...readLocalDeliveryAttachments(), { ...attachment, file_data_url: file.dataUrl }]));
+    return attachment;
+  }
+  const { uploadApplicationDocumentToStorage } = await import('./applicationDocumentStorage');
+  const storagePath = await uploadApplicationDocumentToStorage(application.id, id, file.dataUrl);
+  const saved = { ...attachment, storage_path: storagePath };
+  await withFirebaseTimeout(
+    setDoc(doc(db, APPLICATION_DOCUMENTS_COLLECTION, id), {
+      ...saved,
+      handler_name: application.handler_name,
+      file_data_url: '',
+      download_url: '',
+      updatedAt: serverTimestamp()
+    }),
+    'delivery attachment save'
+  );
+  return saved;
+}
+
+export async function listDeliveryAttachments(applicationId: string, ids: string[]): Promise<DeliveryAttachment[]> {
+  const wanted = Array.from(new Set(ids.filter(Boolean)));
+  if (wanted.length === 0) return [];
+  const db = await getAuthedDb();
+  if (!db) {
+    return readLocalDeliveryAttachments()
+      .filter((item) => item.application_id === applicationId && wanted.includes(item.id))
+      .map(({ file_data_url: _data, ...item }) => item);
+  }
+  const snapshots = await Promise.all(wanted.map((id) => withFirebaseTimeout(getDoc(doc(db, APPLICATION_DOCUMENTS_COLLECTION, id)), 'delivery attachment read')));
+  return snapshots
+    .filter((snapshot) => snapshot.exists())
+    .map((snapshot) => {
+      const data = snapshot.data() as Record<string, unknown>;
+      return {
+        id: String(data.id || snapshot.id),
+        application_id: String(data.application_id || ''),
+        document_key: String(data.document_key || ''),
+        file_name: String(data.file_name || ''),
+        file_type: String(data.file_type || ''),
+        file_size: Number(data.file_size) || 0,
+        uploaded_by: String(data.uploaded_by || ''),
+        uploaded_at: String(data.uploaded_at || ''),
+        storage_path: String(data.storage_path || '')
+      };
+    });
+}
+
+export async function loadDeliveryAttachment(attachment: DeliveryAttachment): Promise<string> {
+  const db = await getAuthedDb();
+  if (!db) {
+    return readLocalDeliveryAttachments().find((item) => item.id === attachment.id)?.file_data_url || '';
+  }
+  if (!attachment.storage_path) return '';
+  const { loadApplicationDocumentFromStorage } = await import('./applicationDocumentStorage');
+  return loadApplicationDocumentFromStorage(attachment.storage_path);
+}
+
+export class AdminDeliveryError extends Error {
+  constructor(public status: number, message: string) {
+    super(message);
+    this.name = 'AdminDeliveryError';
+  }
+}
+
+/**
+ * An Admin's Mark Bike Delivered goes through server.mjs POST /api/staff/deliveries
+ * (Firestore Rules keep deal_finance and stock locks for the Operations leads).
+ * The server checks ownership, approval, the delivery checklist and the stock
+ * unit, writes the deal, the stock lock and an audit row with IP and page.
+ * Returns the delivered application as the server saved it.
+ */
+export async function markBikeDeliveredThroughServer(
+  application: LoanApplication,
+  stockUnitId: string,
+  sourcePage: string
+): Promise<LoanApplication> {
+  const firebaseUser = await ensureFirebaseAuthUser();
+  if (!firebaseUser || firebaseUser.isAnonymous) {
+    throw new AdminDeliveryError(401, 'Missing Firebase staff session.');
+  }
+  const expectedVersion = lastSyncedCustomerVersion.get(application.id);
+  if (expectedVersion === undefined) {
+    throw new CollectionItemVersionConflictError(CUSTOMERS_COLLECTION, application.id, -1, -1);
+  }
+  const token = await firebaseUser.getIdToken();
+  const response = await withFirebaseTimeout(
+    fetch('/api/staff/deliveries', {
+      method: 'POST',
+      cache: 'no-store',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ customerId: application.id, stockUnitId, expectedVersion, sourcePage })
+    }),
+    'admin delivery'
+  );
+  const payload = await response.json().catch(() => ({})) as {
+    error?: string;
+    version?: number;
+    dealFinance?: LoanApplication['deal_finance'];
+    vehiclePlate?: string;
+  };
+  if (!response.ok) {
+    if (response.status === 409 && /changed on another device/i.test(String(payload.error || ''))) {
+      throw new CollectionItemVersionConflictError(CUSTOMERS_COLLECTION, application.id, -1, expectedVersion);
+    }
+    throw new AdminDeliveryError(response.status, String(payload.error || `Delivery failed (${response.status}).`));
+  }
+  const delivered: LoanApplication = {
+    ...application,
+    deal_finance: payload.dealFinance,
+    vehicle_plate: payload.vehiclePlate ?? application.vehicle_plate
+  };
+  const version = Number(payload.version);
+  if (Number.isFinite(version)) {
+    lastSyncedCustomerVersion.set(application.id, Math.floor(version));
+  }
+  const sanitized = stripApplicationDocumentData([delivered])[0];
+  lastSyncedCustomerJson.set(application.id, stableStringify(sanitized));
+  lastCheckedCustomerReferences.set(application.id, delivered);
+  return delivered;
 }

@@ -4,11 +4,10 @@
  */
 
 import React from 'react';
+import { Database, XCircle } from 'lucide-react';
 import SortableHeader, { type SortDirection, type SortState } from '../../SortableHeader';
 import { tr } from '../../../lib/i18n';
 import { AnalyticsSection, AssetIcon, CompareSummaryTile, MetaBar, tra, type StatComparison } from './SectionShell';
-import rejectedIcon from '../../../assets/icons/nav/rejected.png';
-import totalLeadsIcon from '../../../assets/icons/nav/totalLeads.png';
 
 type OperationsBreakdown = 'status' | 'staff' | 'role';
 type OperationsSortKey = 'label' | 'value' | 'percentage';
@@ -96,7 +95,7 @@ function OperationsSection({
       id="operations"
       title={tr('运营表现', 'Operations', "operasi")}
       subtitle={tr('状态 / 工作量 / 拒贷原因', 'Status / workload / rejects', "Status / beban kerja / penolakan")}
-      icon={<AssetIcon src={totalLeadsIcon} />}
+      icon={<AssetIcon icon={Database} />}
       isOpen={isOpen}
       onToggle={onToggle}
     >
@@ -110,16 +109,16 @@ function OperationsSection({
 
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
         <div className="min-w-0">{rejectedCodeVisual}</div>
-        <section className="min-w-0 overflow-hidden rounded-xl border border-slate-100 bg-white shadow-sm">
+        <section className="min-w-0 overflow-hidden rounded-card border border-slate-100 bg-white shadow-e1">
           <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
             <div>
-              <h3 className="text-sm font-bold text-slate-900">{tr('拒贷代码明细', 'Rejected Loan CODE Detail', "Butiran KOD Pinjaman Ditolak")}</h3>
-              <p className="text-xs text-slate-400">{tr('只统计最终状态为 REJECT 的失败原因代码。', 'Only counts reject codes where the final loan status is REJECT.', "Hanya mengira kod penolakan di mana status pinjaman terakhir adalah TOLAK.")}</p>
+              <h3 className="text-headline text-slate-900">{tr('拒贷代码明细', 'Rejected Loan CODE Detail', "Butiran KOD Pinjaman Ditolak")}</h3>
+              <p className="text-footnote text-slate-400">{tr('只统计最终状态为 REJECT 的失败原因代码。', 'Only counts reject codes where the final loan status is REJECT.', "Hanya mengira kod penolakan di mana status pinjaman terakhir adalah TOLAK.")}</p>
             </div>
-            <AssetIcon src={rejectedIcon} className="h-10 w-10" />
+            <AssetIcon icon={XCircle} className="h-6 w-6 text-rose-600" />
           </div>
           <div className="overflow-hidden">
-            <table className="w-full table-fixed text-left text-xs">
+            <table className="w-full table-fixed text-left text-footnote">
               <colgroup>
                 <col className="w-[15%]" />
                 <col className="w-[34%]" />
@@ -127,7 +126,7 @@ function OperationsSection({
                 <col className="w-[9%]" />
                 <col className="w-[18%]" />
               </colgroup>
-              <thead className="bg-slate-50/75 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+              <thead className="bg-slate-50/75 text-micro uppercase text-slate-400">
                 <tr>
                   <th className="px-4 py-3">CODE</th>
                   <th className="px-4 py-3">{tr('问题', 'Issue', "Isu")}</th>
@@ -140,7 +139,7 @@ function OperationsSection({
                 {rejectedCodeRows.slice(0, REJECTED_CODE_DETAIL_LIMIT).map((row) => (
                   <tr key={row.key}>
                     <td className="px-4 py-4 align-top">
-                      <span className={`inline-flex rounded-full px-2.5 py-1 font-mono text-[10px] font-bold ${row.key === 'NO_CODE' ? 'bg-amber-50 text-amber-700' : 'bg-rose-50 text-rose-700'}`}>{row.label}</span>
+                      <span className={`inline-flex rounded-full px-2.5 py-1 font-mono text-micro tracking-normal ${row.key === 'NO_CODE' ? 'bg-amber-50 text-amber-700' : 'bg-rose-50 text-rose-700'}`}>{row.label}</span>
                     </td>
                     <td className="px-4 py-4 align-top"><p className="break-words font-semibold text-slate-700">{row.issue}</p></td>
                     <td className="px-4 py-4 align-top"><p className="break-words text-slate-500">{row.customerRequest}</p></td>
@@ -157,7 +156,7 @@ function OperationsSection({
                 ))}
                 {rejectedCodeRows.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="px-5 py-10 text-center text-sm text-slate-400">{tr('当前时间段没有已拒绝的贷款代码', 'No rejected loan codes in this timeframe', "Tiada kod pinjaman yang ditolak dalam tempoh masa ini")}</td>
+                    <td colSpan={5} className="px-5 py-10 text-center text-body text-slate-400">{tr('当前时间段没有已拒绝的贷款代码', 'No rejected loan codes in this timeframe', "Tiada kod pinjaman yang ditolak dalam tempoh masa ini")}</td>
                   </tr>
                 )}
               </tbody>
@@ -166,15 +165,15 @@ function OperationsSection({
         </section>
       </div>
 
-      <section className="rounded-xl border border-slate-100 bg-white shadow-sm">
+      <section className="rounded-card border border-slate-100 bg-white shadow-e1">
         <div className="flex flex-col gap-4 border-b border-slate-100 px-5 py-4 xl:flex-row xl:items-center xl:justify-between">
           <div>
-            <h3 className="text-sm font-bold text-slate-900">{tr('运营表现', 'Operations Performance', "Prestasi Operasi")}</h3>
-            <p className="text-xs text-slate-400">{tr('一张图查看贷款状态、员工工作量或角色账号分布。', 'One chart for loan status, staff workload, or role account distribution', "Satu carta untuk status pinjaman, beban kerja kakitangan atau pengagihan akaun peranan")}</p>
+            <h3 className="text-headline text-slate-900">{tr('运营表现', 'Operations Performance', "Prestasi Operasi")}</h3>
+            <p className="text-footnote text-slate-400">{tr('一张图查看贷款状态、员工工作量或角色账号分布。', 'One chart for loan status, staff workload, or role account distribution', "Satu carta untuk status pinjaman, beban kerja kakitangan atau pengagihan akaun peranan")}</p>
           </div>
-          <div className="flex flex-wrap gap-2 rounded-xl bg-slate-100 p-1">
+          <div className="flex flex-wrap gap-2 rounded-card bg-slate-100 p-1">
             {OPERATIONS_BREAKDOWN_OPTIONS.map((option) => (
-              <button key={option.value} type="button" onClick={() => onOperationsBreakdownChange(option.value)} className={`rounded-lg px-3 py-2 text-xs font-bold transition-colors ${operationsBreakdown === option.value ? 'bg-white text-indigo-600 shadow-xs' : 'text-slate-500 hover:text-slate-700'}`}>
+              <button aria-pressed={operationsBreakdown === option.value} key={option.value} type="button" onClick={() => onOperationsBreakdownChange(option.value)} className={`rounded-control px-3 py-2 text-footnote font-bold transition-colors ${operationsBreakdown === option.value ? 'bg-white text-indigo-600 shadow-xs' : 'text-slate-500 hover:text-slate-700'}`}>
                 {tra(option.label)}
               </button>
             ))}
@@ -195,14 +194,14 @@ function OperationsSection({
           {visual}
 
           <div className="mt-5 border-t border-slate-100 pt-4">
-            <button type="button" onClick={onToggleDetails} className="inline-flex items-center rounded-lg bg-slate-100 px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-200 hover:text-slate-900">
+            <button type="button" onClick={onToggleDetails} className="inline-flex items-center rounded-control bg-slate-100 px-3 py-2 text-footnote font-bold text-slate-600 transition-colors hover:bg-slate-200 hover:text-slate-900">
               {showDetails ? tr('收起明细', 'Hide Details', "Sembunyikan Butiran") : tr(`显示明细（${rows.length}）`, `Show Details (${rows.length})`, `Tunjukkan Butiran (${rows.length})`)}
             </button>
 
             {showDetails && (
               <div className="mt-4 overflow-x-auto">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-50/75 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                <table className="w-full text-left text-footnote">
+                  <thead className="bg-slate-50/75 text-micro uppercase text-slate-400">
                     <tr>
                       <th className="px-5 py-3"><SortableHeader sortKey="label" label={tra(selectedOperationsBreakdownLabel)} sortState={sortState} onSort={onSort} /></th>
                       <th className="px-5 py-3"><SortableHeader sortKey="value" label={tra(selectedOperationsValueLabel)} sortState={sortState} onSort={onSort} defaultDirection="desc" /></th>
@@ -226,7 +225,7 @@ function OperationsSection({
                     ))}
                     {rows.length === 0 && (
                       <tr>
-                        <td colSpan={3} className="px-5 py-10 text-center text-sm text-slate-400">{tr('还没有运营数据', 'No operations data yet', "Tiada data operasi lagi")}</td>
+                        <td colSpan={3} className="px-5 py-10 text-center text-body text-slate-400">{tr('还没有运营数据', 'No operations data yet', "Tiada data operasi lagi")}</td>
                       </tr>
                     )}
                   </tbody>

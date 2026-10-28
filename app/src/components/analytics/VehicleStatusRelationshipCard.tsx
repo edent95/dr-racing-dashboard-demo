@@ -77,20 +77,20 @@ const RELATIONSHIP_PAGE_SIZE = 5;
 function EmptyRow({ colSpan, text }: { colSpan: number; text: string }) {
   return (
     <tr>
-      <td colSpan={colSpan} className="px-5 py-8 text-center text-sm font-semibold text-slate-400">{text}</td>
+      <td colSpan={colSpan} className="px-5 py-8 text-center text-callout text-slate-400">{text}</td>
     </tr>
   );
 }
 
 function SummaryMetric({ label, value, helper, tone }: { label: string; value: React.ReactNode; helper: string; tone: string }) {
   return (
-    <div className="min-w-0 rounded-xl bg-slate-50 px-4 py-3">
+    <div className="min-w-0 rounded-card bg-slate-50 px-4 py-3">
       <div className="flex items-center gap-2">
         <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${tone}`} />
-        <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{label}</p>
+        <p className="text-micro uppercase text-slate-400">{label}</p>
       </div>
-      <p className="mt-1.5 break-words font-mono text-lg font-bold text-slate-900">{value}</p>
-      <p className="mt-1 break-words text-[11px] font-semibold text-slate-400">{helper}</p>
+      <p className="mt-1.5 break-words font-mono text-title-3 text-slate-900">{value}</p>
+      <p className="mt-1 break-words text-caption text-slate-400">{helper}</p>
     </div>
   );
 }
@@ -104,7 +104,7 @@ function CompactPager({ page, total, onPageChange }: { page: number; total: numb
 
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 bg-slate-50/50 px-4 py-2.5">
-      <span className="font-mono text-[10px] font-bold text-slate-400">
+      <span className="font-mono text-micro tracking-normal text-slate-400">
         {start}–{end} / {total}
       </span>
       <div className="flex items-center gap-2" aria-label={tr('表格分页', 'Table pagination', 'Penomboran halaman jadual')}>
@@ -112,16 +112,16 @@ function CompactPager({ page, total, onPageChange }: { page: number; total: numb
           type="button"
           onClick={() => onPageChange(Math.max(1, page - 1))}
           disabled={page <= 1}
-          className="rounded-lg bg-white px-3 py-1.5 text-[10px] font-bold text-slate-600 shadow-xs ring-1 ring-slate-200 transition-colors hover:text-indigo-600 disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded-control bg-white px-3 py-1.5 text-micro tracking-normal text-slate-600 shadow-xs ring-1 ring-slate-200 transition-colors hover:text-indigo-600 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {tr('上一页', 'Previous', 'Sebelumnya')}
         </button>
-        <span className="min-w-12 text-center font-mono text-[10px] font-bold text-slate-500">{page} / {pageCount}</span>
+        <span className="min-w-12 text-center font-mono text-micro tracking-normal text-slate-500">{page} / {pageCount}</span>
         <button
           type="button"
           onClick={() => onPageChange(Math.min(pageCount, page + 1))}
           disabled={page >= pageCount}
-          className="rounded-lg bg-white px-3 py-1.5 text-[10px] font-bold text-slate-600 shadow-xs ring-1 ring-slate-200 transition-colors hover:text-indigo-600 disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded-control bg-white px-3 py-1.5 text-micro tracking-normal text-slate-600 shadow-xs ring-1 ring-slate-200 transition-colors hover:text-indigo-600 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {tr('下一页', 'Next', 'Seterusnya')}
         </button>
@@ -156,24 +156,25 @@ function VehicleStatusRelationshipCard({ timeframeLabel, data }: VehicleStatusRe
   }, [activeView, data]);
 
   return (
-    <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm" aria-label={tr('申请状态与车辆需求关系', 'Application status and vehicle demand relationship', 'Hubungan status permohonan dan permintaan kenderaan')}>
+    <section className="overflow-hidden rounded-panel border border-slate-200 bg-white shadow-e1" aria-label={tr('申请状态与车辆需求关系', 'Application status and vehicle demand relationship', 'Hubungan status permohonan dan permintaan kenderaan')}>
       <div className="flex flex-col gap-4 border-b border-slate-100 px-5 py-5 lg:flex-row lg:items-center lg:justify-between">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <h3 className="text-sm font-bold text-slate-900">{tr('申请状态 × 车辆需求', 'Application Status × Vehicle Demand', 'Status Permohonan × Permintaan Kenderaan')}</h3>
-            <span className="rounded-full bg-indigo-50 px-2.5 py-1 text-[10px] font-bold text-indigo-600">{timeframeLabel}</span>
+            <h3 className="text-headline text-slate-900">{tr('申请状态 × 车辆需求', 'Application Status × Vehicle Demand', 'Status Permohonan × Permintaan Kenderaan')}</h3>
+            <span className="rounded-full bg-indigo-50 px-2.5 py-1 text-micro tracking-normal text-indigo-600">{timeframeLabel}</span>
           </div>
-          <p className="mt-1 text-xs text-slate-400">{tr('查看哪些车型获批、最常见拒贷代码，以及申请取消原因。', 'See which models were approved, the most common reject CODEs, and why applications were cancelled.', 'Lihat model yang diluluskan, KOD penolakan paling biasa dan sebab permohonan dibatalkan.')}</p>
+          <p className="mt-1 text-footnote text-slate-400">{tr('查看哪些车型获批、最常见拒贷代码，以及申请取消原因。', 'See which models were approved, the most common reject CODEs, and why applications were cancelled.', 'Lihat model yang diluluskan, KOD penolakan paling biasa dan sebab permohonan dibatalkan.')}</p>
         </div>
-        <div className="flex max-w-full flex-wrap gap-1 rounded-xl bg-slate-100 p-1" role="tablist" aria-label={tr('状态与车辆分析视图', 'Status and vehicle analysis view', 'Paparan analisis status dan kenderaan')}>
+        <div className="flex max-w-full flex-wrap gap-1 rounded-card bg-slate-100 p-1" role="tablist" aria-label={tr('状态与车辆分析视图', 'Status and vehicle analysis view', 'Paparan analisis status dan kenderaan')}>
           {VIEW_OPTIONS.map((option) => (
             <button
+              aria-pressed={activeView === option.value}
               key={option.value}
               type="button"
               role="tab"
               aria-selected={activeView === option.value}
               onClick={() => setActiveView(option.value)}
-              className={`rounded-lg px-3 py-2 text-[11px] font-bold transition-colors ${activeView === option.value ? 'bg-white text-indigo-600 shadow-xs' : 'text-slate-500 hover:text-slate-700'}`}
+              className={`rounded-control px-3 py-2 text-caption font-semibold transition-colors ${activeView === option.value ? 'bg-white text-indigo-600 shadow-xs' : 'text-slate-500 hover:text-slate-700'}`}
             >
               {tr(option.zh, option.en, option.ms)}
             </button>
@@ -210,7 +211,7 @@ function VehicleStatusRelationshipCard({ timeframeLabel, data }: VehicleStatusRe
         </div>
 
         {(data.missingRejectCodeCount > 0 || data.missingCancellationReasonCount > 0) && (
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-xl bg-amber-50 px-4 py-3 text-xs font-semibold text-amber-800">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-card bg-amber-50 px-4 py-3 text-footnote text-amber-800">
             <span>{tr('数据质量提示', 'Data quality', 'Kualiti data')}</span>
             {data.missingRejectCodeCount > 0 && <span>{data.missingRejectCodeCount === 1
               ? tr('1 个拒绝申请缺少 CODE', '1 rejected application is missing a CODE', '1 permohonan ditolak tiada KOD')
@@ -221,15 +222,15 @@ function VehicleStatusRelationshipCard({ timeframeLabel, data }: VehicleStatusRe
           </div>
         )}
 
-        <div className="overflow-hidden rounded-xl border border-slate-100">
+        <div className="overflow-hidden rounded-card border border-slate-100">
         {activeView === 'matrix' && (
           <div role="tabpanel">
             <div className="border-b border-slate-100 px-4 py-3">
-              <h4 className="text-xs font-bold text-slate-800">{tr('车型状态表现', 'Model Status Performance', 'Prestasi Status Model')}</h4>
-              <p className="text-[11px] text-slate-400">{tr('Open 包含 NEW、PENDING、IN PROCESS 与 FOLLOW UP。', 'Open includes NEW, PENDING, IN PROCESS, and FOLLOW UP.', 'Terbuka termasuk NEW, PENDING, IN PROCESS dan FOLLOW UP.')}</p>
+              <h4 className="text-footnote font-bold text-slate-800">{tr('车型状态表现', 'Model Status Performance', 'Prestasi Status Model')}</h4>
+              <p className="text-caption text-slate-400">{tr('Open 包含 NEW、PENDING、IN PROCESS 与 FOLLOW UP。', 'Open includes NEW, PENDING, IN PROCESS, and FOLLOW UP.', 'Terbuka termasuk NEW, PENDING, IN PROCESS dan FOLLOW UP.')}</p>
             </div>
-            <table className="w-full table-fixed text-left text-xs">
-              <thead className="bg-slate-50/75 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+            <table className="w-full table-fixed text-left text-footnote">
+              <thead className="bg-slate-50/75 text-micro uppercase text-slate-400">
                 <tr>
                   <th className="w-[30%] px-4 py-3">{tr('车型', 'Model', 'Model')}</th>
                   <th className="w-[10%] px-2 py-3 text-right">{tr('总数', 'Total', 'Jumlah')}</th>
@@ -261,11 +262,11 @@ function VehicleStatusRelationshipCard({ timeframeLabel, data }: VehicleStatusRe
         {activeView === 'approved' && (
           <div role="tabpanel">
             <div className="border-b border-slate-100 px-4 py-3">
-              <h4 className="text-xs font-bold text-slate-800">{tr('已批核车型明细', 'Approved Model Detail', 'Butiran Model Diluluskan')}</h4>
-              <p className="text-[11px] text-slate-400">{tr('同时显示全部已批核申请与其中选择 Loan 的数量。', 'Shows all approved applications and how many selected Loan.', 'Menunjukkan semua permohonan diluluskan dan jumlah yang memilih Pinjaman.')}</p>
+              <h4 className="text-footnote font-bold text-slate-800">{tr('已批核车型明细', 'Approved Model Detail', 'Butiran Model Diluluskan')}</h4>
+              <p className="text-caption text-slate-400">{tr('同时显示全部已批核申请与其中选择 Loan 的数量。', 'Shows all approved applications and how many selected Loan.', 'Menunjukkan semua permohonan diluluskan dan jumlah yang memilih Pinjaman.')}</p>
             </div>
-            <table className="w-full table-fixed text-left text-xs">
-              <thead className="bg-slate-50/75 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+            <table className="w-full table-fixed text-left text-footnote">
+              <thead className="bg-slate-50/75 text-micro uppercase text-slate-400">
                 <tr>
                   <th className="w-[35%] px-4 py-3">{tr('车型', 'Model', 'Model')}</th>
                   <th className="hidden w-[20%] px-4 py-3 sm:table-cell">{tr('品牌', 'Brand', 'Jenama')}</th>
@@ -293,11 +294,11 @@ function VehicleStatusRelationshipCard({ timeframeLabel, data }: VehicleStatusRe
         {activeView === 'rejected' && (
           <div role="tabpanel">
             <div className="border-b border-slate-100 px-4 py-3">
-              <h4 className="text-xs font-bold text-slate-800">{tr('已拒绝申请 · 拒贷代码明细', 'Rejected Applications · Reject CODE Detail', 'Permohonan Ditolak · Butiran KOD Tolak')}</h4>
-              <p className="text-[11px] text-slate-400">{tr('一个申请可包含多个 CODE，因此 CODE 次数可能高于拒绝申请数。', 'One application may contain multiple CODEs, so CODE occurrences can exceed rejected applications.', 'Satu permohonan mungkin mempunyai beberapa KOD, jadi kejadian KOD boleh melebihi permohonan ditolak.')}</p>
+              <h4 className="text-footnote font-bold text-slate-800">{tr('已拒绝申请 · 拒贷代码明细', 'Rejected Applications · Reject CODE Detail', 'Permohonan Ditolak · Butiran KOD Tolak')}</h4>
+              <p className="text-caption text-slate-400">{tr('一个申请可包含多个 CODE，因此 CODE 次数可能高于拒绝申请数。', 'One application may contain multiple CODEs, so CODE occurrences can exceed rejected applications.', 'Satu permohonan mungkin mempunyai beberapa KOD, jadi kejadian KOD boleh melebihi permohonan ditolak.')}</p>
             </div>
-            <table className="w-full table-fixed text-left text-xs">
-              <thead className="bg-slate-50/75 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+            <table className="w-full table-fixed text-left text-footnote">
+              <thead className="bg-slate-50/75 text-micro uppercase text-slate-400">
                 <tr>
                   <th className="w-[16%] px-4 py-3">CODE</th>
                   <th className="w-[34%] px-4 py-3">{tr('问题', 'Issue', 'Isu')}</th>
@@ -309,7 +310,7 @@ function VehicleStatusRelationshipCard({ timeframeLabel, data }: VehicleStatusRe
               <tbody className="divide-y divide-slate-100">
                 {pagedRejectedCodeRows.map((row) => (
                   <tr key={row.key} className="hover:bg-slate-50/60">
-                    <td className="px-4 py-3"><span className={`inline-flex rounded-full px-2 py-1 font-mono text-[10px] font-bold ${row.key === 'NO_CODE' ? 'bg-amber-50 text-amber-700' : 'bg-rose-50 text-rose-700'}`}>{row.key === 'NO_CODE' ? tr('无 CODE', 'No CODE', 'Tiada KOD') : row.label}</span></td>
+                    <td className="px-4 py-3"><span className={`inline-flex rounded-full px-2 py-1 font-mono text-micro tracking-normal ${row.key === 'NO_CODE' ? 'bg-amber-50 text-amber-700' : 'bg-rose-50 text-rose-700'}`}>{row.key === 'NO_CODE' ? tr('无 CODE', 'No CODE', 'Tiada KOD') : row.label}</span></td>
                     <td className="break-words px-4 py-3 font-semibold text-slate-700">{row.issue}</td>
                     <td className="break-words px-4 py-3 text-slate-500">{row.topModel} <span className="font-mono text-slate-400">({row.topModelCount})</span></td>
                     <td className="px-3 py-3 text-right font-mono font-bold text-rose-600">{row.value}</td>
@@ -325,11 +326,11 @@ function VehicleStatusRelationshipCard({ timeframeLabel, data }: VehicleStatusRe
         {activeView === 'cancelled' && (
           <div role="tabpanel">
             <div className="border-b border-slate-100 px-4 py-3">
-              <h4 className="text-xs font-bold text-slate-800">{tr('已取消申请原因', 'Cancelled Application Reasons', 'Sebab Permohonan Dibatalkan')}</h4>
-              <p className="text-[11px] text-slate-400">{tr('优先使用已取消 bank application 的 Cancellation Reason，其次使用类别或申请备注。', 'Uses the cancelled bank application reason first, then its category or the application remarks.', 'Menggunakan sebab permohonan bank dibatalkan dahulu, kemudian kategori atau catatan permohonan.')}</p>
+              <h4 className="text-footnote font-bold text-slate-800">{tr('已取消申请原因', 'Cancelled Application Reasons', 'Sebab Permohonan Dibatalkan')}</h4>
+              <p className="text-caption text-slate-400">{tr('优先使用已取消 bank application 的 Cancellation Reason，其次使用类别或申请备注。', 'Uses the cancelled bank application reason first, then its category or the application remarks.', 'Menggunakan sebab permohonan bank dibatalkan dahulu, kemudian kategori atau catatan permohonan.')}</p>
             </div>
-            <table className="w-full table-fixed text-left text-xs">
-              <thead className="bg-slate-50/75 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+            <table className="w-full table-fixed text-left text-footnote">
+              <thead className="bg-slate-50/75 text-micro uppercase text-slate-400">
                 <tr>
                   <th className="w-[48%] px-4 py-3">{tr('取消原因', 'Cancellation reason', 'Sebab pembatalan')}</th>
                   <th className="w-[26%] px-4 py-3">{tr('主要车型', 'Top model', 'Model teratas')}</th>

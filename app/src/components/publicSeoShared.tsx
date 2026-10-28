@@ -4,13 +4,27 @@
  */
 
 import { useMemo } from 'react';
-import { AGENTS } from '../../shared/seoContent.mjs';
+import { ArrowUpRight, Clock, MapPin, Phone } from 'lucide-react';
+import { CALC_PATH } from '../../shared/calculatorContent.mjs';
+import {
+  AGENTS,
+  BUSINESS_LOCALITY,
+  BUSINESS_MAP_URL,
+  BUSINESS_PHONE,
+  BUSINESS_POSTCODE,
+  BUSINESS_REGION,
+  BUSINESS_STREET_ADDRESS,
+  SERVICE_AREAS,
+  STOCK_INDEX_PATH
+} from '../../shared/seoContent.mjs';
+import { LEGACY_STAFF_SITE_ORIGIN } from '../lib/publicUrls';
+import drRacingLogo from '../assets/dr-racing-logo-256.png';
 
 export type SeoLanguage = 'en' | 'zh' | 'ms';
 
 export type SeoAgent = { name: string; url: string };
 
-/** Language persisted by the landing page header switch. */
+/** Language chosen in the public site header, shared by the landing and stock pages. */
 export const SEO_LANGUAGE_STORAGE_KEY = 'dr_racing_seo_language';
 
 export const readStoredSeoLanguage = (): SeoLanguage => {
@@ -67,3 +81,125 @@ export const applyDocumentSeo = (title: string, description: string, language: S
     meta.setAttribute('content', description);
   }
 };
+
+
+/**
+ * Shared footer for every public page.
+ *
+ * Was duplicated five times, and every copy inherited one bug: the CSS applied
+ * `filter: brightness(0) invert(1)` to the logo. That turns a monochrome
+ * wordmark white — but this logo is a full-colour mascot badge, so the filter
+ * flattened it into a featureless white blob on the dark footer, which reads as
+ * "the logo is missing". The colour logo is legible on #111317 as-is.
+ *
+ * The footer also carries the NAP block now. Google weighs a visible, crawlable
+ * address/phone that matches the Business Profile, and it made the footer look
+ * finished instead of a logo floating next to three links.
+ */
+const FOOTER_COPY = {
+  ms: {
+    tagline: 'Kedai motor terpakai & loan kedai di Simpang Ampat, Pulau Pinang.',
+    hours: 'Buka setiap hari · 10:00 pagi – 7:00 malam',
+    nav: 'Laman',
+    areas: 'Kawasan kami',
+    home: 'Utama',
+    stock: 'Stok motor',
+    blog: 'Blog',
+    calculator: 'Kalkulator ansuran',
+    staff: 'Staff',
+    map: 'Lihat lokasi di Google Maps'
+  },
+  zh: {
+    tagline: '槟城 Simpang Ampat 二手摩托与店家分期。',
+    hours: '每天营业 · 上午 10:00 – 晚上 7:00',
+    nav: '网站链接',
+    areas: '服务地区',
+    home: '首页',
+    stock: '现车',
+    blog: '博客',
+    calculator: '分期计算器',
+    staff: '员工',
+    map: '在 Google 地图查看位置'
+  },
+  en: {
+    tagline: 'Used motorcycles & in-house financing in Simpang Ampat, Penang.',
+    hours: 'Open daily · 10:00am – 7:00pm',
+    nav: 'Site links',
+    areas: 'Areas we serve',
+    home: 'Home',
+    stock: 'Stock',
+    blog: 'Blog',
+    calculator: 'Instalment calculator',
+    staff: 'Staff',
+    map: 'View location on Google Maps'
+  }
+} as const;
+
+const FOOTER_ADDRESS = `${BUSINESS_STREET_ADDRESS}, ${BUSINESS_POSTCODE} ${BUSINESS_LOCALITY}, ${BUSINESS_REGION}`;
+const FOOTER_TEL = `tel:${BUSINESS_PHONE.replace(/[^+\d]/g, '')}`;
+
+export function PublicSeoFooter({
+  language,
+  disclaimer
+}: {
+  language: SeoLanguage;
+  disclaimer: string;
+}) {
+  const t = FOOTER_COPY[language];
+
+  return (
+    <footer className="seo-footer">
+      <div className="seo-shell seo-footer-main">
+        <div className="seo-footer-brand">
+          <img src={drRacingLogo} alt="DR Racing" width="256" height="201" />
+          <p>{t.tagline}</p>
+          <ul className="seo-footer-nap">
+            <li>
+              <MapPin aria-hidden="true" />
+              <span>{FOOTER_ADDRESS}</span>
+            </li>
+            <li>
+              <Phone aria-hidden="true" />
+              <a href={FOOTER_TEL}>{BUSINESS_PHONE}</a>
+            </li>
+            <li>
+              <Clock aria-hidden="true" />
+              <span>{t.hours}</span>
+            </li>
+          </ul>
+          <a
+            className="seo-footer-map"
+            href={BUSINESS_MAP_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            {t.map}
+            <ArrowUpRight aria-hidden="true" />
+          </a>
+        </div>
+        <div className="seo-footer-col">
+          <h3>{t.nav}</h3>
+          <nav className="seo-footer-links" aria-label={t.nav}>
+            <a href="/">{t.home}</a>
+            <a href={STOCK_INDEX_PATH}>{t.stock}</a>
+            <a href="/blog">{t.blog}</a>
+            <a href={CALC_PATH}>{t.calculator}</a>
+            <a href={`${LEGACY_STAFF_SITE_ORIGIN}/`}>{t.staff}</a>
+          </nav>
+        </div>
+        <div className="seo-footer-col">
+          <h3>{t.areas}</h3>
+          <ul className="seo-footer-areas">
+            {(SERVICE_AREAS as string[]).map((area) => (
+              <li key={area}>{area}</li>
+            ))}
+          </ul>
+        </div>
+      </div>
+      <div className="seo-shell seo-footer-bottom">
+        <p>© {new Date().getFullYear()} DR Racing. All rights reserved.</p>
+        <p>{disclaimer}</p>
+      </div>
+    </footer>
+  );
+}

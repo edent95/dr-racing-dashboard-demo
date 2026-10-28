@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
+import { doc, getDoc, runTransaction, serverTimestamp } from 'firebase/firestore';
 import { getFirebaseDb, isFirebaseConfigured } from '../lib/firebase';
 import { ensureFirebaseAuthUser } from '../lib/auth';
 import type { RawLeadImportExclusion } from '../utils/rawLeadImportExclusions';
@@ -55,6 +55,10 @@ export interface RelationshipMetaLoadResult {
 
 const COLLECTION = 'dashboard_state';
 const DOCUMENT = 'dr_racing_relationship_meta';
+// Import exclusions are anonymous fingerprints. They also live in their own
+// document every staff member can read, because Sales import leads too and
+// cannot read the relationship comments above.
+const EXCLUSIONS_DOCUMENT = 'dr_racing_import_exclusions';
 const LOCAL_EXCLUSIONS_KEY = 'raw_lead_import_exclusions';
 
 export function createEmptyRelationshipMeta(): RelationshipMeta {
@@ -223,24 +227,83 @@ export async function loadRelationshipMeta(): Promise<RelationshipMeta> {
 }
 
 export async function loadRawLeadImportExclusions(): Promise<RawLeadImportExclusion[]> {
+  const localExclusions = loadLocalExclusions();
+  const db = await getAuthedDb();
+  if (!db) {
+    return localExclusions;
+  }
+  try {
+    const snapshot = await getDoc(doc(db, COLLECTION, EXCLUSIONS_DOCUMENT));
+    if (snapshot.exists()) {
+      const exclusions = normalizeExclusions([
+        ...normalizeExclusions(snapshot.data().raw_lead_import_exclusions),
+        ...localExclusions
+      ]);
+      saveLocalExclusions(exclusions);
+      return exclusions;
+    }
+  } catch (error) {
+    console.warn('Failed to load raw lead import exclusions.', error);
+  }
+  // Before the shared copy exists, managers can still read the original.
   return (await loadRelationshipMetaResult()).meta.raw_lead_import_exclusions;
 }
 
+const mergeCommentLists = (
+  remote: Record<string, RelationshipComment[]>,
+  next: Record<string, RelationshipComment[]>
+) => {
+  const merged: Record<string, RelationshipComment[]> = { ...remote };
+  for (const [key, list] of Object.entries(next)) {
+    const byId = new Map((merged[key] || []).map((comment) => [comment.id, comment]));
+    list.forEach((comment) => byId.set(comment.id, comment));
+    merged[key] = Array.from(byId.values())
+      .sort((left, right) => left.created_at.localeCompare(right.created_at));
+  }
+  return merged;
+};
+
 // Returns true on success. Admin/Super Admin may initialize this document;
 // later claimed-staff updates continue to follow the dashboard-state rules.
+// Comments are append-only, so the write re-reads the document and keeps
+// comments another manager added meanwhile (a plain merge:true replaced the
+// whole comment list of a row, and one of two simultaneous comments was lost).
 export async function saveRelationshipMeta(meta: RelationshipMeta): Promise<boolean> {
-  const exclusions = normalizeExclusions(meta.raw_lead_import_exclusions);
-  saveLocalExclusions(exclusions);
   const db = await getAuthedDb();
   if (!db) {
+    saveLocalExclusions(normalizeExclusions(meta.raw_lead_import_exclusions));
     return false;
   }
   try {
-    await setDoc(
-      doc(db, COLLECTION, DOCUMENT),
-      { comments: meta.comments, hidden: meta.hidden, closed: meta.closed, case_states: meta.case_states, raw_lead_import_exclusions: exclusions, updatedAt: serverTimestamp() },
-      { merge: true }
-    );
+    const metaRef = doc(db, COLLECTION, DOCUMENT);
+    const exclusionsRef = doc(db, COLLECTION, EXCLUSIONS_DOCUMENT);
+    const exclusions = await runTransaction(db, async (transaction) => {
+      const snapshot = await transaction.get(metaRef);
+      const remote = snapshot.exists() ? normalizeMeta(snapshot.data()) : createEmptyRelationshipMeta();
+      const mergedExclusions = normalizeExclusions([
+        ...remote.raw_lead_import_exclusions,
+        ...meta.raw_lead_import_exclusions
+      ]);
+      transaction.set(
+        metaRef,
+        {
+          comments: mergeCommentLists(remote.comments, meta.comments),
+          hidden: meta.hidden,
+          closed: { ...remote.closed, ...meta.closed },
+          case_states: { ...remote.case_states, ...meta.case_states },
+          raw_lead_import_exclusions: mergedExclusions,
+          updatedAt: serverTimestamp()
+        },
+        { merge: true }
+      );
+      transaction.set(
+        exclusionsRef,
+        { raw_lead_import_exclusions: mergedExclusions, updatedAt: serverTimestamp() },
+        { merge: true }
+      );
+      return mergedExclusions;
+    });
+    saveLocalExclusions(exclusions);
     return true;
   } catch (error) {
     console.warn('Failed to save relationship meta.', error);

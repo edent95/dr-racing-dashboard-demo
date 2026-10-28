@@ -123,20 +123,3 @@ export function calculateStaffExperience(
     trackedCompletedTasks: staffEvents.length
   };
 }
-
-export function buildStaffExperienceProgress(
-  events: CompletedTaskEvent[],
-  roleAccounts: RoleAccount[],
-  seasonId = getExperienceSeasonId(),
-  rules: StaffExperienceRuleMap = TASK_EXP_BY_TYPE
-) {
-  return roleAccounts
-    .filter((account) => account.status === 'Active')
-    .filter((account) => isExperienceEligibleRole(account.role))
-    .map((account) => calculateStaffExperience(events, account.name, account.role, seasonId, rules))
-    .sort((left, right) => (
-      right.seasonExp - left.seasonExp ||
-      right.seasonCompletedTasks - left.seasonCompletedTasks ||
-      left.staffName.localeCompare(right.staffName)
-    ));
-}

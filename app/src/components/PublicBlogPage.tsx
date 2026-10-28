@@ -5,16 +5,19 @@
 
 import { useEffect } from 'react';
 import { ArrowLeft, ArrowRight, Clock } from 'lucide-react';
-import { BLOG_POSTS, findPostBySlug } from '../../shared/blogContent.mjs';
-import { STOCK, stockImage, stockSeo } from '../../shared/seoContent.mjs';
+import { BLOG_POSTS, blogSeoTitle, findPostBySlug } from '../../shared/blogContent.mjs';
+import { STOCK, WHATSAPP_URL, stockImage, stockSeo } from '../../shared/seoContent.mjs';
 import drRacingLogo from '../assets/dr-racing-logo-256.png';
-import { WhatsAppGlyph, applyDocumentSeo, useRotatingAgents } from './publicSeoShared';
+import { PublicSeoFooter, WhatsAppGlyph, applyDocumentSeo, useRotatingAgents } from './publicSeoShared';
 
 const BLOG_INDEX_TITLE = 'Blog Loan Motor — Panduan & Tips | DR Racing Simpang Ampat';
 const BLOG_INDEX_DESCRIPTION =
   'Panduan loan motor di Malaysia: cara senang lulus, loan tanpa slip gaji, dan apa boleh dibuat jika ada rekod CTOS atau CCRIS. Ditulis oleh pasukan DR Racing, Simpang Ampat.';
 
-const applicationHref = '/customer-intake?utm_source=website&utm_medium=organic&utm_campaign=seo_blog';
+const applicationHref = WHATSAPP_URL;
+
+const BLOG_DISCLAIMER =
+  'Maklumat dalam blog ini adalah panduan umum, bukan nasihat kewangan peribadi dan bukan jaminan kelulusan. Kelulusan, kadar dan terma tertakluk pada penilaian pembiaya.';
 
 const formatDate = (value: string) =>
   new Date(value).toLocaleDateString('ms-MY', { year: 'numeric', month: 'long', day: 'numeric' });
@@ -27,30 +30,11 @@ function BlogChrome({ children }: { children: React.ReactNode }) {
           <img src={drRacingLogo} alt="DR Racing" width="256" height="201" />
         </a>
         <div className="seo-header-actions">
-          <a className="seo-button seo-button-small" href={applicationHref}>Semak kelayakan</a>
+          <a className="seo-button seo-button-small" href={applicationHref} target="_blank" rel="noopener noreferrer">Semak kelayakan</a>
         </div>
       </header>
       {children}
-      <footer className="seo-footer">
-        <div className="seo-shell seo-footer-main">
-          <div>
-            <img src={drRacingLogo} alt="DR Racing" width="256" height="201" />
-            <p>Loan motor Simpang Ampat, Pulau Pinang.</p>
-          </div>
-          <div className="seo-footer-links">
-            <a href="/">Utama</a>
-            <a href="/blog">Blog</a>
-            <a href="https://bo.dr-racing.com/">Staff</a>
-          </div>
-        </div>
-        <div className="seo-shell seo-footer-bottom">
-          <p>© {new Date().getFullYear()} DR Racing. All rights reserved.</p>
-          <p>
-            Maklumat dalam blog ini adalah panduan umum, bukan nasihat kewangan peribadi dan bukan jaminan
-            kelulusan. Kelulusan, kadar dan terma tertakluk pada penilaian pembiaya.
-          </p>
-        </div>
-      </footer>
+      <PublicSeoFooter language="ms" disclaimer={BLOG_DISCLAIMER} />
     </div>
   );
 }
@@ -98,7 +82,7 @@ export function PublicBlogPostPage({ slug }: { slug: string }) {
       applyDocumentSeo('Artikel tidak dijumpai | DR Racing', BLOG_INDEX_DESCRIPTION, 'ms');
       return;
     }
-    applyDocumentSeo(`${post.title} | DR Racing`, post.description, 'ms');
+    applyDocumentSeo(blogSeoTitle(post), post.description, 'ms');
   }, [post]);
 
   if (!post) {
@@ -146,6 +130,17 @@ export function PublicBlogPostPage({ slug }: { slug: string }) {
                 ))}
               </section>
             ))}
+            {post.faq?.length ? (
+              <section>
+                <h2>Soalan lazim</h2>
+                {post.faq.map(([question, answer]: [string, string]) => (
+                  <div key={question}>
+                    <h3 style={{ fontSize: 17, letterSpacing: '-.02em', margin: '22px 0 6px' }}>{question}</h3>
+                    <p>{answer}</p>
+                  </div>
+                ))}
+              </section>
+            ) : null}
           </div>
 
           <div className="seo-article-cta">

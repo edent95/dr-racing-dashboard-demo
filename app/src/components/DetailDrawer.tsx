@@ -4,23 +4,30 @@
  */
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { AlertTriangle, ArrowRight, ArrowUpRight, AtSign, BadgeDollarSign, CalendarClock, CheckCircle2, ChevronDown, Database, Filter, History, MessageSquareText, MinusCircle, MoreHorizontal, Plus, ReceiptText, RotateCcw, Square, Trash2, Upload, UserRound, WalletCards, X } from 'lucide-react';
-import { BankApplication, BankApplicationStatus, BankDefinition, BankOfferStatus, CommissionRules, CustomerDocumentChecklistItem, CustomerDocumentStatus, CustomerEmploymentDetails, CustomerPersonalInfo, CustomerPreferences, CustomerRawMatch, CustomerRiskField, CustomerRiskFlag, DealFinance, EmergencyContact, ErrorCodeDefinition, findVehicleCatalogItem, getDealCommissionQuote, getLoanPendingAction, getLoanPendingWith, inferVehicleBrandFromModel, inferVehicleTagFromModel, LoanApplication, LoanPendingAction, LoanStatus, LoanWorkflowAction, PayslipDocument, PurchaseMethod, REJECT_NEXT_STEPS, RejectNextStepType, RoleAccount, STATUS_CONFIG, VehicleCatalogItem, VehicleCondition, VehiclePurchaseOption } from '../types';
+import { AlertTriangle, ArrowLeft, ArrowRight, ArrowUpRight, CalendarClock, CheckCircle2, ChevronDown, Database, Filter, Landmark, MinusCircle, MoreHorizontal, Pencil, Plus, Send, RotateCcw, Square, Trash2, Upload, UserRound, X } from 'lucide-react';
+import { AuditLogEntry, type UnitExchange, BankApplication, BankApplicationStatus, BankDefinition, BankOfferStatus, CustomerDocumentChecklistItem, CustomerDocumentStatus, CustomerEmploymentDetails, CustomerPersonalInfo, CustomerPreferences, CustomerRawMatch, CustomerRiskField, CustomerRiskFlag, EmergencyContact, ErrorCodeDefinition, findVehicleCatalogItem, getLoanPendingAction, getLoanPendingWith, inferVehicleBrandFromModel, inferVehicleTagFromModel, LoanApplication, LoanPendingAction, LoanStatus, LoanWorkflowAction, PayslipDocument, PurchaseMethod, REJECT_NEXT_STEPS, RejectNextStepType, RoleAccount, STATUS_CONFIG, VehicleCatalogItem, VehicleCondition, VehiclePurchaseOption } from '../types';
 import {
   CUSTOMER_DOCUMENT_REQUIREMENTS,
   getCustomerDocumentUploadLimit,
   getBankRequestedDocumentKey,
+  matchBankRequestedDocumentKey,
   getMissingDocumentLabels,
   getUploadedDocumentChecklistKey,
   normalizeDocumentChecklist
 } from '../utils/documentChecklist';
+import { bankMatchesColumn, isApplicationOpenForNewBank, normalizeBankColumnKey, type BankPageRequest, type BankQuickAction } from '../utils/loanTableBankColumns';
 import { getMissingApplicationInformationLabels } from '../utils/applicationCompleteness';
 import { getLoanWorkflowActionLabel, getLoanWorkflowUndoAvailability } from '../utils/loanWorkflowUndo';
+import { canCancelApplication, canStaffCancelApplication } from '../utils/cashApplicationCancel';
 import { getApplicationRejectCodes, normalizeRejectCodes } from '../utils/rejectCodes';
 import { getAdminBankFollowUpDueIso } from '../utils/bankFollowUp';
 import BankIcon from './BankIcon';
 import DoubleClickEditField from './DoubleClickEditField';
+import FileDropZone from './FileDropZone';
+import UnitExchangeCard from './UnitExchangeCard';
+import AeonAutoDebitWarning from './AeonAutoDebitWarning';
+import { getAeonAutoDebitIssue } from '../utils/aeonAutoDebit';
+import { buildBankFinanceSummary, getBankSellingPrice, getMissingApprovedBankFields } from '../utils/bankFinanceSummary';
 import ToggleOptionGroup from './ToggleOptionGroup';
 import { getAppLocale, tr, trBankStatus, trLoanStatus } from '../lib/i18n';
 import { deriveMalaysiaIcBirthDate } from '../utils/malaysiaIc';
@@ -31,10 +38,15 @@ import {
   createEmptyCustomerPersonalInfo as createEmptyPersonalInfo,
   createEmptyCustomerPreferences as createEmptyPreferences,
   GENDER_OPTIONS,
+  getEmploymentDuration,
+  getEmploymentStartYearOptions,
+  getStartFromDuration,
+  hasChildrenQuestion,
   getSalaryBankOptions,
   HOUSING_STATUS_OPTIONS,
   LOAN_TENURE_OPTIONS,
   MARITAL_STATUS_OPTIONS,
+  OCCUPATION_TYPE_OPTIONS,
   PURCHASE_METHOD_OPTIONS,
   RACE_OPTIONS,
   SALARY_PAYMENT_METHOD_OPTIONS,
@@ -42,12 +54,16 @@ import {
   normalizeCustomerEmploymentDetails as normalizeEmploymentDetails,
   normalizeCustomerPersonalInfo as normalizePersonalInfo,
   normalizeCustomerPreferences as normalizePreferences,
-  normalizeEmergencyContacts
+  normalizeEmergencyContacts,
+  getEffectiveNumberOfChildren
 } from '../utils/customerApplicationForm';
-import customerIcon from '../assets/icons/nav/customers.png';
-import bankDatabaseIcon from '../assets/icons/nav/bankDatabase.png';
-import activityIcon from '../assets/icons/nav/audit.png';
 import { useBrandedDialog } from './BrandedDialogProvider';
+import DocumentImageViewer from './DocumentImageViewer';
+import ApplicationActivityChat from './ApplicationActivityChat';
+import { newId } from '../utils/id';
+import { hasAdminWorkAccess, isOperationsLead } from '../utils/staffRoles';
+import { fieldLabel, fieldLabelWith, OPTIONAL, FROM_IC } from '../data/fieldLabels';
+import { isSafeAttachmentDataUrl } from '../utils/attachmentSafety';
 
 interface DetailDrawerProps {
   isOpen: boolean;
@@ -57,6 +73,8 @@ interface DetailDrawerProps {
   vehicleBrandTags: string[];
   vehicleCatalog: VehicleCatalogItem[];
   bankDefinitions: BankDefinition[];
+  /** Bank names already typed on other files; suggested beside the Bank Database list. */
+  salaryBankInputHistory?: string[];
   errorCodeDefinitions: ErrorCodeDefinition[];
   roleAccounts: RoleAccount[];
   riskFlags: CustomerRiskFlag[];
@@ -65,13 +83,17 @@ interface DetailDrawerProps {
   currentStaffRole: RoleAccount['role'];
   scrollToActivityThreadRequest: number;
   scrollToDocumentChecklistRequest: number;
+  /** This application's audit entries; undefined when the role cannot read the Audit Log. */
+  auditLogs?: AuditLogEntry[];
   openBankApplicationsRequest: number;
   addBankRequest: number;
+  /** Opens the bank page (from a Loan Applications bank cell or a Home bank task), optionally on one bank and decision. */
+  bankPageRequest?: BankPageRequest | null;
   onClose: () => void;
   onAddVehicleCatalogItem: (item: Pick<VehicleCatalogItem, 'model' | 'brand' | 'body_type'>) => void;
   onAddActivityComment: (id: string, body: string, taggedRoles: RoleAccount['role'][], taggedStaffNames?: string[]) => void;
-  commissionRules: CommissionRules;
-  onSaveDealFinance: (applicationId: string, finance: DealFinance) => Promise<boolean>;
+  /** Sales record a change of unit on an approved bank (meeting 2026-10-13, "add exchange"). */
+  onRecordUnitExchange?: (id: string, input: Omit<UnitExchange, 'id' | 'recorded_by' | 'recorded_by_role' | 'recorded_at' | 'from_model'>) => Promise<boolean>;
   onSave: (
     id: string,
     updatedStatus: LoanStatus,
@@ -91,7 +113,7 @@ type DetailApplicationInfo = Pick<
   'applicant_name' | 'phone_no' | 'ic_no' | 'vehicle_plate' | 'vehicle_model' | 'vehicle_tag' | 'vehicle_brand' | 'vehicle_condition' | 'purchase_method' | 'vehicle_options' | 'handler_name' | 'handler_role' | 'submitted_at' | 'customer_call_back_at' | 'document_checklist' | 'personal_info' | 'emergency_contacts' | 'employment_details' | 'preferences'
 >;
 
-type DetailDrawerTab = 'basic' | 'bank' | 'settlement' | 'activity';
+type DetailDrawerTab = 'basic' | 'bank';
 
 const MAX_PAYSLIP_FILE_SIZE_BYTES = 700 * 1024;
 const DOCUMENT_STATUS_STYLES: Record<CustomerDocumentStatus, {
@@ -133,7 +155,7 @@ const EMPLOYMENT_MISSING_ITEM_LABELS = new Set([
 const PREFERENCE_MISSING_ITEM_LABELS = new Set([
   'Available Call Time',
   'Salary Paid By',
-  'Salary Bank',
+  'Bank',
   'Bank Account Number',
   'Loan Tenure'
 ]);
@@ -219,7 +241,7 @@ function BankNextActionSelect({
         required={required}
         autoFocus={autoFocus}
         aria-label={ariaLabel}
-        className={`h-10 w-full rounded-lg border bg-white px-3 text-xs font-semibold text-slate-700 outline-none focus:ring-2 ${controlClassName}`}
+        className={`h-10 w-full rounded-control border bg-white px-3 text-footnote text-slate-700 outline-none focus:ring-2 ${controlClassName}`}
       >
         <option value="">{tr('选择下一步', 'Select next action', "Pilih tindakan seterusnya")}</option>
         {optionValues.map((option) => (
@@ -240,15 +262,57 @@ function BankNextActionSelect({
           }}
           placeholder={tr('输入新的下一步答案', 'Enter a new next-action answer', "Masukkan jawapan tindakan seterusnya baharu")}
           aria-label={`${ariaLabel} custom answer`}
-          className={`h-10 w-full rounded-lg border bg-white px-3 text-xs font-semibold text-slate-700 outline-none focus:ring-2 ${controlClassName}`}
+          className={`h-10 w-full rounded-control border bg-white px-3 text-footnote text-slate-700 outline-none focus:ring-2 ${controlClassName}`}
           autoFocus
         />
       )}
 
-      <p className={`text-[10px] font-semibold ${tone === 'amber' ? 'text-amber-600' : 'text-slate-500'}`}>
+      <p className={`text-caption ${tone === 'amber' ? 'text-amber-600' : 'text-slate-500'}`}>
         {tr('选择现有答案，或用 Add new answer 新增。', 'Choose an existing answer, or use Add new answer to create one.', "Pilih jawapan sedia ada, atau gunakan Tambah jawapan baharu.")}
       </p>
     </div>
+  );
+}
+
+/** Adds a staff-typed reason for a bank decision to the bank's notes, newest last. */
+const appendBankDecisionRemark = (notes: string | undefined, remark: string) => {
+  const normalizedRemark = remark.trim();
+  if (!normalizedRemark) {
+    return notes || '';
+  }
+
+  return [notes?.trim(), normalizedRemark].filter(Boolean).join('\n');
+};
+
+function BankDecisionRemarkInput({
+  value,
+  onChange,
+  ariaLabel,
+  tone
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  ariaLabel: string;
+  tone: 'amber' | 'rose';
+}) {
+  const toneClassName = tone === 'amber'
+    ? 'border-amber-100 focus:border-amber-300 focus:ring-amber-100'
+    : 'border-rose-100 focus:border-rose-300 focus:ring-rose-100';
+
+  return (
+    <label className="flex min-w-0 flex-col gap-1.5" onClick={(event) => event.stopPropagation()}>
+      <span className={`text-micro uppercase ${tone === 'amber' ? 'text-amber-700' : 'text-rose-700'}`}>
+        {tr('自定义原因（选填）', 'Custom reason (optional)', 'Sebab tersuai (pilihan)')}
+      </span>
+      <textarea
+        rows={2}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={tr('写下这一步的原因，会存进 Bank Notes', 'Why this step; saved to Bank Notes', 'Sebab langkah ini; disimpan dalam Nota Bank')}
+        aria-label={ariaLabel}
+        className={`min-h-16 resize-none rounded-control border bg-white px-3 py-2 text-footnote text-slate-700 outline-none focus:ring-2 ${toneClassName}`}
+      />
+    </label>
   );
 }
 
@@ -312,7 +376,7 @@ function BankRejectCodesInput({
             return (
               <span
                 key={code}
-                className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-rose-100 bg-rose-50 px-2 py-1 text-[11px] font-bold text-rose-700"
+                className="inline-flex max-w-full items-center gap-1.5 rounded-control border border-rose-100 bg-rose-50 px-2 py-1 text-caption font-semibold text-rose-700"
                 title={definition?.issue || tr('此 CODE 尚未在 Error Code Database 设置', 'This CODE is not configured in Error Code Database', 'KOD ini belum dikonfigurasi dalam Pangkalan Data Kod Ralat')}
               >
                 <span className="font-mono">{code}</span>
@@ -346,21 +410,21 @@ function BankRejectCodesInput({
           }}
           placeholder="03010000"
           aria-label={ariaLabel}
-          className="h-10 min-w-0 flex-1 rounded-lg border border-slate-100 bg-white px-3 font-mono text-xs font-bold text-slate-800 outline-none focus:border-rose-300 focus:ring-2 focus:ring-rose-100"
+          className="h-10 min-w-0 flex-1 rounded-control border border-slate-100 bg-white px-3 font-mono text-footnote font-semibold text-slate-800 outline-none focus:border-rose-300 focus:ring-2 focus:ring-rose-100"
           autoFocus={autoFocus}
         />
         <button
           type="button"
           disabled={!canAdd}
           onClick={commitCode}
-          className="h-10 rounded-lg bg-rose-700 px-3 text-[11px] font-bold text-white transition-colors hover:bg-rose-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+          className="h-10 rounded-control bg-rose-700 px-3 text-caption font-semibold text-white transition-colors hover:bg-rose-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
         >
           {tr('新增 CODE', 'Add CODE', 'Tambah KOD')}
         </button>
       </div>
 
       {showUnknownCode && (
-        <p className="text-[10px] font-semibold text-rose-600">
+        <p className="text-caption text-rose-600">
           {tr(
             '找不到此 CODE，请先在 Error Code Database 新增。',
             'CODE not found. Add it to Error Code Database first.',
@@ -526,6 +590,13 @@ const getBankStatusBadgeClass = (status: BankApplicationStatus) => {
 };
 
 const openDocumentPreview = (document: PayslipDocument, onBlocked: () => void) => {
+  // SECURITY: file_data_url can come from a public intake row. Only an
+  // allow-listed base64 data URL may reach the same-origin preview window; a
+  // javascript: or data:text/html value would run on the staff origin.
+  if (!isSafeAttachmentDataUrl(document.file_data_url)) {
+    return;
+  }
+
   const previewWindow = window.open('', '_blank');
 
   if (!previewWindow) {
@@ -619,6 +690,9 @@ const translatePendingAction = (action: LoanPendingAction) => {
   return tr(zh, en, ms);
 };
 
+// A confirmed rejection ends that bank; resubmitting the same bank after new documents is Follow Up Reject Bank.
+const FINAL_REJECT_NEXT_STEPS: RejectNextStepType[] = ['TRY_ANOTHER_BANK', 'CONVERT_TO_CASH', 'CLOSE_REJECTED'];
+
 const rejectNextStepLabel = (value: RejectNextStepType) => {
   const labels: Record<RejectNextStepType, [string, string, string]> = {
     REQUEST_DOCUMENTS: ['要求补文件', 'Request documents', 'Minta dokumen'],
@@ -638,7 +712,7 @@ const rejectNextStepInstruction = (value: RejectNextStepType) => {
     REQUEST_DOCUMENTS: ['向客户索取缺少的文件，补齐后按 Documents Ready 交回 Admin。', 'Request the missing documents from the customer, then use Documents Ready to return it to Admin.', 'Minta dokumen yang hilang daripada pelanggan, kemudian gunakan Documents Ready untuk mengembalikannya kepada Pentadbir.'],
     CORRECT_INFORMATION: ['更正客户或贷款资料，确认后按 Documents Ready 交回 Admin。', 'Correct the customer or loan details, then use Documents Ready to return it to Admin.', 'Betulkan butiran pelanggan atau pinjaman, kemudian gunakan Documents Ready untuk mengembalikannya kepada Pentadbir.'],
     ADJUST_DEAL: ['调整贷款方案或金额，确认后按 Documents Ready 重新提交。', 'Update the deal terms or amount, then use Documents Ready to resubmit.', 'Laraskan terma atau amaun urus niaga, kemudian gunakan Documents Ready untuk menghantar semula.'],
-    TRY_ANOTHER_BANK: ['确认要尝试的银行，补齐资料后按 Documents Ready 交给 Admin 提交。', 'Confirm the bank to try, then use Documents Ready so Admin can submit it.', 'Sahkan bank yang hendak dicuba, kemudian gunakan Documents Ready supaya Pentadbir boleh menghantarnya.'],
+    TRY_ANOTHER_BANK: ['Admin 加另一家银行并提交，不用等 Sales 补件。', 'Admin adds another bank and submits it; Sales does not need to send documents first.', 'Pentadbir menambah bank lain dan menghantarnya; Jualan tidak perlu menghantar dokumen dahulu.'],
     FOLLOW_UP_LATER: ['确认跟进内容并安排下一次跟进；准备继续时按 Documents Ready。', 'Confirm the follow-up details and schedule the next follow-up; use Documents Ready when it is ready to continue.', 'Sahkan butiran susulan dan jadualkan susulan seterusnya; gunakan Documents Ready apabila sedia untuk diteruskan.'],
     CONVERT_TO_CASH: ['把购买方式改为 Cash，确认现金资料后按 Documents Ready。', 'Change the purchase method to Cash, confirm the cash details, then use Documents Ready.', 'Tukar kaedah pembelian kepada Tunai, sahkan butiran tunai, kemudian gunakan Documents Ready.'],
     CLOSE_REJECTED: ['确认拒贷原因无误，然后按 Close Rejected File 结案。', 'Confirm the rejection reason, then use Close Rejected File to close it.', 'Sahkan sebab penolakan, kemudian gunakan Close Rejected File untuk menutupnya.'],
@@ -662,344 +736,6 @@ const rejectNextStepStoredLabel = (value: RejectNextStepType) => {
   return labels[value];
 };
 
-const toDealMoney = (value: unknown) => {
-  const amount = Number(value);
-  return Number.isFinite(amount) && amount >= 0 ? amount : 0;
-};
-
-const formatDealMoney = (value: unknown) => `RM${toDealMoney(value).toLocaleString('en-MY', {
-  minimumFractionDigits: 0,
-  maximumFractionDigits: 2
-})}`;
-
-const buildApplicationDealFinance = (
-  application: LoanApplication,
-  vehicleCatalog: VehicleCatalogItem[],
-  commissionRules: CommissionRules,
-  currentStaffName: string
-): DealFinance => {
-  if (application.deal_finance) {
-    return { ...application.deal_finance };
-  }
-
-  const primaryVehicleOption = application.vehicle_options?.[0];
-  const purchaseMethod = application.purchase_method || primaryVehicleOption?.purchase_method;
-  const listedPrice = toDealMoney(
-    purchaseMethod === 'Cash'
-      ? primaryVehicleOption?.total_cash_price
-      : primaryVehicleOption?.motor_selling_price
-  );
-  const commissionQuote = getDealCommissionQuote(listedPrice, commissionRules);
-
-  return {
-    stock_unit_id: '',
-    sale_status: 'Pending Acceptance',
-    automation_source: undefined,
-    approved_bank_name: '',
-    approved_bank_offer_amount: 0,
-    approved_bank_offer_at: '',
-    listed_selling_price: listedPrice,
-    loan_amount: 0,
-    deposit_amount: 0,
-    approved_discount: 0,
-    final_selling_price: listedPrice,
-    customer_deposit_received: 0,
-    customer_cash_payment: 0,
-    bank_disbursement: 0,
-    other_income: 0,
-    refund_amount: 0,
-    direct_bank_charges: 0,
-    recognized_stock_cost: undefined,
-    delivery_at: '',
-    bank_disbursed_at: '',
-    finance_completed_at: '',
-    account_verified_at: '',
-    account_verified_by: '',
-    commission_status: 'Estimated',
-    commission_percent: commissionQuote.percent,
-    commission_amount: toDealMoney(commissionQuote.amount),
-    commission_paid_at: '',
-    updated_at: '',
-    updated_by: currentStaffName
-  };
-};
-
-function DealSettlementDetailPanel({
-  application,
-  currentStaffName,
-  currentStaffRole,
-  vehicleCatalog,
-  commissionRules,
-  onSave
-}: {
-  application: LoanApplication;
-  currentStaffName: string;
-  currentStaffRole: RoleAccount['role'];
-  vehicleCatalog: VehicleCatalogItem[];
-  commissionRules: CommissionRules;
-  onSave: (applicationId: string, finance: DealFinance) => Promise<boolean>;
-}) {
-  const canManage = currentStaffRole === 'Super Admin';
-  const hasSavedSettlement = Boolean(application.deal_finance);
-  const [draft, setDraft] = useState<DealFinance>(() => buildApplicationDealFinance(
-    application,
-    vehicleCatalog,
-    commissionRules,
-    currentStaffName
-  ));
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    setDraft(buildApplicationDealFinance(
-      application,
-      vehicleCatalog,
-      commissionRules,
-      currentStaffName
-    ));
-  }, [application, commissionRules, currentStaffName, vehicleCatalog]);
-
-  const salesValue = toDealMoney(draft.final_selling_price)
-    + toDealMoney(draft.other_income)
-    - toDealMoney(draft.refund_amount);
-  const received = toDealMoney(draft.customer_deposit_received)
-    + toDealMoney(draft.customer_cash_payment)
-    + toDealMoney(draft.bank_disbursement);
-  const outstanding = Math.max(salesValue - received, 0);
-  const financeReady = draft.sale_status === 'Bike Delivered'
-    && salesValue > 0
-    && received + 0.01 >= salesValue;
-  const selectedStockUnit = vehicleCatalog
-    .flatMap((catalog) => catalog.stock_units || [])
-    .find((unit) => unit.id === draft.stock_unit_id);
-  const liveStockCost = selectedStockUnit
-    ? toDealMoney(selectedStockUnit.purchase_cost)
-      + toDealMoney(selectedStockUnit.transport_cost)
-      + toDealMoney(selectedStockUnit.registration_cost)
-      + toDealMoney(selectedStockUnit.accessories_cost)
-      + toDealMoney(selectedStockUnit.repair_cost)
-      + toDealMoney(selectedStockUnit.other_direct_cost)
-    : 0;
-  const stockCost = toDealMoney(draft.recognized_stock_cost) > 0
-    ? toDealMoney(draft.recognized_stock_cost)
-    : liveStockCost;
-
-  const setMoney = (field: keyof DealFinance, value: number) => {
-    if (!canManage) return;
-    setDraft((current) => {
-      const normalizedValue = toDealMoney(value);
-      const next = { ...current, [field]: normalizedValue };
-      if (field === 'final_selling_price' && current.commission_percent !== undefined) {
-        next.commission_amount = Math.round(normalizedValue * current.commission_percent) / 100;
-      }
-      return next;
-    });
-  };
-
-  const persist = async (extra: Partial<DealFinance> = {}) => {
-    if (!canManage || saving) return;
-    setSaving(true);
-    try {
-      const next = { ...draft, ...extra };
-      if (await onSave(application.id, next)) {
-        setDraft(next);
-      }
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const moneyInput = (label: string, field: keyof DealFinance, testId: string) => (
-    <label className="block space-y-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-500">
-      <span>{label}</span>
-      <span className="flex items-stretch overflow-hidden rounded-lg bg-white ring-1 ring-slate-200 focus-within:ring-2 focus-within:ring-emerald-100">
-        <span className="inline-flex items-center bg-slate-50 px-3 font-mono text-xs text-slate-500">RM</span>
-        <input
-          data-testid={testId}
-          aria-label={label}
-          type="number"
-          min="0"
-          step="0.01"
-          disabled={!canManage}
-          value={Number(draft[field]) || ''}
-          onChange={(event) => setMoney(field, Number(event.target.value))}
-          className="min-w-0 flex-1 px-3 py-2.5 text-right font-mono text-xs font-bold text-slate-700 outline-none disabled:cursor-default disabled:bg-slate-50 disabled:text-slate-500"
-        />
-      </span>
-    </label>
-  );
-
-  if (!hasSavedSettlement && !canManage) {
-    return (
-      <div
-        id="detail-panel-settlement"
-        role="tabpanel"
-        aria-labelledby="detail-tab-settlement"
-        data-testid="detail-panel-settlement"
-        className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/60 px-5 py-10 text-center"
-      >
-        <ReceiptText className="mx-auto h-7 w-7 text-slate-300" />
-        <p className="mt-3 text-sm font-bold text-slate-600">{tr('成交结算尚未开始', 'Deal settlement has not started', "Penyelesaian belum bermula")}</p>
-        <p className="mt-1 text-xs text-slate-500">{tr('交车后会在这里显示收款与完成状态。', 'Receipts and completion status will appear here after delivery.', "Terimaan dan status selesai akan dipaparkan di sini selepas penghantaran.")}</p>
-      </div>
-    );
-  }
-
-  return (
-    <div
-      id="detail-panel-settlement"
-      role="tabpanel"
-      aria-labelledby="detail-tab-settlement"
-      data-testid="detail-panel-settlement"
-      className="space-y-4"
-    >
-      <div className="flex flex-col gap-3 rounded-xl border border-slate-100 bg-slate-50/70 p-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h3 className="flex items-center gap-2 text-sm font-bold text-slate-900">
-            <ReceiptText className="h-4 w-4 text-emerald-600" />
-            {tr('成交结算', 'Deal Settlement', "Penyelesaian Urus Niaga")}
-          </h3>
-          <p className="mt-1 text-[11px] font-semibold text-slate-500">
-            {canManage
-              ? tr('Super Admin 可编辑完整结算、成本与佣金资料。', 'Super Admin can edit the full settlement, cost, and commission record.', "Pentadbir Super boleh mengedit rekod penyelesaian, kos dan komisen penuh.")
-              : tr('只显示收款与完成状态；成本和佣金已隐藏。', 'Shows receipts and completion only; cost and commission are hidden.', "Hanya terimaan dan status selesai dipaparkan; kos dan komisen disembunyikan.")}
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2 text-[11px] font-bold">
-          <span className="rounded-md bg-white px-2.5 py-1.5 text-slate-600 ring-1 ring-slate-100">{draft.sale_status}</span>
-          <span className={`rounded-md px-2.5 py-1.5 ${draft.finance_completed_at ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
-            {draft.finance_completed_at ? tr('财务已完成', 'Finance completed', "Kewangan selesai") : tr('财务未完成', 'Finance pending', "Kewangan belum")}
-          </span>
-        </div>
-      </div>
-
-      <section data-testid="deal-settlement-receipts-section" className="space-y-4 rounded-xl border border-slate-100 bg-white p-4">
-        <div>
-          <h4 className="flex items-center gap-2 text-xs font-bold text-slate-900">
-            <WalletCards className="h-4 w-4 text-emerald-600" />
-            {tr('售价与收款', 'Sale & Receipts', "Jualan & Terimaan")}
-          </h4>
-          <p className="mt-1 text-[11px] text-slate-500">{tr('所有角色可查看；只有 Super Admin 可修改。', 'Visible to all roles; editable only by Super Admin.', "Boleh dilihat oleh semua peranan; hanya Pentadbir Super boleh mengedit.")}</p>
-        </div>
-        <div className="grid gap-3 sm:grid-cols-2">
-          {moneyInput(tr('最终售价', 'Final Selling Price', 'Harga Jualan Akhir'), 'final_selling_price', 'detail-settlement-final-price')}
-          {moneyInput(tr('银行放款', 'Bank Disbursement', 'Pengeluaran Bank'), 'bank_disbursement', 'detail-settlement-bank-disbursement')}
-          {moneyInput(tr('已收 Deposit', 'Deposit Received', 'Deposit Diterima'), 'customer_deposit_received', 'detail-settlement-deposit')}
-          {moneyInput(tr('客户现金', 'Customer Cash', 'Tunai Pelanggan'), 'customer_cash_payment', 'detail-settlement-customer-cash')}
-        </div>
-        {draft.approved_bank_name && (
-          <div className="rounded-lg bg-blue-50 px-3 py-2 text-[11px] font-semibold text-blue-700 ring-1 ring-blue-100">
-            {tr('已同步银行批复', 'Synced bank approval', 'Kelulusan bank disegerakkan')}: {draft.approved_bank_name}
-            {' · '}{formatDealMoney(toDealMoney(draft.approved_bank_offer_amount))}
-            {draft.approved_bank_offer_at ? ` · ${draft.approved_bank_offer_at.slice(0, 10)}` : ''}
-            <span className="ml-1 text-blue-500">({tr('不等于实际放款', 'not actual disbursement', 'bukan pengeluaran sebenar')})</span>
-          </div>
-        )}
-        <div className="grid grid-cols-3 gap-2 rounded-xl bg-slate-50 p-3 text-center">
-          <span><span className="block text-[10px] font-bold uppercase text-slate-500">{tr('应收', 'Sales Value', 'Jualan')}</span><span className="mt-1 block font-mono text-xs font-bold text-slate-800">{formatDealMoney(salesValue)}</span></span>
-          <span><span className="block text-[10px] font-bold uppercase text-slate-500">{tr('已收', 'Received', 'Terima')}</span><span className="mt-1 block font-mono text-xs font-bold text-emerald-600">{formatDealMoney(received)}</span></span>
-          <span><span className="block text-[10px] font-bold uppercase text-slate-500">{tr('未收', 'Outstanding', 'Baki')}</span><span className={`mt-1 block font-mono text-xs font-bold ${outstanding > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>{formatDealMoney(outstanding)}</span></span>
-        </div>
-        <div className="grid gap-2 sm:grid-cols-3">
-          {([
-            [tr('交车日期', 'Delivery Date', 'Tarikh Serahan'), draft.delivery_at],
-            [tr('银行放款日期', 'Bank Paid Date', 'Tarikh Bank Bayar'), draft.bank_disbursed_at],
-            [tr('财务完成日期', 'Finance Completed', 'Kewangan Selesai'), draft.finance_completed_at]
-          ] as Array<[string, string]>).map(([label, value]) => (
-            <span key={label} className="rounded-lg bg-slate-50 px-3 py-2">
-              <span className="block text-[10px] font-bold uppercase text-slate-500">{label}</span>
-              <span className="mt-1 block font-mono text-xs font-bold text-slate-700">{value || '--'}</span>
-            </span>
-          ))}
-        </div>
-      </section>
-
-      {canManage && (
-        <section data-testid="deal-settlement-cost-section" className="space-y-4 rounded-xl border border-slate-100 bg-white p-4">
-          <div>
-            <h4 className="flex items-center gap-2 text-xs font-bold text-slate-900">
-              <BadgeDollarSign className="h-4 w-4 text-indigo-600" />
-              {tr('成本与调整', 'Cost & Adjustments', "Kos & Pelarasan")}
-            </h4>
-            <p className="mt-1 text-[11px] text-slate-500">{tr('仅 Super Admin 可见。', 'Super Admin only.', "Pentadbir Super sahaja.")}</p>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            {moneyInput(tr('标价', 'Listed Price', 'Harga Senarai'), 'listed_selling_price', 'detail-settlement-listed-price')}
-            {moneyInput(tr('批准折扣', 'Approved Discount', 'Diskaun Diluluskan'), 'approved_discount', 'detail-settlement-discount')}
-            {moneyInput(tr('其他收入', 'Other Income', 'Pendapatan Lain'), 'other_income', 'detail-settlement-other-income')}
-            {moneyInput(tr('退款', 'Refund', 'Bayaran Balik'), 'refund_amount', 'detail-settlement-refund')}
-            {moneyInput(tr('银行/成交费用', 'Bank / Deal Charges', 'Caj Bank / Urus Niaga'), 'direct_bank_charges', 'detail-settlement-charges')}
-            <span className="rounded-lg bg-slate-50 px-3 py-2">
-              <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">{tr('车辆成本', 'Stock Cost', 'Kos Stok')}</span>
-              <span className="mt-2 block font-mono text-sm font-bold text-slate-800">{formatDealMoney(stockCost)}</span>
-            </span>
-          </div>
-        </section>
-      )}
-
-      {canManage && (
-        <section data-testid="deal-settlement-commission-section" className="space-y-4 rounded-xl border border-amber-100 bg-amber-50/30 p-4">
-          <div>
-            <h4 className="flex items-center gap-2 text-xs font-bold text-slate-900">
-              <BadgeDollarSign className="h-4 w-4 text-amber-600" />
-              {tr('佣金', 'Commission', "Komisen")}
-            </h4>
-            <p className="mt-1 text-[11px] text-slate-500">{tr('仅 Super Admin 可见。', 'Super Admin only.', "Pentadbir Super sahaja.")}</p>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2">
-            {draft.commission_percent === undefined
-              ? moneyInput(tr('佣金金额', 'Commission Amount', 'Jumlah Komisen'), 'commission_amount', 'detail-settlement-commission')
-              : (
-                <span className="rounded-lg bg-white px-3 py-2 ring-1 ring-amber-100">
-                  <span className="block text-[10px] font-bold uppercase tracking-wider text-amber-700">{tr(`佣金 · 卖价 ${draft.commission_percent}%`, `Commission · ${draft.commission_percent}% of selling price`, `Komisen · ${draft.commission_percent}% harga jualan`)}</span>
-                  <span data-testid="detail-settlement-commission" className="mt-1.5 block font-mono text-sm font-bold text-slate-800">{formatDealMoney(draft.commission_amount)}</span>
-                </span>
-              )}
-            <span className="rounded-lg bg-white px-3 py-2 ring-1 ring-amber-100">
-              <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">{tr('佣金状态', 'Commission Status', 'Status Komisen')}</span>
-              <span className="mt-1.5 block text-xs font-bold text-amber-700">{draft.commission_status}</span>
-              <span className="mt-1 block font-mono text-[11px] text-slate-500">{draft.commission_paid_at || '--'}</span>
-            </span>
-          </div>
-          {draft.finance_completed_at && !draft.commission_paid_at && (
-            <button
-              type="button"
-              disabled={saving}
-              onClick={() => void persist({ commission_paid_at: new Date().toISOString().slice(0, 10) })}
-              className="rounded-lg bg-amber-100 px-3 py-2 text-[11px] font-bold text-amber-800 hover:bg-amber-200 disabled:cursor-wait disabled:opacity-60"
-            >
-              {tr('今天标记佣金已付', 'Mark Commission Paid Today', 'Tanda Komisen Dibayar Hari Ini')}
-            </button>
-          )}
-        </section>
-      )}
-
-      {canManage && (
-        <div className="flex flex-wrap justify-end gap-2 border-t border-slate-100 pt-4">
-          <button
-            type="button"
-            disabled={saving}
-            onClick={() => void persist()}
-            className="rounded-lg bg-slate-100 px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-200 disabled:cursor-wait disabled:opacity-60"
-          >
-            {saving ? tr('保存中...', 'Saving...', "Menyimpan...") : tr('保存结算', 'Save Settlement', "Simpan Penyelesaian")}
-          </button>
-          {!draft.finance_completed_at && (
-            <button
-              type="button"
-              disabled={saving || !financeReady}
-              title={financeReady ? '' : tr('交车并收齐款后才能完成财务', 'Deliver the bike and collect full payment first', 'Hantar motosikal dan kutip bayaran penuh dahulu')}
-              onClick={() => void persist({ finance_completed_at: new Date().toISOString().slice(0, 10) })}
-              className="rounded-lg bg-emerald-700 px-4 py-2.5 text-xs font-bold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-slate-300"
-            >
-              {tr('标记财务完成', 'Mark Finance Completed', 'Tanda Kewangan Selesai')}
-            </button>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function DetailDrawer({
   isOpen,
   application,
@@ -1008,6 +744,7 @@ function DetailDrawer({
   vehicleBrandTags,
   vehicleCatalog,
   bankDefinitions,
+  salaryBankInputHistory = [],
   errorCodeDefinitions,
   roleAccounts,
   riskFlags,
@@ -1015,14 +752,15 @@ function DetailDrawer({
   currentStaffName,
   currentStaffRole,
   scrollToActivityThreadRequest,
+  auditLogs,
   scrollToDocumentChecklistRequest,
   openBankApplicationsRequest,
   addBankRequest,
+  bankPageRequest,
   onClose,
   onAddVehicleCatalogItem,
   onAddActivityComment,
-  commissionRules,
-  onSaveDealFinance,
+  onRecordUnitExchange,
   onSave
 }: DetailDrawerProps) {
   const { showAlert, showConfirm } = useBrandedDialog();
@@ -1049,6 +787,9 @@ function DetailDrawer({
   });
   const [editedStatus, setEditedStatus] = useState<LoanStatus>(LoanStatus.NEW);
   const [editedRemarks, setEditedRemarks] = useState('');
+  // Remark edits through an Edit button too (owner 2026-10-20), not only by double click.
+  const [remarkDraft, setRemarkDraft] = useState<string | null>(null);
+  const [copiedFinanceBankId, setCopiedFinanceBankId] = useState('');
   const [editedErrorCode, setEditedErrorCode] = useState('');
   const [editedErrorCodes, setEditedErrorCodes] = useState<string[]>([]);
   const [editedPayslipDocuments, setEditedPayslipDocuments] = useState<PayslipDocument[]>([]);
@@ -1059,10 +800,13 @@ function DetailDrawer({
   const [quickRejectCode, setQuickRejectCode] = useState('');
   const [quickRejectReason, setQuickRejectReason] = useState('');
   const [quickRejectNextStep, setQuickRejectNextStep] = useState<RejectNextStepType | ''>('');
+  const [quickRejectMode, setQuickRejectMode] = useState<'follow-up' | 'final'>('final');
+  const [quickRejectDocument, setQuickRejectDocument] = useState('');
   const [quickFollowUpBankId, setQuickFollowUpBankId] = useState('');
   const [quickFollowUpNextAction, setQuickFollowUpNextAction] = useState('');
   const [quickCancelBankId, setQuickCancelBankId] = useState('');
   const [quickCancelReason, setQuickCancelReason] = useState('');
+  const [quickDecisionRemark, setQuickDecisionRemark] = useState('');
   const [isAddingVehicle, setIsAddingVehicle] = useState(false);
   const [newVehicleBrand, setNewVehicleBrand] = useState(vehicleBrandTags[0] || 'Yamaha');
   const [isUploadingPayslip, setIsUploadingPayslip] = useState(false);
@@ -1090,16 +834,25 @@ function DetailDrawer({
   const handledActivityScrollRequestRef = useRef(0);
   const handledDocumentScrollRequestRef = useRef(0);
   const handledOpenBankApplicationsRequestRef = useRef(0);
+  const handledBankPageRequestRef = useRef(0);
   const handledAddBankRequestRef = useRef(0);
   const attemptedDocumentLoadsRef = useRef(new Set<string>());
   const documentLoadApplicationIdRef = useRef('');
   const [activityDraft, setActivityDraft] = useState('');
+  const [isActivityChatOpen, setIsActivityChatOpen] = useState(false);
+  const keepHandlerTagRef = useRef(false);
+  // Request Documents lives in the Internal Chat composer: the switch turns the
+  // next send into the workflow action, and the typed note follows it.
+  const [requestDocumentsInChat, setRequestDocumentsInChat] = useState(false);
+  const [pendingDocumentRequestNote, setPendingDocumentRequestNote] = useState<{ body: string; taggedRoles: RoleAccount['role'][] } | null>(null);
+  const [imageViewerDocument, setImageViewerDocument] = useState<PayslipDocument | null>(null);
   const [tagHandler, setTagHandler] = useState(false);
   const [tagAdmin, setTagAdmin] = useState(false);
   const [tagSuperAdmin, setTagSuperAdmin] = useState(false);
   const [showUndoPanel, setShowUndoPanel] = useState(false);
   const [undoReason, setUndoReason] = useState('');
-  const activityThreadRef = useRef<HTMLDivElement | null>(null);
+  const [showCancelApplicationPanel, setShowCancelApplicationPanel] = useState(false);
+  const [cancelApplicationReason, setCancelApplicationReason] = useState('');
   const documentChecklistRef = useRef<HTMLDivElement | null>(null);
   const detailContentRef = useRef<HTMLDivElement | null>(null);
 
@@ -1108,16 +861,17 @@ function DetailDrawer({
   const canTagAssignedHandler = Boolean(
     assignedHandlerAccount &&
     assignedHandlerAccount.name !== currentStaffName &&
-    (currentStaffRole === 'Admin' || currentStaffRole === 'Super Admin')
+    hasAdminWorkAccess(currentStaffRole)
   );
   const activeBankOptions = bankDefinitions.filter((bank) => bank.active).map((bank) => bank.name);
-  const salaryBankOptions = getSalaryBankOptions(activeBankOptions);
+  const salaryBankOptions = getSalaryBankOptions(activeBankOptions, salaryBankInputHistory);
+  const salaryBankName = editedApplicationInfo.personal_info?.bank_name || '';
+  const aeonAutoDebitIssue = getAeonAutoDebitIssue(salaryBankName, editedBankApplications, bankDefinitions);
   const canManageDocuments = Boolean(application) && (
-    currentStaffRole === 'Admin' ||
-    currentStaffRole === 'Super Admin' ||
+    hasAdminWorkAccess(currentStaffRole) ||
     application?.handler_name === currentStaffName
   );
-  const canManageBankApplications = currentStaffRole === 'Admin' || currentStaffRole === 'Super Admin';
+  const canManageBankApplications = hasAdminWorkAccess(currentStaffRole);
 
   const getRiskFlag = (field: CustomerRiskField) => riskFlags.find((flag) => flag.field === field);
 
@@ -1133,8 +887,8 @@ function DetailDrawer({
         title={flag.message}
       >
         <AlertTriangle className="h-3 w-3" />
-        <span className="pointer-events-none absolute left-0 top-6 z-30 hidden w-72 rounded-lg border border-amber-100 bg-white p-3 text-left text-xs font-semibold text-slate-600 shadow-xl shadow-slate-200/70 group-hover:block">
-          <span className="mb-1 block text-[11px] font-bold uppercase tracking-wider text-amber-600">{tr('风险提醒', 'Risk Warning', "Amaran Risiko")}</span>
+        <span className="pointer-events-none absolute left-0 top-6 z-30 hidden w-72 rounded-control border border-amber-100 bg-white p-3 text-left text-footnote text-slate-600 shadow-e3 shadow-slate-200/70 group-hover:block">
+          <span className="mb-1 block text-micro uppercase text-amber-600">{tr('风险提醒', 'Risk Warning', "Amaran Risiko")}</span>
           {flag.message}
         </span>
       </span>
@@ -1298,6 +1052,7 @@ function DetailDrawer({
       });
       setEditedStatus(application.status);
       setEditedRemarks(application.remarks);
+      setRemarkDraft(null);
       const nextErrorCodes = getApplicationRejectCodes(application);
       setEditedErrorCode(nextErrorCodes[0] || '');
       setEditedErrorCodes(nextErrorCodes);
@@ -1334,9 +1089,12 @@ function DetailDrawer({
       setQuickCancelBankId('');
       setQuickCancelReason('');
       setIsAddingVehicle(false);
-      setTagHandler(false);
+      // A Request Documents save keeps the handler tag for the follow-up note.
+      setTagHandler(keepHandlerTagRef.current);
       setShowUndoPanel(false);
       setUndoReason('');
+      setShowCancelApplicationPanel(false);
+      setCancelApplicationReason('');
       setShowMoreActions(false);
     }
   }, [application]);
@@ -1346,6 +1104,8 @@ function DetailDrawer({
       setActiveDetailTab('basic');
       setAdminSubmissionView(false);
     }
+    setIsActivityChatOpen(false);
+    setImageViewerDocument(null);
   }, [application?.id, isOpen]);
 
   useEffect(() => {
@@ -1360,7 +1120,7 @@ function DetailDrawer({
   }, [activeDetailTab, editedApplicationInfo.purchase_method]);
 
   useEffect(() => {
-    if (currentStaffRole !== 'Admin' || editedApplicationInfo.purchase_method !== 'Loan') {
+    if (!hasAdminWorkAccess(currentStaffRole) || editedApplicationInfo.purchase_method !== 'Loan') {
       setAdminSubmissionView(false);
     }
   }, [currentStaffRole, editedApplicationInfo.purchase_method]);
@@ -1377,7 +1137,7 @@ function DetailDrawer({
   activeApplicationIdRef.current = application?.id || '';
 
   const loadDocumentSource = async (documentItem: PayslipDocument, forceRetry = false) => {
-    if (documentItem.file_data_url) {
+    if (documentItem.file_data_url && isSafeAttachmentDataUrl(documentItem.file_data_url)) {
       return documentItem.file_data_url;
     }
 
@@ -1465,7 +1225,6 @@ function DetailDrawer({
       : [];
     const normalizedPersonalInfo = normalizePersonalInfo(editedApplicationInfo.personal_info);
     const normalizedPreferences = normalizePreferences(editedApplicationInfo.preferences);
-    const isSavingSalaryPaidByBank = normalizedPreferences.salary_payment_method === 'Bank';
     return onSave(application.id, editedStatus, editedRemarks, normalizedErrorCodes[0] || '', normalizedErrorCodes, editedPayslipDocuments, bankApplications, {
         vehicle_options: normalizeVehicleOptions({ ...editedApplicationInfo, id: application.id } as LoanApplication),
         applicant_name: editedApplicationInfo.applicant_name.trim(),
@@ -1487,11 +1246,8 @@ function DetailDrawer({
           purchase_method: editedApplicationInfo.purchase_method,
           vehicle_condition: editedApplicationInfo.vehicle_condition
         }),
-        personal_info: {
-          ...normalizedPersonalInfo,
-          bank_name: isSavingSalaryPaidByBank ? normalizedPersonalInfo.bank_name : '',
-          account_number: isSavingSalaryPaidByBank ? normalizedPersonalInfo.account_number : ''
-        },
+        // Bank and account number stay for cash salary too (owner 2026-10-20).
+        personal_info: normalizedPersonalInfo,
         emergency_contacts: normalizeEmergencyContacts(editedApplicationInfo.emergency_contacts),
         employment_details: normalizeEmploymentDetails(editedApplicationInfo.employment_details),
         preferences: {
@@ -1506,9 +1262,18 @@ function DetailDrawer({
     bankApplications = editedBankApplications,
     workflowUndoReason = ''
   ) => {
+    const isDocumentRequest = workflowAction === 'REQUEST_MISSING_DOCUMENTS';
+    keepHandlerTagRef.current = isDocumentRequest && canTagAssignedHandler;
     const didSave = await submitApplicationSave(workflowAction, bankApplications, workflowUndoReason);
     setIsSubmitting(false);
-    if (didSave) {
+    if (didSave && isDocumentRequest) {
+      // Stay on the file and open the chat so the Admin can tell the handler
+      // what is missing; the handler is pre-tagged so the note notifies them.
+      setTagHandler(keepHandlerTagRef.current);
+      setIsActivityChatOpen(true);
+    }
+    keepHandlerTagRef.current = false;
+    if (didSave && !isDocumentRequest) {
       onClose();
     }
     return didSave;
@@ -1557,8 +1322,8 @@ function DetailDrawer({
     handleSave(workflowAction);
   };
 
-  const handleSubmitActivityComment = () => {
-    if (!application || !activityDraft.trim()) {
+  const handleSubmitActivityComment = async () => {
+    if (!application) {
       return;
     }
 
@@ -1566,6 +1331,24 @@ function DetailDrawer({
       ...(tagAdmin ? ['Admin' as const] : []),
       ...(tagSuperAdmin ? ['Super Admin' as const] : [])
     ];
+
+    if (requestDocumentsInChat && canRequestDocuments) {
+      if (isSubmitting) return;
+      const body = activityDraft.trim();
+      setIsSubmitting(true);
+      const didSave = await completeApplicationSave('REQUEST_MISSING_DOCUMENTS');
+      if (!didSave) return;
+      setRequestDocumentsInChat(false);
+      setActivityDraft('');
+      setTagAdmin(false);
+      setTagSuperAdmin(false);
+      if (body) setPendingDocumentRequestNote({ body, taggedRoles });
+      return;
+    }
+
+    if (!activityDraft.trim()) {
+      return;
+    }
     const taggedStaffNames = tagHandler && canTagAssignedHandler && application.handler_name
       ? [application.handler_name]
       : [];
@@ -1627,7 +1410,14 @@ function DetailDrawer({
       ...current,
       personal_info: {
         ...normalizePersonalInfo(current.personal_info),
-        [field]: value
+        [field]: value,
+        ...(field === 'marital_status'
+          ? hasChildrenQuestion(String(value))
+            ? { number_of_children: String(current.personal_info?.number_of_children || '').trim() || '0' }
+            : { number_of_children: '' }
+          : {}),
+        // Blank on a Married / Divorced / Widowed file means 0 (owner default), never "missing".
+        ...(field === 'number_of_children' && !String(value || '').trim() ? { number_of_children: '0' } : {})
       }
     }));
   };
@@ -1657,6 +1447,50 @@ function DetailDrawer({
     }));
   };
 
+  const updateEmploymentStart = (field: 'employment_start_year' | 'employment_start_month', value: string) => {
+    setEditedApplicationInfo((current) => {
+      const employment = {
+        ...normalizeEmploymentDetails(current.employment_details),
+        [field]: value
+      };
+      const duration = getEmploymentDuration(employment.employment_start_year, employment.employment_start_month);
+      return {
+        ...current,
+        employment_details: {
+          ...employment,
+          // years_employed stays the stored field that bank submissions and the
+          // completeness check read; it is derived once both parts are chosen.
+          ...(duration ? { years_employed: String(duration.years) } : {})
+        }
+      };
+    });
+  };
+
+  // Staff type years + months lived here (owner 2026-10-20); the move-in year/month is worked back from today.
+  const updateResidenceDuration = (part: 'years' | 'months', value: string) => {
+    setEditedApplicationInfo((current) => {
+      const personalInfo = normalizePersonalInfo(current.personal_info);
+      const duration = getEmploymentDuration(personalInfo.residence_start_year, personalInfo.residence_start_month);
+      const next = {
+        years: part === 'years' ? value : duration ? String(duration.years) : '',
+        months: part === 'months' ? value : duration ? String(duration.months) : ''
+      };
+      const start = next.years || next.months
+        ? getStartFromDuration(Number(next.years || 0), Number(next.months || 0))
+        : { year: '', month: '' };
+      return {
+        ...current,
+        personal_info: {
+          ...personalInfo,
+          residence_start_year: start.year,
+          residence_start_month: start.month,
+          // Like years_employed: the whole years stay in years_at_residence for completeness and old readers.
+          years_at_residence: start.year ? String(Number(next.years || 0)) : ''
+        }
+      };
+    });
+  };
+
   const updatePreferences = <K extends keyof CustomerPreferences>(field: K, value: CustomerPreferences[K]) => {
     setEditedApplicationInfo((current) => ({
       ...current,
@@ -1665,17 +1499,6 @@ function DetailDrawer({
         [field]: value
       }
     }));
-  };
-
-  const updateVehicleModel = (vehicleModel: string) => {
-    const catalogItem = findVehicleCatalogItem(vehicleModel, vehicleCatalog);
-    setEditedApplicationInfo((current) => ({
-      ...current,
-      vehicle_model: vehicleModel,
-      vehicle_brand: catalogItem?.brand || inferVehicleBrandFromModel(vehicleModel, vehicleCatalog),
-      vehicle_tag: 'Motorcycle'
-    }));
-    setIsAddingVehicle(false);
   };
 
   const vehicleCatalogMatch = findVehicleCatalogItem(editedApplicationInfo.vehicle_model, vehicleCatalog);
@@ -1754,7 +1577,7 @@ function DetailDrawer({
 
     try {
       const uploadedDocuments = await Promise.all(files.map(async (file) => {
-        const documentId = `DOC-${application.id}-${documentKey}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        const documentId = newId(`DOC-${application.id}-${documentKey}`);
         const fileDataUrl = await prepareUploadDataUrl(file);
         const storagePath = isFirebaseConfigured
           ? await import('../services/applicationDocumentStorage').then((module) => (
@@ -1868,6 +1691,11 @@ function DetailDrawer({
   };
 
   const handleOpenDocumentPreview = (documentItem: PayslipDocument) => {
+    if (documentItem.file_type.startsWith('image/') && documentItem.file_data_url) {
+      setImageViewerDocument(documentItem);
+      return;
+    }
+
     openDocumentPreview(documentItem, () => {
       void showAlert({
         eyebrow: tr('文件预览', 'Document Preview', 'Pratonton Dokumen'),
@@ -1896,8 +1724,8 @@ function DetailDrawer({
   };
 
   const downloadDocument = async (documentItem: PayslipDocument) => {
-    const source = documentItem.file_data_url || await loadDocumentSource(documentItem, true);
-    if (!source) {
+    const source = await loadDocumentSource(documentItem, true);
+    if (!source || !isSafeAttachmentDataUrl(source)) {
       return;
     }
 
@@ -2029,7 +1857,9 @@ function DetailDrawer({
     nextStatus: Extract<BankApplicationStatus, 'Approved' | 'Rejected' | 'Cancelled'>,
     rejectCode = bankApplication.reject_code,
     rejectNextStep: RejectNextStepType | undefined = bankApplication.reject_next_step,
-    rejectReason = bankApplication.reject_reason
+    rejectReason = bankApplication.reject_reason,
+    nextAction?: string,
+    remark = ''
   ) => {
     if (isSubmitting) {
       return;
@@ -2039,7 +1869,11 @@ function DetailDrawer({
       currentBankApplication.id === bankApplication.id
         ? mergeBankApplicationUpdates(
           currentBankApplication,
-          getBankApplicationStatusUpdates(currentBankApplication, nextStatus, rejectCode, rejectNextStep, rejectReason)
+          {
+            ...getBankApplicationStatusUpdates(currentBankApplication, nextStatus, rejectCode, rejectNextStep, rejectReason),
+            ...(nextAction ? { next_action: nextAction } : {}),
+            ...(remark.trim() ? { notes: appendBankDecisionRemark(currentBankApplication.notes, remark) } : {})
+          }
         )
         : currentBankApplication
     ));
@@ -2069,10 +1903,10 @@ function DetailDrawer({
             size="md"
           />
           <div className="min-w-0">
-            <p className="truncate text-sm font-bold text-slate-800">
+            <p className="truncate text-headline text-slate-800">
               {bankApplication.bank_name || tr('银行申请', 'Bank Application', 'Permohonan Bank')}
             </p>
-            <p className="mt-0.5 text-[11px] font-semibold text-slate-500">
+            <p className="mt-0.5 text-caption text-slate-500">
               {tr('轮次', 'Round', 'Bulat')} {bankApplication.round_no}
             </p>
           </div>
@@ -2087,23 +1921,11 @@ function DetailDrawer({
 
   const saveQuickBankFollowUp = async (
     bankApplication: BankApplication,
-    nextAction: string
+    nextAction: string,
+    remark = ''
   ) => {
     const normalizedNextAction = nextAction.trim();
     if (isSubmitting || !normalizedNextAction) {
-      return;
-    }
-    if (!getBankRequestedDocumentKey(normalizedNextAction)) {
-      await showAlert({
-        eyebrow: tr('银行补件', 'Bank Document Request', 'Permintaan Dokumen Bank'),
-        title: tr('请选择银行要求的文件', 'Choose the document requested by the bank', 'Pilih dokumen yang diminta oleh bank'),
-        message: tr(
-          'Follow Up 必须指定 IC、Payslip、Bank Statement 或 Vehicle Geran，系统才可以建立可完成的补件任务。',
-          'Follow Up must identify IC, Payslip, Bank Statement, or Vehicle Geran so the system can create a completable document task.',
-          'Susulan mesti mengenal pasti IC, Payslip, Bank Statement atau Vehicle Geran supaya sistem boleh membuat tugas dokumen yang boleh diselesaikan.'
-        ),
-        tone: 'warning'
-      });
       return;
     }
 
@@ -2113,7 +1935,8 @@ function DetailDrawer({
           currentBankApplication,
           {
             ...getBankApplicationStatusUpdates(currentBankApplication, 'Need More Info'),
-            next_action: normalizedNextAction
+            next_action: normalizedNextAction,
+            ...(remark.trim() ? { notes: appendBankDecisionRemark(currentBankApplication.notes, remark) } : {})
           }
         )
         : currentBankApplication
@@ -2121,6 +1944,60 @@ function DetailDrawer({
 
     setIsSubmitting(true);
     await completeApplicationSave(undefined, nextBankApplications);
+  };
+
+  // One entry for the five quick decisions, shared by the bank cards and the Home bank follow-up task.
+  const closeQuickBankForms = () => {
+    setQuickRejectBankId('');
+    setQuickRejectCode('');
+    setQuickRejectReason('');
+    setQuickRejectNextStep('');
+    setQuickRejectDocument('');
+    setQuickFollowUpBankId('');
+    setQuickFollowUpNextAction('');
+    setQuickCancelBankId('');
+    setQuickCancelReason('');
+    setQuickDecisionRemark('');
+  };
+
+  const openQuickBankAction = (bankApplication: BankApplication, action: BankQuickAction) => {
+    closeQuickBankForms();
+    if (action === 'approve') {
+      void confirmQuickBankApproval(bankApplication);
+      return;
+    }
+    if (action === 'cancel') {
+      setQuickCancelBankId(bankApplication.id);
+      setQuickCancelReason(bankApplication.status_reason || '');
+      return;
+    }
+    const requestedDocument = bankApplication.status === 'Need More Info' || matchBankRequestedDocumentKey(bankApplication.next_action)
+      ? bankApplication.next_action
+      : '';
+    if (action === 'follow-up-document') {
+      setQuickFollowUpBankId(bankApplication.id);
+      setQuickFollowUpNextAction(requestedDocument);
+      return;
+    }
+    const rejectCodes = normalizeRejectCodes(bankApplication.reject_code);
+    const rejectCode = rejectCodes.join(', ');
+    setQuickRejectBankId(bankApplication.id);
+    setQuickRejectCode(rejectCode);
+    setQuickRejectReason(
+      rejectCodes.length > 0
+        ? getLinkedRejectReason(rejectCode, errorCodeDefinitions)
+        : bankApplication.reject_reason || bankApplication.status_reason || ''
+    );
+    if (action === 'follow-up-reject') {
+      setQuickRejectNextStep('REQUEST_DOCUMENTS');
+      setQuickRejectMode('follow-up');
+      setQuickRejectDocument(requestedDocument);
+      return;
+    }
+    const definition = getRejectDefinitions(rejectCode, errorCodeDefinitions)[0];
+    const suggestedNextStep = bankApplication.reject_next_step || definition?.default_next_step;
+    setQuickRejectNextStep(suggestedNextStep && FINAL_REJECT_NEXT_STEPS.includes(suggestedNextStep) ? suggestedNextStep : '');
+    setQuickRejectMode('final');
   };
 
   const saveQuickBankCancellation = async (
@@ -2180,6 +2057,41 @@ function DetailDrawer({
     if (
       !isOpen ||
       !application ||
+      !bankPageRequest ||
+      application.purchase_method !== 'Loan' ||
+      handledBankPageRequestRef.current === bankPageRequest.id ||
+      // Wait until this application's banks (not the previous application's) are loaded into the editor.
+      editedBankApplications.length !== (application.bank_applications || []).length ||
+      (application.bank_applications || []).some((bank) => !editedBankApplications.some((edited) => edited.id === bank.id))
+    ) {
+      return;
+    }
+
+    handledBankPageRequestRef.current = bankPageRequest.id;
+    setAdminSubmissionView(false);
+    setActiveDetailTab('bank');
+    closeQuickBankForms();
+    const columnKey = bankPageRequest.bankName ? normalizeBankColumnKey(bankPageRequest.bankName) : '';
+    const target = bankPageRequest.bankApplicationId
+      ? editedBankApplications.find((bank) => bank.id === bankPageRequest.bankApplicationId)
+      : columnKey
+        ? [...editedBankApplications].reverse().find((bank) => bankMatchesColumn(bank.bank_name, columnKey))
+        : undefined;
+    if (!target) {
+      return;
+    }
+    if (bankPageRequest.action && canManageBankApplications && ['Submitted', 'Pending Review'].includes(target.status)) {
+      openQuickBankAction(target, bankPageRequest.action);
+    }
+    window.setTimeout(() => {
+      window.document.querySelector(`[data-testid="bank-application-${target.id}"]`)?.scrollIntoView({ block: 'center' });
+    }, 120);
+  }, [application, bankPageRequest, canManageBankApplications, editedBankApplications, isOpen]);
+
+  useEffect(() => {
+    if (
+      !isOpen ||
+      !application ||
       !canManageBankApplications ||
       editedApplicationInfo.purchase_method !== 'Loan' ||
       addBankRequest === 0 ||
@@ -2204,21 +2116,30 @@ function DetailDrawer({
     }
 
     handledActivityScrollRequestRef.current = scrollToActivityThreadRequest;
-    setActiveDetailTab('activity');
-    const scrollToThread = () => {
-      activityThreadRef.current?.scrollIntoView({
-        behavior: 'smooth',
-        block: 'start'
-      });
-    };
-    const firstScrollTimer = window.setTimeout(scrollToThread, 320);
-    const secondScrollTimer = window.setTimeout(scrollToThread, 700);
-
-    return () => {
-      window.clearTimeout(firstScrollTimer);
-      window.clearTimeout(secondScrollTimer);
-    };
+    // The thread lives in the Internal Chat (the Activity tab is gone).
+    setIsActivityChatOpen(true);
   }, [application, isOpen, scrollToActivityThreadRequest]);
+
+  useEffect(() => {
+    if (!pendingDocumentRequestNote || !application || getLoanPendingAction(application) !== 'Provide Documents') {
+      return;
+    }
+
+    // Post the note only once the saved request is back, and one tick later:
+    // App refreshes onAddActivityComment's closure in its own effect, which runs
+    // after this one, and the stale closure would write back the old file.
+    const timer = window.setTimeout(() => {
+      onAddActivityComment(
+        application.id,
+        pendingDocumentRequestNote.body,
+        pendingDocumentRequestNote.taggedRoles,
+        canTagAssignedHandler && application.handler_name ? [application.handler_name] : []
+      );
+      setPendingDocumentRequestNote(null);
+      setTagHandler(false);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [application, canTagAssignedHandler, onAddActivityComment, pendingDocumentRequestNote]);
 
   useEffect(() => {
     if (
@@ -2253,8 +2174,8 @@ function DetailDrawer({
   const normalizedVehicleOptions = normalizeVehicleOptions({ ...editedApplicationInfo, id: application.id } as LoanApplication);
   const primaryVehicleOption = normalizedVehicleOptions[0];
   const detectedBirthDate = deriveMalaysiaIcBirthDate(editedApplicationInfo.ic_no);
-  const detailInputClass = 'rounded-lg border border-slate-100 bg-white px-3 py-2 text-xs font-semibold text-slate-700 outline-none focus:ring-1 focus:ring-indigo-100';
-  const detailDisplayClass = 'rounded-lg bg-slate-50 px-3 py-2 text-left text-xs font-semibold text-slate-700 transition-colors hover:bg-indigo-50 hover:text-indigo-600';
+  const detailInputClass = 'rounded-control border border-slate-100 bg-white px-3 py-2 text-footnote text-slate-700 outline-none focus:ring-1 focus:ring-indigo-100';
+  const detailDisplayClass = 'rounded-control bg-slate-50 px-3 py-2 text-left text-footnote text-slate-700 transition-colors hover:bg-indigo-50 hover:text-indigo-600';
 
   const latestBankApplication = [...editedBankApplications].sort((a, b) => (
     new Date(b.submitted_at || 0).getTime() - new Date(a.submitted_at || 0).getTime()
@@ -2271,7 +2192,7 @@ function DetailDrawer({
       .filter(Boolean)
   ]));
   const bankDocumentRequestOptions = bankNextActionOptions.filter((nextAction) => (
-    Boolean(getBankRequestedDocumentKey(nextAction))
+    Boolean(matchBankRequestedDocumentKey(nextAction))
   ));
   const needMoreInfoBank = editedBankApplications.find((bankApplication) => bankApplication.status === 'Need More Info');
   const approvedNotAcceptedBank = editedBankApplications.find((bankApplication) => (
@@ -2322,12 +2243,11 @@ function DetailDrawer({
     ...missingApplicationInformationLabels,
     ...missingDocumentLabels.map((label) => `Document: ${label}`)
   ];
-  const activityThread = [...(application.activity_thread || [])].sort((a, b) => (
-    new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-  ));
   const pendingWith = getLoanPendingWith(application);
   const pendingAction = getLoanPendingAction(application);
-  const currentMissingItemLabels = pendingAction === 'Complete Application'
+  // A cash file goes straight to Admin's Approve Cash Purchase, which needs the
+  // addresses and cash price too, so they count as missing from the start.
+  const currentMissingItemLabels = pendingAction === 'Complete Application' || isCashPurchase
     ? missingInitialReviewLabels
     : missingDocumentLabels;
   const navigateToMissingItem = (label: string) => {
@@ -2409,7 +2329,7 @@ function DetailDrawer({
   const canRequestDocuments = (isLoanPurchase || isCashPurchase) && canManageBankApplications && pendingAction !== 'Complete Application' && ![LoanStatus.APPROVE, LoanStatus.REJECT, LoanStatus.CANCELLED].includes(application.status);
   const canNotifyAdmin = isAssignedHandler && pendingWith === 'Handler' && pendingAction === 'Complete Application' && application.status === LoanStatus.NEW;
   const canApproveCashPurchase = isCashPurchase && canManageBankApplications && pendingWith === 'Admin' && pendingAction === 'Review Application' && application.status === LoanStatus.NEW && missingInitialReviewLabels.length === 0;
-  const canSubmitBank = isLoanPurchase && canManageBankApplications && hasDraftBank && ![LoanStatus.APPROVE, LoanStatus.REJECT, LoanStatus.CANCELLED].includes(application.status);
+  const canSubmitBank = isLoanPurchase && canManageBankApplications && hasDraftBank && isApplicationOpenForNewBank(application);
   const canSubmitDocuments = isAssignedHandler && pendingWith === 'Handler' && (application.status === LoanStatus.PENDING || application.status === LoanStatus.FOLLOW_UP);
   const canCloseRejected = isLoanPurchase &&
     application.status === LoanStatus.FOLLOW_UP &&
@@ -2420,6 +2340,11 @@ function DetailDrawer({
       (isAssignedHandler && pendingWith === 'Handler')
     );
   const canCompleteApprovedContact = isAssignedHandler && pendingWith === 'Handler' && pendingAction === 'Contact Approved Customer' && application.status === LoanStatus.APPROVE;
+  // Judged on the saved application, not the unsaved Cash/Loan edit.
+  const canShowCancelApplication = canStaffCancelApplication(application, { role: currentStaffRole, name: currentStaffName })
+    && canCancelApplication(application);
+  const cancelBankApplicationsToWithdraw = (application.bank_applications || [])
+    .filter((bank) => !['Rejected', 'Cancelled'].includes(bank.status) && bank.offer_status !== 'Withdrawn');
   const persistedApplicationInfo: DetailApplicationInfo = {
     vehicle_options: normalizeVehicleOptions(application),
     applicant_name: application.applicant_name,
@@ -2458,15 +2383,7 @@ function DetailDrawer({
   };
   const workflowActions: DrawerWorkflowAction[] = [];
 
-  if (activeDetailTab !== 'settlement' && canRequestDocuments) {
-    workflowActions.push({
-      key: 'request-documents',
-      label: tr('要求补资料', 'Request Documents', "Minta Dokumen"),
-      accessibleName: 'Request Documents',
-      onClick: () => handleSave('REQUEST_MISSING_DOCUMENTS')
-    });
-  }
-  if (activeDetailTab !== 'settlement' && canApproveCashPurchase) {
+  if (canApproveCashPurchase) {
     workflowActions.push({
       key: 'approve-cash',
       label: tr('批准现金申请', 'Approve Cash Purchase', "Luluskan Pembelian Tunai"),
@@ -2474,7 +2391,7 @@ function DetailDrawer({
       onClick: () => requestWorkflowAction('APPROVE_CASH_PURCHASE')
     });
   }
-  if (activeDetailTab !== 'settlement' && canSubmitBank) {
+  if (canSubmitBank) {
     const isResubmission = pendingAction === 'Resubmit to Bank';
     workflowActions.push({
       key: 'submit-bank',
@@ -2485,29 +2402,29 @@ function DetailDrawer({
       onClick: () => requestWorkflowAction('SUBMIT_TO_BANK')
     });
   }
-  if (activeDetailTab !== 'settlement' && canSubmitDocuments) {
+  if (canSubmitDocuments) {
     workflowActions.push({
       key: 'documents-ready',
       label: tr('补件已完成', 'Documents Ready', "Dokumen Sedia"),
       accessibleName: 'Documents Ready',
       onClick: () => handleSave('DOCUMENTS_READY'),
-      disabled: missingDocumentLabels.length > 0 || !isBankRequestedDocumentReceived,
+      disabled: currentMissingItemLabels.length > 0 || !isBankRequestedDocumentReceived,
       title: !isBankRequestedDocumentReceived
         ? tr(
             `请先上传银行要求的 ${requestedBankDocument?.label || '文件'}`,
             `Upload the bank-requested ${requestedBankDocument?.label || 'document'} first`,
             `Muat naik ${requestedBankDocument?.label || 'dokumen'} yang diminta oleh bank dahulu`
           )
-        : missingDocumentLabels.length > 0
+        : currentMissingItemLabels.length > 0
           ? tr(
-              `请先补齐：${missingDocumentLabels.join('、')}`,
-              `Complete first: ${missingDocumentLabels.join(', ')}`,
-              `Lengkapkan dahulu: ${missingDocumentLabels.join(', ')}`
+              `请先补齐：${currentMissingItemLabels.join('、')}`,
+              `Complete first: ${currentMissingItemLabels.join(', ')}`,
+              `Lengkapkan dahulu: ${currentMissingItemLabels.join(', ')}`
             )
           : undefined
     });
   }
-  if (activeDetailTab !== 'settlement' && canNotifyAdmin) {
+  if (canNotifyAdmin) {
     workflowActions.push({
       key: 'notify-admin',
       label: tr('通知 Admin', 'Notify Admin', "Maklumkan Pentadbir"),
@@ -2519,7 +2436,7 @@ function DetailDrawer({
         : undefined
     });
   }
-  if (activeDetailTab !== 'settlement' && canCloseRejected) {
+  if (canCloseRejected) {
     workflowActions.push({
       key: 'close-rejected',
       label: tr('拒贷结案', 'Close Rejected File', "Tutup Fail Ditolak"),
@@ -2527,7 +2444,7 @@ function DetailDrawer({
       onClick: () => requestWorkflowAction('CLOSE_REJECTED')
     });
   }
-  if (activeDetailTab !== 'settlement' && canCompleteApprovedContact) {
+  if (canCompleteApprovedContact) {
     workflowActions.push({
       key: 'complete-contact',
       label: isCashPurchase
@@ -2552,13 +2469,12 @@ function DetailDrawer({
               ? 'close-rejected'
               : canSubmitBank
                 ? 'submit-bank'
-                : canRequestDocuments
-                  ? 'request-documents'
-                  : canSubmitDocuments
-                    ? 'documents-ready'
-                    : canCloseRejected
-                      ? 'close-rejected'
-                      : workflowActions[0]?.key;
+                : canSubmitDocuments
+                  ? 'documents-ready'
+                  : canCloseRejected
+                    ? 'close-rejected'
+                    // Cancelling is destructive; it never becomes the primary button.
+                    : workflowActions.find((action) => action.key !== 'cancel-application')?.key;
   const primaryWorkflowAction = workflowActions.find((action) => action.key === preferredWorkflowActionKey);
   const secondaryWorkflowActions = workflowActions.filter((action) => action.key !== primaryWorkflowAction?.key);
   const applicationNextStep = (() => {
@@ -2592,7 +2508,7 @@ function DetailDrawer({
           label: translatePendingAction(pendingAction),
           instruction: isCashPurchase
             ? tr('检查 IC 和现金购买资料。资料完整就按 Approve Cash Purchase；不需要提交银行。', 'Review the IC and cash purchase details. When complete, use Approve Cash Purchase; no bank submission is required.', "Semak IC dan butiran pembelian tunai. Apabila lengkap, gunakan Approve Cash Purchase; penghantaran bank tidak diperlukan.")
-            : tr('检查客户资料与文件。有缺件就按 Request Documents；完整后新增银行并提交。', 'Review the customer details and documents. Use Request Documents for missing items; when complete, add a bank and submit.', "Semak butiran dan dokumen pelanggan. Gunakan Request Documents jika ada kekurangan; apabila lengkap, tambah bank dan hantar.")
+            : tr('检查客户资料与文件。有缺件就在内部对话打开「要求补资料」再发送；完整后新增银行并提交。', 'Review the customer details and documents. For missing items, turn on Request Documents in Internal Chat and send; when complete, add a bank and submit.', "Semak butiran dan dokumen pelanggan. Jika ada kekurangan, hidupkan Minta Dokumen dalam Sembang Dalaman dan hantar; apabila lengkap, tambah bank dan hantar.")
         };
       case 'Provide Documents':
         return {
@@ -2650,50 +2566,137 @@ function DetailDrawer({
     ? tr('已产生财务、库存或佣金影响，请先在 Finance Center 冲销。', 'Finance, stock, or commission activity exists. Reverse it in Finance Center first.', "Aktiviti kewangan, stok atau komisen sudah wujud. Balikkan di Pusat Kewangan dahulu.")
     : tr('已有后续流程动作，不能再撤回这一步。', 'A later workflow action exists, so this step can no longer be undone.', "Tindakan aliran kerja seterusnya sudah wujud, jadi langkah ini tidak boleh dibatalkan.");
 
+  const composerChipClass = (active: boolean, tone: 'emerald' | 'indigo' | 'slate' | 'amber') => {
+    const activeTone = {
+      emerald: 'bg-emerald-600 text-white ring-emerald-600',
+      indigo: 'bg-indigo-600 text-white ring-indigo-600',
+      slate: 'bg-brand text-white ring-brand',
+      amber: 'bg-amber-500 text-white ring-amber-500'
+    }[tone];
+    return `inline-flex h-6 max-w-[140px] items-center truncate rounded-full px-2 text-micro font-semibold tracking-normal ring-1 transition-colors ${
+      active ? activeTone : 'bg-white text-slate-500 ring-slate-200 hover:text-slate-800'
+    }`;
+  };
+  // Compact composer: the note first, then one row of @mention chips, the
+  // Request Documents switch and Send. The writer is already shown on each message.
+  const activityComposer = (
+    <div className="rounded-card border border-slate-200 bg-white p-2.5 focus-within:border-brand-100 focus-within:ring-2 focus-within:ring-brand-50">
+      {requestDocumentsInChat && canRequestDocuments && (
+        <p data-testid="activity-request-documents-hint" className="mb-2 rounded-control bg-amber-50 px-3 py-2 text-caption text-amber-800">
+          {missingDocumentLabels.length > 0
+            ? tr(
+              `发送后这一单交回 ${application?.handler_name || 'Sales'} 补资料（Pending · Provide Documents）。缺：${missingDocumentLabels.join('、')}`,
+              `Sending hands the file back to ${application?.handler_name || 'Sales'} for documents (Pending · Provide Documents). Missing: ${missingDocumentLabels.join(', ')}`,
+              `Menghantar akan memulangkan fail kepada ${application?.handler_name || 'Sales'} untuk dokumen (Pending · Provide Documents). Kurang: ${missingDocumentLabels.join(', ')}`
+            )
+            : tr('先在申请资料把缺少的文件标成 Missing。', 'Mark the missing documents as Missing in Application first.', 'Tandakan dokumen yang kurang sebagai Hilang dalam Permohonan dahulu.')}
+        </p>
+      )}
+      <textarea
+        value={activityDraft}
+        onChange={(event) => setActivityDraft(event.target.value)}
+        onKeyDown={handleActivityDraftKeyDown}
+        rows={2}
+        placeholder="Write internal note, customer decision, missing info, or tag admin for help..."
+        className="w-full resize-none rounded-control bg-transparent px-1.5 py-1 text-footnote text-slate-700 outline-none placeholder:text-slate-400"
+      />
+      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        <span className="text-micro font-semibold uppercase text-slate-400">{tr('通知', 'Notify', 'Maklum')}</span>
+        {canTagAssignedHandler && (
+          <button
+            type="button"
+            onClick={() => setTagHandler((current) => !current)}
+            aria-pressed={tagHandler}
+            aria-label={`Tag assigned handler ${assignedHandlerAccount?.name || application?.handler_name || ''}`}
+            title={`@Handler · ${assignedHandlerAccount?.name || application?.handler_name || ''}`}
+            className={composerChipClass(tagHandler, 'emerald')}
+          >
+            @{assignedHandlerAccount?.name || application?.handler_name || 'Handler'}
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={() => setTagAdmin((current) => !current)}
+          aria-pressed={tagAdmin}
+          className={composerChipClass(tagAdmin, 'indigo')}
+        >
+          @Admin
+        </button>
+        <button
+          type="button"
+          onClick={() => setTagSuperAdmin((current) => !current)}
+          aria-pressed={tagSuperAdmin}
+          className={composerChipClass(tagSuperAdmin, 'slate')}
+        >
+          @Super Admin
+        </button>
+        {canRequestDocuments && (
+          <button
+            type="button"
+            data-testid="activity-request-documents-toggle"
+            onClick={() => setRequestDocumentsInChat((current) => !current)}
+            aria-pressed={requestDocumentsInChat}
+            className={composerChipClass(requestDocumentsInChat, 'amber')}
+          >
+            {tr('要求补资料', 'Request Documents', 'Minta Dokumen')}
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={handleSubmitActivityComment}
+          disabled={requestDocumentsInChat && canRequestDocuments
+            ? isSubmitting || missingDocumentLabels.length === 0
+            : !activityDraft.trim()}
+          aria-label={requestDocumentsInChat && canRequestDocuments ? 'Request Documents & send' : 'Add comment'}
+          className="ml-auto inline-flex h-8 shrink-0 items-center gap-1.5 rounded-control bg-brand px-3 text-callout text-white transition-colors hover:bg-brand-deep disabled:bg-slate-200 disabled:text-slate-500"
+        >
+          <Send className="h-3.5 w-3.5" aria-hidden="true" />
+          {requestDocumentsInChat && canRequestDocuments
+            ? tr('补资料并发送', 'Request & send', 'Minta & hantar')
+            : tr('发送', 'Send', 'Hantar')}
+        </button>
+      </div>
+    </div>
+  );
+
   return (
-    <AnimatePresence>
+    <>
       {isOpen && (
         <>
           {/* Backdrop Overlay */}
-          <motion.div
+          <div
             id="drawer-backdrop"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 0.35 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.3, ease: 'easeInOut' }}
             onClick={onClose}
-            className="fixed inset-0 bg-slate-950 z-40 cursor-pointer"
+            className="fixed inset-0 z-40 cursor-pointer bg-slate-950 opacity-35 transition-opacity duration-300"
           />
 
           {/* Sliding Side Panel Drawer */}
-          <motion.div
+          <div
             id="detail-drawer"
             data-dce-scope=""
             data-dce-copy-on-single-click=""
-            initial={{ x: '100%' }}
-            animate={{ x: 0 }}
-            exit={{ x: '100%' }}
-            transition={{ type: 'spring', damping: 25, stiffness: 220 }}
-            className="fixed inset-y-0 right-0 w-full max-w-5xl bg-white shadow-2xl z-50 flex flex-col h-full border-l border-slate-100"
+            className="fixed inset-y-0 right-0 z-50 flex h-full w-full max-w-5xl flex-col border-l border-slate-100 bg-white shadow-e3 transition-transform duration-300 ease-out"
           >
             {/* Header section with status banner */}
             <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-4 py-4 sm:px-6">
               <div className="min-w-0">
-                <p className="text-[11px] font-bold uppercase tracking-widest text-slate-500">
+                <p className="text-micro uppercase text-slate-500">
                   {tr('申请详情', 'Application Detail', "Butiran Permohonan")}
                 </p>
                 <div className="mt-1 flex flex-wrap items-center gap-2">
-                  <h2 className="truncate text-lg font-bold text-slate-900">{application.applicant_name}</h2>
-                  <span className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-bold ${editedStatusConfig.bg} ${editedStatusConfig.text} ${editedStatusConfig.border}`}>
+                  {/* The applicant is the subject of this whole workspace, so it takes
+                      the drawer title style rather than the section-heading one. */}
+                  <h2 className="truncate text-title-2 text-slate-900">{application.applicant_name}</h2>
+                  <span className={`inline-flex rounded-full border px-2.5 py-1 text-caption font-semibold ${editedStatusConfig.bg} ${editedStatusConfig.text} ${editedStatusConfig.border}`}>
                     {trLoanStatus(editedStatus)}
                   </span>
                 </div>
-                <p className="mt-1 truncate text-xs font-semibold text-slate-500">
+                <p className="mt-1 truncate text-footnote text-slate-500">
                   <span className="font-mono">{application.id}</span>
                   <span aria-hidden="true"> · </span>
                   {editedApplicationInfo.vehicle_model || tr('未选择车辆', 'No vehicle selected', "Tiada kenderaan dipilih")}
                 </p>
-                <p className="mt-2 hidden text-[11px] font-semibold text-slate-500 sm:block">
+                <p className="mt-2 hidden text-caption text-slate-500 sm:block">
                   {canEditAllInformation
                     ? tr('单击复制 · 双击编辑字段', 'Click to copy · double-click to edit fields', "Klik untuk menyalin · klik dua kali untuk mengedit medan")
                     : tr('单击字段即可复制', 'Click a field to copy', "Klik medan untuk menyalin")}
@@ -2703,7 +2706,7 @@ function DetailDrawer({
                 id="close-drawer-btn"
                 onClick={onClose}
                 aria-label={tr('关闭申请详情', 'Close application detail', "Tutup butiran permohonan")}
-                className="mt-1 rounded-lg p-2 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700"
+                className="mt-1 rounded-control p-2 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -2711,6 +2714,23 @@ function DetailDrawer({
 
             <div className="overflow-x-auto border-b border-slate-100 bg-white px-4 py-3 sm:px-6">
               <div className="flex min-w-max items-center justify-between gap-3">
+              {activeDetailTab === 'bank' ? (
+                <div className="flex items-center gap-3" data-testid="bank-page-header">
+                  <button
+                    type="button"
+                    data-testid="bank-page-back"
+                    onClick={() => setActiveDetailTab('basic')}
+                    className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-control bg-slate-50 px-3 py-2 text-callout text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-800"
+                  >
+                    <ArrowLeft aria-hidden="true" className="h-4 w-4" />
+                    {tr('申请详情', 'Application Detail', 'Butiran Permohonan')}
+                  </button>
+                  <span className="inline-flex items-center gap-2 text-headline text-slate-800">
+                    <Landmark aria-hidden="true" className="h-5 w-5 text-brand" strokeWidth={1.75} />
+                    {tr('银行', 'Banks', 'Bank')}
+                  </span>
+                </div>
+              ) : (
               <div className="flex items-center gap-2" role="tablist" aria-label="Application detail sections">
                 <button
                   id="detail-tab-basic"
@@ -2724,79 +2744,18 @@ function DetailDrawer({
                     setActiveDetailTab('basic');
                   }}
                   aria-label={tr('申请与文件', 'Application and documents', "Permohonan dan dokumen")}
-                  className={`inline-flex items-center gap-2 whitespace-nowrap rounded-lg px-3 py-2 text-xs font-bold transition-colors ${
+                  className={`inline-flex items-center gap-2 whitespace-nowrap rounded-control px-3 py-2 text-callout transition-colors ${
                     activeDetailTab === 'basic'
-                      ? 'bg-red-800 text-white'
+                      ? 'bg-brand text-white'
                       : 'bg-slate-50 text-slate-500 hover:bg-slate-100 hover:text-slate-800'
                   }`}
                 >
-                  <img src={customerIcon} alt="" aria-hidden="true" className="h-5 w-5 object-contain" />
+                  <UserRound aria-hidden="true" className="h-5 w-5" strokeWidth={1.75} />
                   {tr('申请资料', 'Application', "Permohonan")}
                 </button>
-                {isLoanPurchase && pendingAction !== 'Complete Application' && (
-                  <button
-                    id="detail-tab-bank"
-                    type="button"
-                    role="tab"
-                    aria-selected={activeDetailTab === 'bank'}
-                    aria-controls="detail-panel-bank"
-                    data-testid="detail-tab-bank"
-                    onClick={() => {
-                      setAdminSubmissionView(false);
-                      setActiveDetailTab('bank');
-                    }}
-                    className={`inline-flex items-center gap-2 whitespace-nowrap rounded-lg px-3 py-2 text-xs font-bold transition-colors ${
-                      activeDetailTab === 'bank'
-                        ? 'bg-red-800 text-white'
-                        : 'bg-slate-50 text-slate-500 hover:bg-slate-100 hover:text-slate-800'
-                    }`}
-                  >
-                    <img src={bankDatabaseIcon} alt="" aria-hidden="true" className="h-5 w-5 object-contain" />
-                    {tr('银行', 'Banks', "Bank")}
-                  </button>
-                )}
-                <button
-                  id="detail-tab-settlement"
-                  type="button"
-                  role="tab"
-                  aria-selected={activeDetailTab === 'settlement'}
-                  aria-controls="detail-panel-settlement"
-                  data-testid="detail-tab-settlement"
-                  onClick={() => {
-                    setAdminSubmissionView(false);
-                    setActiveDetailTab('settlement');
-                  }}
-                  className={`inline-flex items-center gap-2 whitespace-nowrap rounded-lg px-3 py-2 text-xs font-bold transition-colors ${
-                    activeDetailTab === 'settlement'
-                      ? 'bg-red-800 text-white'
-                      : 'bg-slate-50 text-slate-500 hover:bg-slate-100 hover:text-slate-800'
-                  }`}
-                >
-                  <ReceiptText className="h-5 w-5" aria-hidden="true" />
-                  {tr('结算', 'Settlement', "Penyelesaian")}
-                </button>
-                <button
-                  id="detail-tab-activity"
-                  type="button"
-                  role="tab"
-                  aria-selected={activeDetailTab === 'activity'}
-                  aria-controls="detail-panel-activity"
-                  data-testid="detail-tab-activity"
-                  onClick={() => {
-                    setAdminSubmissionView(false);
-                    setActiveDetailTab('activity');
-                  }}
-                  className={`inline-flex items-center gap-2 whitespace-nowrap rounded-lg px-3 py-2 text-xs font-bold transition-colors ${
-                    activeDetailTab === 'activity'
-                      ? 'bg-red-800 text-white'
-                      : 'bg-slate-50 text-slate-500 hover:bg-slate-100 hover:text-slate-800'
-                  }`}
-                >
-                  <img src={activityIcon} alt="" aria-hidden="true" className="h-5 w-5 object-contain" />
-                  {tr('动态', 'Activity', "Aktiviti")}
-                </button>
               </div>
-              {(currentStaffRole === 'Admin' || currentStaffRole === 'Super Admin') && isLoanPurchase && (
+              )}
+              {activeDetailTab !== 'bank' && hasAdminWorkAccess(currentStaffRole) && isLoanPurchase && (
                 <button
                   type="button"
                   data-testid="admin-submission-filter"
@@ -2806,7 +2765,7 @@ function DetailDrawer({
                     setAdminSubmissionView((current) => !current);
                     detailContentRef.current?.scrollTo({ top: 0 });
                   }}
-                  className={`inline-flex items-center gap-2 whitespace-nowrap rounded-lg px-3 py-2 text-xs font-bold transition-colors ${
+                  className={`inline-flex items-center gap-2 whitespace-nowrap rounded-control px-3 py-2 text-callout transition-colors ${
                     adminSubmissionView
                       ? 'bg-indigo-600 text-white hover:bg-indigo-700'
                       : 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100'
@@ -2824,16 +2783,16 @@ function DetailDrawer({
             {/* Scrollable details form */}
             <div ref={detailContentRef} data-testid="detail-scroll-container" className="flex-1 space-y-6 overflow-y-auto p-4 scrollbar-none sm:p-6">
               {riskFlags.length > 0 && (
-                <div className={`${adminSubmissionView ? 'hidden' : ''} rounded-xl border border-amber-100 bg-amber-50/70 p-4`}>
+                <div className={`${adminSubmissionView ? 'hidden' : ''} rounded-card border border-amber-100 bg-amber-50/70 p-4`}>
                   <div className="flex items-start gap-3">
-                    <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white text-amber-600 ring-1 ring-amber-100">
+                    <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-control bg-white text-amber-600 ring-1 ring-amber-100">
                       <AlertTriangle className="h-4 w-4" />
                     </div>
                     <div className="min-w-0">
-                      <p className="text-sm font-bold text-amber-800">{tr('风控提醒', 'Risk Control Warning', "Amaran Kawalan Risiko")}</p>
+                      <p className="text-headline text-amber-800">{tr('风控提醒', 'Risk Control Warning', "Amaran Kawalan Risiko")}</p>
                       <div className="mt-2 space-y-1">
                         {riskFlags.map((flag) => (
-                          <p key={`${flag.field}-${flag.value}`} className="text-xs font-semibold leading-relaxed text-amber-800">
+                          <p key={`${flag.field}-${flag.value}`} className="text-footnote leading-relaxed text-amber-800">
                             {tr(`${flag.label} 与 ${flag.matching_applicant_names.map((name, index) => `${name} (${flag.matching_application_ids[index]})`).join(', ')} 重复`, `${flag.label} duplicated with ${flag.matching_applicant_names.map((name, index) => `${name} (${flag.matching_application_ids[index]})`).join(', ')}`, `${flag.label} diduakan dengan ${flag.matching_applicant_names.map((name, index) => `${name} (${flag.matching_application_ids[index]})`).join(', ')}`)}
                           </p>
                         ))}
@@ -2844,25 +2803,25 @@ function DetailDrawer({
               )}
 
               {rawMatches.length > 0 && (
-                <div className={`${adminSubmissionView ? 'hidden' : ''} rounded-xl border border-blue-100 bg-blue-50/70 p-4`}>
+                <div className={`${adminSubmissionView ? 'hidden' : ''} rounded-card border border-blue-100 bg-blue-50/70 p-4`}>
                   <div className="flex items-start gap-3">
-                    <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white text-blue-600 ring-1 ring-blue-100">
+                    <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-control bg-white text-blue-600 ring-1 ring-blue-100">
                       <Database className="h-4 w-4" />
                     </div>
                     <div className="min-w-0">
-                      <p className="text-sm font-bold text-blue-900">{tr('潜在客户关系', 'Lead Relationship', "Perhubungan prospek")}</p>
+                      <p className="text-headline text-blue-900">{tr('潜在客户关系', 'Lead Relationship', "Perhubungan prospek")}</p>
                       <div className="mt-2 space-y-2">
                         {rawMatches.slice(0, 5).map((match) => (
-                          <div key={`${match.raw_customer_id}-${match.customer_id}`} className="rounded-lg bg-white/80 px-3 py-2">
-                            <p className="truncate text-xs font-bold text-slate-800" title={match.raw_customer_name}>
+                          <div key={`${match.raw_customer_id}-${match.customer_id}`} className="rounded-control bg-white/80 px-3 py-2">
+                            <p className="truncate text-footnote font-semibold text-slate-800" title={match.raw_customer_name}>
                               {tr(`${match.raw_customer_name} 来自 ${match.raw_customer_channel}`, `${match.raw_customer_name} from ${match.raw_customer_channel}`, `${match.raw_customer_name} daripada ${match.raw_customer_channel}`)}
                             </p>
-                            <p className="mt-1 truncate font-mono text-[11px] text-slate-500">
+                            <p className="mt-1 truncate font-mono text-caption text-slate-500">
                               {match.raw_customer_lead_id || match.raw_customer_id} / {match.raw_customer_phone || '--'}
                             </p>
                             <div className="mt-2 flex flex-wrap gap-1">
                               {match.matched_fields.map((field) => (
-                                <span key={field} className="rounded-full bg-blue-100 px-2 py-0.5 text-[11px] font-bold uppercase text-blue-700">
+                                <span key={field} className="rounded-full bg-blue-100 px-2 py-0.5 text-micro uppercase text-blue-700">
                                   {RAW_MATCH_FIELD_LABELS[field]}
                                 </span>
                               ))}
@@ -2870,7 +2829,7 @@ function DetailDrawer({
                           </div>
                         ))}
                         {rawMatches.length > 5 && (
-                          <p className="text-[11px] font-semibold text-blue-700">{tr(`还有 ${rawMatches.length - 5} 个潜在名单匹配`, `+${rawMatches.length - 5} more raw customer matches`, `+${rawMatches.length - 5} lagi padanan pelanggan mentah`)}</p>
+                          <p className="text-caption text-blue-700">{tr(`还有 ${rawMatches.length - 5} 个潜在名单匹配`, `+${rawMatches.length - 5} more raw customer matches`, `+${rawMatches.length - 5} lagi padanan pelanggan mentah`)}</p>
                         )}
                       </div>
                     </div>
@@ -2878,26 +2837,26 @@ function DetailDrawer({
                 </div>
               )}
 
-              <section data-testid="current-action-panel" className={`${adminSubmissionView ? 'hidden' : ''} overflow-hidden rounded-xl border ${currentActionTone}`}>
+              <section data-testid="current-action-panel" className={`${adminSubmissionView ? 'hidden' : ''} overflow-hidden rounded-card border ${currentActionTone}`}>
                 <div className="flex items-center justify-between gap-3 border-b border-white/80 px-4 py-3">
                   <div className="flex min-w-0 items-center gap-3">
-                    <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white shadow-sm ${isCurrentActionOverdue ? 'text-rose-600' : pendingWith === 'Closed' ? 'text-emerald-600' : 'text-amber-600'}`}>
+                    <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-control bg-white shadow-e1 ${isCurrentActionOverdue ? 'text-rose-600' : pendingWith === 'Closed' ? 'text-emerald-600' : 'text-amber-600'}`}>
                       <CalendarClock className="h-4 w-4" />
                     </span>
                     <div className="min-w-0">
-                      <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">{tr('当前行动', 'Current Action', "Tindakan Semasa")}</p>
+                      <p className="text-micro uppercase text-slate-500">{tr('当前行动', 'Current Action', "Tindakan Semasa")}</p>
                       <div className="mt-0.5 flex min-w-0 items-center gap-2">
-                        <p className="truncate text-sm font-bold text-slate-900">{translatePendingAction(pendingAction)}</p>
+                        <p className="truncate text-headline text-slate-900">{translatePendingAction(pendingAction)}</p>
                         <ArrowRight className="h-3.5 w-3.5 shrink-0 text-slate-500" />
-                        <p className="truncate text-xs font-semibold text-slate-600">{pendingOwner}</p>
+                        <p className="truncate text-footnote text-slate-600">{pendingOwner}</p>
                       </div>
                     </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     {isCurrentActionOverdue && (
-                      <span className="rounded-md bg-rose-100 px-2 py-1 text-[11px] font-bold uppercase tracking-wider text-rose-700">{tr('已逾期', 'Overdue', "Tertunggak")}</span>
+                      <span className="rounded-chip bg-rose-100 px-2 py-1 text-micro uppercase text-rose-700">{tr('已逾期', 'Overdue', "Tertunggak")}</span>
                     )}
-                    <span className="inline-flex items-center gap-1.5 rounded-md bg-white px-2 py-1 text-[11px] font-bold text-slate-700 ring-1 ring-slate-100">
+                    <span className="inline-flex items-center gap-1.5 rounded-chip bg-white px-2 py-1 text-caption font-semibold text-slate-700 ring-1 ring-slate-100">
                       <span className={`h-2 w-2 rounded-full ${editedStatusConfig.dot}`} />
                       {trLoanStatus(editedStatus)}
                     </span>
@@ -2906,78 +2865,78 @@ function DetailDrawer({
 
                 <div className="grid grid-cols-2 bg-white/60 xl:grid-cols-4">
                   <div className="border-b border-r border-white px-4 py-3 xl:border-b-0">
-                    <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{tr('当前负责人', 'Pending With', "Menunggu Dengan")}</p>
-                    <p className="mt-1 truncate text-sm font-bold text-slate-800">{pendingOwner}</p>
-                    <p className="mt-0.5 text-[11px] font-semibold text-slate-500">{pendingWith}</p>
+                    <p className="text-micro uppercase text-slate-500">{tr('当前负责人', 'Pending With', "Menunggu Dengan")}</p>
+                    <p className="mt-1 truncate text-headline text-slate-800">{pendingOwner}</p>
+                    <p className="mt-0.5 text-caption text-slate-500">{pendingWith}</p>
                   </div>
                   <div className="border-b border-white px-4 py-3 xl:border-b-0 xl:border-r">
-                    <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Handler</p>
-                    <p className="mt-1 flex items-center gap-1.5 truncate text-sm font-bold text-slate-800"><UserRound className="h-3.5 w-3.5 shrink-0 text-slate-500" />{application.handler_name}</p>
-                    <p className="mt-0.5 text-[11px] font-semibold text-slate-500">{application.handler_role}</p>
+                    <p className="text-micro uppercase text-slate-500">Handler</p>
+                    <p className="mt-1 flex items-center gap-1.5 truncate text-headline text-slate-800"><UserRound className="h-3.5 w-3.5 shrink-0 text-slate-500" />{application.handler_name}</p>
+                    <p className="mt-0.5 text-caption text-slate-500">{application.handler_role}</p>
                   </div>
                   <div className="border-r border-white px-4 py-3">
-                    <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                    <p className="text-micro uppercase text-slate-500">
                       {isCashPurchase ? tr('购买方式', 'Purchase Method', "Kaedah Pembelian") : tr('当前银行', 'Current Bank', "Bank Semasa")}
                     </p>
                     {isCashPurchase ? (
                       <div className="mt-1">
-                        <p className="text-sm font-bold text-slate-800">{tr('现金', 'Cash', "Tunai")}</p>
-                        <p className="text-[11px] font-semibold text-emerald-600">{tr('无需银行', 'No bank required', "Bank tidak diperlukan")}</p>
+                        <p className="text-headline text-slate-800">{tr('现金', 'Cash', "Tunai")}</p>
+                        <p className="text-caption text-emerald-600">{tr('无需银行', 'No bank required', "Bank tidak diperlukan")}</p>
                       </div>
                     ) : activeBankApplication ? (
                       <div className="mt-1 flex min-w-0 items-center gap-2">
                         <BankIcon bankName={activeBankApplication.bank_name} bankDefinitions={bankDefinitions} status={activeBankApplication.status} size="sm" />
                         <div className="min-w-0">
-                          <p className="truncate text-sm font-bold text-slate-800">{activeBankApplication.bank_name}</p>
-                          <p className="text-[11px] font-semibold text-slate-500">{trBankStatus(activeBankApplication.status)}</p>
+                          <p className="truncate text-headline text-slate-800">{activeBankApplication.bank_name}</p>
+                          <p className="text-caption text-slate-500">{trBankStatus(activeBankApplication.status)}</p>
                         </div>
                       </div>
                     ) : (
-                      <p className="mt-1 text-sm font-semibold text-slate-500">{tr('尚未选择', 'Not selected', "Belum dipilih")}</p>
+                      <p className="mt-1 text-callout text-slate-500">{tr('尚未选择', 'Not selected', "Belum dipilih")}</p>
                     )}
                   </div>
                   <div className="px-4 py-3">
-                    <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{tr('截止时间', 'Due Date', "Tarikh Akhir")}</p>
-                    <p className={`mt-1 font-mono text-sm font-bold ${isCurrentActionOverdue ? 'text-rose-700' : 'text-slate-800'}`}>
+                    <p className="text-micro uppercase text-slate-500">{tr('截止时间', 'Due Date', "Tarikh Akhir")}</p>
+                    <p className={`mt-1 font-mono text-headline ${isCurrentActionOverdue ? 'text-rose-700' : 'text-slate-800'}`}>
                       {currentActionDueAt ? formatTimelineDate(currentActionDueAt) : tr('未安排', 'Not scheduled', "Belum dijadualkan")}
                     </p>
-                    <p className="mt-0.5 text-[11px] font-semibold text-slate-500">{application.pending_since ? `${tr('开始', 'Since', "Sejak")} ${formatTimelineDate(application.pending_since)}` : '--'}</p>
+                    <p className="mt-0.5 text-caption text-slate-500">{application.pending_since ? `${tr('开始', 'Since', "Sejak")} ${formatTimelineDate(application.pending_since)}` : '--'}</p>
                   </div>
                 </div>
 
                 <div className="border-t border-white bg-white/80 px-4 py-4">
                   {showApplicationNextStep ? (
-                    <div data-testid="application-next-step" className="rounded-xl border border-amber-200 bg-amber-50 p-3.5">
+                    <div data-testid="application-next-step" className="rounded-card border border-amber-200 bg-amber-50 p-3.5">
                       <div className="flex items-start gap-3">
-                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-500 text-white shadow-sm">
+                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-control bg-amber-500 text-white shadow-e1">
                           <ArrowUpRight className="h-4 w-4" />
                         </span>
                         <div className="min-w-0">
-                          <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-amber-700">{tr('下一步', 'Next step', "Langkah seterusnya")}</p>
-                          <p className="mt-0.5 text-sm font-bold text-slate-900">{applicationNextStep.label}</p>
-                          <p className="mt-1 text-xs font-semibold leading-relaxed text-slate-700">{applicationNextStep.instruction}</p>
+                          <p className="text-micro uppercase tracking-[0.16em] text-amber-700">{tr('下一步', 'Next step', "Langkah seterusnya")}</p>
+                          <p className="mt-0.5 text-headline text-slate-900">{applicationNextStep.label}</p>
+                          <p className="mt-1 text-footnote leading-relaxed text-slate-700">{applicationNextStep.instruction}</p>
                         </div>
                       </div>
                     </div>
                   ) : (
-                    <div className="rounded-xl border border-slate-100 bg-slate-50 px-3.5 py-3">
-                      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{tr('下一步说明', 'Next Action Detail', "Butiran Tindakan Seterusnya")}</p>
-                      <p className="mt-1 text-xs font-semibold leading-relaxed text-slate-700">{applicationNextStep.instruction}</p>
+                    <div className="rounded-card border border-slate-100 bg-slate-50 px-3.5 py-3">
+                      <p className="text-micro uppercase text-slate-500">{tr('下一步说明', 'Next Action Detail', "Butiran Tindakan Seterusnya")}</p>
+                      <p className="mt-1 text-footnote leading-relaxed text-slate-700">{applicationNextStep.instruction}</p>
                     </div>
                   )}
 
                   {currentMissingItemLabels.length > 0 ? (
-                    <div data-testid="application-missing-checklist" className="mt-3 rounded-xl border border-rose-100 bg-rose-50/40 px-3.5 py-3">
+                    <div data-testid="application-missing-checklist" className="mt-3 rounded-card border border-rose-100 bg-rose-50/40 px-3.5 py-3">
                       <div className="flex items-center justify-between gap-3">
                         <div>
-                          <h3 className="text-xs font-bold text-rose-800">
+                          <h3 className="text-headline text-rose-800">
                             {tr('缺失项目', 'Missing items', "Item yang hilang")}
                           </h3>
-                          <p className="mt-0.5 text-[10px] font-semibold text-rose-600">
+                          <p className="mt-0.5 text-caption text-rose-600">
                             {tr('点击项目可前往对应资料区', 'Select an item to open its section.', "Pilih item untuk membuka bahagiannya.")}
                           </p>
                         </div>
-                        <span className="inline-flex min-w-6 items-center justify-center rounded-md bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold text-rose-700">
+                        <span className="inline-flex min-w-6 items-center justify-center rounded-chip bg-rose-100 px-1.5 py-0.5 text-micro tracking-normal text-rose-700">
                           {currentMissingItemLabels.length}
                         </span>
                       </div>
@@ -2988,7 +2947,7 @@ function DetailDrawer({
                               type="button"
                               onClick={() => navigateToMissingItem(label)}
                               aria-label={tr(`前往缺失项目：${label}`, `Go to missing item: ${label}`, `Pergi ke item hilang: ${label}`)}
-                              className="group flex w-full min-w-0 items-start gap-2 rounded-md px-1 py-2 text-left text-[11px] font-bold leading-snug text-rose-700 transition-colors hover:bg-rose-100/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300"
+                              className="group flex w-full min-w-0 items-start gap-2 rounded-chip px-1 py-2 text-left text-caption font-semibold leading-snug text-rose-700 transition-colors hover:bg-rose-100/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300"
                             >
                               <Square className="mt-px h-3.5 w-3.5 shrink-0 text-rose-400" aria-hidden="true" />
                               <span className="min-w-0 flex-1 break-words">
@@ -3002,7 +2961,7 @@ function DetailDrawer({
                     </div>
                   ) : (
                     <div className="mt-3">
-                      <span className="rounded-md bg-emerald-50 px-2 py-1 text-[11px] font-bold text-emerald-700 ring-1 ring-emerald-100">
+                      <span className="rounded-chip bg-emerald-50 px-2 py-1 text-caption font-semibold text-emerald-700 ring-1 ring-emerald-100">
                         {pendingAction === 'Complete Application'
                           ? tr('申请资料齐全', 'Application complete', "Permohonan lengkap")
                           : tr('资料齐全', 'Documents complete', "Dokumen lengkap")}
@@ -3018,39 +2977,39 @@ function DetailDrawer({
                 <div data-testid="admin-submission-view" className="order-2 scroll-mt-6 space-y-5">
                   <div className="flex flex-col gap-1 border-b border-slate-100 pb-3 sm:flex-row sm:items-end sm:justify-between">
                     <div>
-                      <h3 className="text-sm font-bold text-slate-900">{tr('银行提交资料', 'Bank Submission Information', "Maklumat Penghantaran Bank")}</h3>
-                      <p className="mt-0.5 text-[11px] font-semibold text-slate-500">
+                      <h3 className="text-headline text-slate-900">{tr('银行提交资料', 'Bank Submission Information', "Maklumat Penghantaran Bank")}</h3>
+                      <p className="mt-0.5 text-caption text-slate-500">
                         {tr('仅显示填写银行表格所需的资料。', 'Only the fields needed to prepare the bank form are shown.', "Hanya medan untuk menyediakan borang bank ditunjukkan.")}
                       </p>
                     </div>
-                    <span className="text-[11px] font-semibold text-indigo-600">
+                    <span className="text-caption text-indigo-600">
                       {tr('单击复制 · 双击编辑', 'Click to copy · double-click to edit', "Klik untuk salin · klik dua kali untuk edit")}
                     </span>
                   </div>
 
                   <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                     <div className="flex flex-col">
-                      <span className="mb-1 text-[11px] font-bold uppercase tracking-widest text-slate-500">{tr('客户姓名', 'Customer Name', "Nama Pelanggan")}</span>
+                      <span className="mb-1 text-micro uppercase text-slate-500">{fieldLabel('customerName')}</span>
                       <DoubleClickEditField copyOnly={!canEditAllInformation} value={editedApplicationInfo.applicant_name} onCommit={(value) => updateApplicationInfo('applicant_name', value)} displayClassName={detailDisplayClass} inputClassName={detailInputClass} ariaLabel={canEditAllInformation ? 'Update bank form customer name' : 'Copy bank form customer name'} />
                     </div>
 
                     <div className="flex flex-col">
-                      <span className="mb-1 inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-widest text-slate-500">IC{renderRiskIcon('ic_no')}</span>
+                      <span className="mb-1 inline-flex items-center gap-1 text-micro uppercase text-slate-500">{fieldLabel('icNumber')}{renderRiskIcon('ic_no')}</span>
                       <DoubleClickEditField copyOnly={!canEditAllInformation} value={editedApplicationInfo.ic_no} onCommit={(value) => updateApplicationInfo('ic_no', value)} displayClassName={`${detailDisplayClass} font-mono`} inputClassName={`${detailInputClass} font-mono`} ariaLabel={canEditAllInformation ? 'Update bank form IC number' : 'Copy bank form IC number'} />
                     </div>
 
                     <div className="flex flex-col">
-                      <span className="mb-1 text-[11px] font-bold uppercase tracking-widest text-slate-500">DOB</span>
+                      <span className="mb-1 text-micro uppercase text-slate-500">{fieldLabel('dateOfBirth')}</span>
                       <DoubleClickEditField copyOnly value={detectedBirthDate} onCommit={() => undefined} displayClassName={`${detailDisplayClass} font-mono`} inputClassName={detailInputClass} emptyText={tr('无法从 IC 识别', 'Not detected from IC', "Tidak dikesan daripada IC")} ariaLabel="Copy bank form date of birth" />
                     </div>
 
                     <div className="flex flex-col">
-                      <span className="mb-1 inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-widest text-slate-500">Email{renderRiskIcon('email')}</span>
+                      <span className="mb-1 inline-flex items-center gap-1 text-micro uppercase text-slate-500">{fieldLabel('email')}{renderRiskIcon('email')}</span>
                       <DoubleClickEditField copyOnly={!canEditAllInformation} type="email" value={editedApplicationInfo.personal_info?.email || ''} onCommit={(value) => updatePersonalInfo('email', value)} displayClassName={detailDisplayClass} inputClassName={detailInputClass} emptyText={tr('未填写', 'Not filled', "Tidak diisi")} ariaLabel={canEditAllInformation ? 'Update bank form email' : 'Copy bank form email'} />
                     </div>
 
                     <div className="flex flex-col">
-                      <span className="mb-1 inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-widest text-slate-500">{tr('联系电话', 'Phone', "Telefon")}{renderRiskIcon('phone_no')}</span>
+                      <span className="mb-1 inline-flex items-center gap-1 text-micro uppercase text-slate-500">{fieldLabel('phoneNumber')}{renderRiskIcon('phone_no')}</span>
                       <DoubleClickEditField copyOnly={!canEditAllInformation} copyValue={formatMalaysiaPhoneForCopy(editedApplicationInfo.phone_no)} type="tel" value={editedApplicationInfo.phone_no} onCommit={(value) => updateApplicationInfo('phone_no', value)} displayClassName={`${detailDisplayClass} font-mono`} inputClassName={`${detailInputClass} font-mono`} ariaLabel={canEditAllInformation ? 'Update bank form phone number' : 'Copy bank form phone number'} />
                     </div>
 
@@ -3059,27 +3018,27 @@ function DetailDrawer({
                       { label: tr('每月净薪资', 'Net Monthly Salary', "Gaji Bulanan Bersih"), field: 'net_monthly_salary' as const, value: editedApplicationInfo.employment_details?.net_monthly_salary || '' }
                     ].map((item) => (
                       <div key={item.field} className="flex flex-col">
-                        <span className="mb-1 text-[11px] font-bold uppercase tracking-widest text-slate-500">{item.label}</span>
+                        <span className="mb-1 text-micro uppercase text-slate-500">{item.label}</span>
                         <DoubleClickEditField copyOnly={!canEditAllInformation} value={item.value} onCommit={(value) => updateEmploymentDetails(item.field, value)} normalizeValue={normalizeDecimalInput} placeholder="RM 0.00" displayClassName={detailDisplayClass} inputClassName={detailInputClass} emptyText={tr('未填写', 'Not filled', "Tidak diisi")} formatDisplay={(value) => value ? `RM ${value}` : tr('未填写', 'Not filled', "Tidak diisi")} ariaLabel={`${canEditAllInformation ? 'Update' : 'Copy'} bank form ${item.label}`} />
                       </div>
                     ))}
 
                     <div className="flex flex-col md:col-span-2">
-                      <span className="mb-1 text-[11px] font-bold uppercase tracking-widest text-slate-500">{tr('主要车辆选择', 'Primary Vehicle Choice', "Pilihan Kenderaan Utama")}</span>
+                      <span className="mb-1 text-micro uppercase text-slate-500">{tr('主要车辆选择', 'Primary Vehicle Choice', "Pilihan Kenderaan Utama")}</span>
                       <DoubleClickEditField copyOnly={!canEditAllInformation} value={primaryVehicleOption?.vehicle_model || ''} onCommit={(value) => updateVehicleOption(0, 'vehicle_model', value)} suggestions={vehicleModelSuggestions} commitOnSuggestionMatch displayClassName={detailDisplayClass} inputClassName={detailInputClass} emptyText={tr('未填写', 'Not filled', "Tidak diisi")} ariaLabel={canEditAllInformation ? 'Update bank form primary vehicle choice' : 'Copy bank form primary vehicle choice'} />
                     </div>
                   </div>
 
-                  <div className="rounded-xl border border-indigo-100 bg-indigo-50/40 p-4">
-                    <p className="mb-3 text-[11px] font-bold uppercase tracking-widest text-indigo-600">{tr('贷款单位资料', 'Loan Unit Details', "Butiran Unit Pinjaman")}</p>
+                  <div className="rounded-card border border-indigo-100 bg-indigo-50/40 p-4">
+                    <p className="mb-3 text-micro uppercase text-indigo-600">{tr('贷款单位资料', 'Loan Unit Details', "Butiran Unit Pinjaman")}</p>
                     <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                       {[
-                        { label: tr('摩托售价', 'Motor Selling Price', "Harga Jualan Motor"), field: 'motor_selling_price' as const, value: primaryVehicleOption?.motor_selling_price || '' },
-                        { label: tr('头期', 'Deposit', "Deposit"), field: 'deposit' as const, value: primaryVehicleOption?.deposit || '' },
+                        { label: fieldLabel('sellingPrice'), field: 'motor_selling_price' as const, value: primaryVehicleOption?.motor_selling_price || '' },
+                        { label: fieldLabel('deposit'), field: 'deposit' as const, value: primaryVehicleOption?.deposit || '' },
                         { label: tr('现金总价', 'Total Cash Price', "Jumlah Harga Tunai"), field: 'total_cash_price' as const, value: primaryVehicleOption?.total_cash_price || '' }
                       ].map((item) => (
                         <div key={item.field} className="flex flex-col">
-                          <span className="mb-1 text-[11px] font-bold uppercase tracking-widest text-slate-500">{item.label}</span>
+                          <span className="mb-1 text-micro uppercase text-slate-500">{item.label}</span>
                           <DoubleClickEditField copyOnly={!canEditAllInformation} value={item.value} onCommit={(value) => updateVehicleOption(0, item.field, value)} normalizeValue={normalizeDecimalInput} placeholder="RM 0.00" displayClassName={detailDisplayClass} inputClassName={detailInputClass} emptyText={tr('未填写', 'Not filled', "Tidak diisi")} formatDisplay={(value) => value ? `RM ${value}` : tr('未填写', 'Not filled', "Tidak diisi")} ariaLabel={`${canEditAllInformation ? 'Update' : 'Copy'} bank form ${item.label}`} />
                         </div>
                       ))}
@@ -3088,7 +3047,7 @@ function DetailDrawer({
 
                   <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                     <div className="flex flex-col">
-                      <span className="mb-1 text-[11px] font-bold uppercase tracking-widest text-slate-500">{tr('年期', 'Tenure', "Tempoh")}</span>
+                      <span className="mb-1 text-micro uppercase text-slate-500">{fieldLabel('loanTenureYears')}</span>
                       <DoubleClickEditField copyOnly={!canEditAllInformation} mode="select" value={editedApplicationInfo.preferences?.loan_tenure || ''} options={[{ value: '', label: tr('未设置', 'Not set', "Belum ditetapkan") }, ...LOAN_TENURE_OPTIONS.map((year) => ({ value: year, label: `${year} years` }))]} onCommit={(value) => updatePreferences('loan_tenure', value)} displayClassName={detailDisplayClass} inputClassName={detailInputClass} emptyText={tr('未填写', 'Not filled', "Tidak diisi")} ariaLabel={canEditAllInformation ? 'Update bank form tenure' : 'Copy bank form tenure'} />
                     </div>
 
@@ -3099,57 +3058,40 @@ function DetailDrawer({
                       { label: tr('婚姻状况', 'Marital Status', "Status Perkahwinan"), field: 'marital_status' as const, value: editedApplicationInfo.personal_info?.marital_status || '', options: MARITAL_STATUS_OPTIONS }
                     ].map((item) => (
                       <div key={item.field} className="flex flex-col">
-                        <span className="mb-1 text-[11px] font-bold uppercase tracking-widest text-slate-500">{item.label}</span>
+                        <span className="mb-1 text-micro uppercase text-slate-500">{item.label}</span>
                         <DoubleClickEditField copyOnly={!canEditAllInformation} mode="select" value={item.value} options={item.options.map((option) => ({ value: option, label: option || tr('未设置', 'Not set', "Belum ditetapkan") }))} onCommit={(value) => updatePersonalInfo(item.field, value)} displayClassName={detailDisplayClass} inputClassName={detailInputClass} emptyText={tr('未填写', 'Not filled', "Tidak diisi")} ariaLabel={`${canEditAllInformation ? 'Update' : 'Copy'} bank form ${item.label}`} />
                       </div>
                     ))}
-                  </div>
-                </div>
-              )}
-              {!adminSubmissionView && isLoanPurchase && (
-                <div
-                  id="detail-basic-loan-unit"
-                  data-testid="detail-basic-loan-unit"
-                  className="order-2 scroll-mt-6 rounded-xl border border-indigo-100 bg-indigo-50/40 p-4"
-                >
-                  <p className="mb-3 text-[11px] font-bold uppercase tracking-widest text-indigo-600">
-                    {tr('贷款单位资料', 'Loan Unit Details', "Butiran Unit Pinjaman")}
-                  </p>
-                  <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-                    {[
-                      { label: tr('摩托售价', 'Motor Selling Price', "Harga Jualan Motor"), field: 'motor_selling_price' as const, value: primaryVehicleOption?.motor_selling_price || '' },
-                      { label: tr('头期', 'Deposit', "Deposit"), field: 'deposit' as const, value: primaryVehicleOption?.deposit || '' },
-                      { label: tr('现金总价', 'Total Cash Price', "Jumlah Harga Tunai"), field: 'total_cash_price' as const, value: primaryVehicleOption?.total_cash_price || '' }
-                    ].map((item) => (
-                      <div key={item.field} className="flex flex-col">
-                        <span className="mb-1 text-[11px] font-bold uppercase tracking-widest text-slate-500">{item.label}</span>
-                        <DoubleClickEditField copyOnly={!canEditAllInformation} value={item.value} onCommit={(value) => updateVehicleOption(0, item.field, value)} normalizeValue={normalizeDecimalInput} placeholder="RM 0.00" displayClassName={detailDisplayClass} inputClassName={detailInputClass} emptyText={tr('未填写', 'Not filled', "Tidak diisi")} formatDisplay={(value) => value ? `RM ${value}` : tr('未填写', 'Not filled', "Tidak diisi")} ariaLabel={`${canEditAllInformation ? 'Update' : 'Copy'} ${item.label}`} />
+                    {hasChildrenQuestion(editedApplicationInfo.personal_info?.marital_status) && (
+                      <div className="flex flex-col" data-testid="application-number-of-children">
+                        <span className="mb-1 text-micro uppercase text-slate-500">{tr('孩子数量', 'Number of Children', "Bilangan Anak")}</span>
+                        <DoubleClickEditField copyOnly={!canEditAllInformation} value={getEffectiveNumberOfChildren(editedApplicationInfo.personal_info)} onCommit={(value) => updatePersonalInfo('number_of_children', value)} normalizeValue={(value) => value.replace(/\D/g, '').slice(0, 2)} displayClassName={detailDisplayClass} inputClassName={detailInputClass} emptyText={tr('未填写', 'Not filled', "Tidak diisi")} ariaLabel={canEditAllInformation ? 'Update bank form number of children' : 'Copy bank form number of children'} />
                       </div>
-                    ))}
+                    )}
                   </div>
                 </div>
               )}
               {/* Customer Profile Segment */}
               <div id="detail-basic-customer-info" data-testid="detail-basic-customer-info" className={`${adminSubmissionView ? 'hidden' : ''} ${isLoanPurchase ? 'order-3' : 'order-2'} scroll-mt-6 space-y-4`}>
                 <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-                  <h3 className="text-sm font-bold text-slate-900">{tr('客户基本与个人资料', 'Basic Customer & Personal Information', "Maklumat Asas Pelanggan & Peribadi")}</h3>
-                  <span className="text-[11px] font-semibold text-slate-500">{tr('与客户申请表使用相同资料', 'Aligned with the customer application form', 'Diselaraskan dengan borang permohonan pelanggan')}</span>
+                  <h3 className="text-headline text-slate-900">{tr('客户基本与个人资料', 'Basic Customer & Personal Information', "Maklumat Asas Pelanggan & Peribadi")}</h3>
+                  <span className="text-caption text-slate-500">{tr('与客户申请表使用相同资料', 'Aligned with the customer application form', 'Diselaraskan dengan borang permohonan pelanggan')}</span>
                 </div>
 
                 <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                   <div className="flex flex-col">
-                    <span className="text-[11px] text-slate-500 uppercase font-bold tracking-widest mb-1">{tr('ID 标识', 'ID', "ID")}</span>
+                    <span className="text-micro uppercase text-slate-500st mb-1">{tr('ID 标识', 'ID', "ID")}</span>
                     <DoubleClickEditField
                       copyOnly
                       value={application.id}
                       onCommit={() => undefined}
-                      displayClassName="text-left text-sm font-mono font-semibold text-slate-800"
+                      displayClassName="text-left text-body font-mono font-semibold text-slate-800"
                       inputClassName={`${detailInputClass} font-mono`}
                       ariaLabel="Copy application ID"
                     />
                   </div>
                   {canEditAllInformation && (
-                    <span className="inline-flex self-start rounded-full border border-indigo-100 bg-indigo-50 px-3 py-1 text-[11px] font-bold uppercase tracking-wide text-indigo-600">
+                    <span className="inline-flex self-start rounded-full border border-indigo-100 bg-indigo-50 px-3 py-1 text-micro uppercase text-indigo-600">
                       {currentStaffRole === 'Super Admin'
                         ? tr('Super Admin 可编辑', 'Super Admin editable', "Super Admin boleh mengedit")
                         : tr('Handler 可编辑', 'Handler editable', "Pengendali boleh mengedit")}
@@ -3159,44 +3101,44 @@ function DetailDrawer({
 
                 <div className="grid grid-cols-1 gap-4 border-t border-slate-100 pt-4 md:grid-cols-2">
                   <div className="flex flex-col">
-                    <span className="mb-1 text-[11px] font-bold uppercase tracking-widest text-slate-500">{tr('客户姓名', 'Customer Name', "Nama Pelanggan")}</span>
+                    <span className="mb-1 text-micro uppercase text-slate-500">{fieldLabel('customerName')}</span>
                     <DoubleClickEditField copyOnly={!canEditAllInformation} value={editedApplicationInfo.applicant_name} onCommit={(value) => updateApplicationInfo('applicant_name', value)} displayClassName={detailDisplayClass} inputClassName={detailInputClass} ariaLabel={canEditAllInformation ? 'Update customer name' : 'Copy customer name'} />
                   </div>
 
                   <div className="flex flex-col">
-                    <span className="mb-1 inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-widest text-slate-500">{tr('身份证号', 'IC Number', "Nombor IC")}{renderRiskIcon('ic_no')}</span>
+                    <span className="mb-1 inline-flex items-center gap-1 text-micro uppercase text-slate-500">{fieldLabel('icNumber')}{renderRiskIcon('ic_no')}</span>
                     <DoubleClickEditField copyOnly={!canEditAllInformation} value={editedApplicationInfo.ic_no} onCommit={(value) => updateApplicationInfo('ic_no', value)} displayClassName={`${detailDisplayClass} font-mono`} inputClassName={`${detailInputClass} font-mono`} ariaLabel={canEditAllInformation ? 'Update IC number' : 'Copy IC number'} />
                   </div>
 
                   <div className="flex flex-col">
-                    <span className="mb-1 text-[11px] font-bold uppercase tracking-widest text-slate-500">{tr('出生日期（IC 自动识别）', 'Date of Birth (auto-detected from IC)', "Tarikh Lahir (dikesan secara automatik daripada IC)")}</span>
+                    <span className="mb-1 text-micro uppercase text-slate-500">{fieldLabelWith('dateOfBirth', FROM_IC)}</span>
                     <DoubleClickEditField copyOnly value={detectedBirthDate} onCommit={() => undefined} displayClassName={`${detailDisplayClass} font-mono`} inputClassName={detailInputClass} emptyText={tr('无法从 IC 识别', 'Not detected from IC', "Tidak dikesan daripada IC")} ariaLabel="Date of birth" />
                   </div>
 
                   <div className="flex flex-col">
-                    <span className="mb-1 inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-widest text-slate-500">Email{renderRiskIcon('email')}</span>
+                    <span className="mb-1 inline-flex items-center gap-1 text-micro uppercase text-slate-500">{fieldLabel('email')}{renderRiskIcon('email')}</span>
                     <DoubleClickEditField copyOnly={!canEditAllInformation} type="email" value={editedApplicationInfo.personal_info?.email || ''} onCommit={(value) => updatePersonalInfo('email', value)} displayClassName={detailDisplayClass} inputClassName={detailInputClass} emptyText={tr('未填写', 'Not filled', "Tidak diisi")} ariaLabel={canEditAllInformation ? 'Update email' : 'Copy email'} />
                   </div>
 
                   <div className="flex flex-col md:col-span-2" data-testid="application-phone-row">
-                    <span className="mb-1 inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-widest text-slate-500">{tr('联系电话', 'Phone', "Telefon")}{renderRiskIcon('phone_no')}</span>
+                    <span className="mb-1 inline-flex items-center gap-1 text-micro uppercase text-slate-500">{fieldLabel('phoneNumber')}{renderRiskIcon('phone_no')}</span>
                     <DoubleClickEditField copyOnly={!canEditAllInformation} copyValue={formatMalaysiaPhoneForCopy(editedApplicationInfo.phone_no)} type="tel" value={editedApplicationInfo.phone_no} onCommit={(value) => updateApplicationInfo('phone_no', value)} displayClassName={`${detailDisplayClass} font-mono`} inputClassName={`${detailInputClass} font-mono`} ariaLabel={canEditAllInformation ? 'Update phone number' : 'Copy phone number'} />
                   </div>
 
                   <div className="flex flex-col">
-                    <span className="mb-1 text-[11px] font-bold uppercase tracking-widest text-slate-500">{tr('主要车辆选择', 'Primary Vehicle Choice', "Pilihan Kenderaan Utama")}</span>
+                    <span className="mb-1 text-micro uppercase text-slate-500">{tr('主要车辆选择', 'Primary Vehicle Choice', "Pilihan Kenderaan Utama")}</span>
                     <DoubleClickEditField copyOnly={!canEditAllInformation} value={primaryVehicleOption?.vehicle_model || ''} onCommit={(value) => updateVehicleOption(0, 'vehicle_model', value)} suggestions={vehicleModelSuggestions} commitOnSuggestionMatch displayClassName={detailDisplayClass} inputClassName={detailInputClass} emptyText={tr('未填写', 'Not filled', "Tidak diisi")} ariaLabel={canEditAllInformation ? 'Update primary vehicle choice' : 'Copy primary vehicle choice'} />
                   </div>
 
                   <div className="flex flex-col">
-                    <span className="mb-1 text-[11px] font-bold uppercase tracking-widest text-slate-500">{tr('购买方式', 'Purchase Method', "Kaedah Pembelian")}</span>
+                    <span className="mb-1 text-micro uppercase text-slate-500">{tr('购买方式', 'Purchase Method', "Kaedah Pembelian")}</span>
                     <DoubleClickEditField copyOnly={!canEditAllInformation} mode="select" value={primaryVehicleOption?.purchase_method || ''} options={[{ value: '', label: 'Not set' }, ...PURCHASE_METHOD_OPTIONS.filter(Boolean).map((option) => ({ value: option, label: option }))]} onCommit={(value) => updateVehicleOption(0, 'purchase_method', value as PurchaseMethod)} displayClassName={detailDisplayClass} inputClassName={detailInputClass} emptyText={tr('未填写', 'Not filled', "Tidak diisi")} ariaLabel={canEditAllInformation ? 'Update primary vehicle purchase method' : 'Copy primary vehicle purchase method'} />
                   </div>
                 </div>
 
                 {primaryVehicleOption?.purchase_method === 'Cash' && (
-                  <div className="rounded-xl border border-emerald-100 bg-emerald-50/40 p-4">
-                    <p className="mb-3 text-[11px] font-bold uppercase tracking-widest text-emerald-700">
+                  <div className="rounded-card border border-emerald-100 bg-emerald-50/40 p-4">
+                    <p className="mb-3 text-micro uppercase text-emerald-700">
                       {tr('现金购买资料', 'Cash Purchase Details', "Butiran Pembelian Tunai")}
                     </p>
                     <div className="grid grid-cols-1 gap-4 md:grid-cols-1">
@@ -3204,7 +3146,7 @@ function DetailDrawer({
                         { label: tr('现金总价', 'Total Cash Price', "Jumlah Harga Tunai"), field: 'total_cash_price' as const, value: primaryVehicleOption.total_cash_price || '', prefix: 'RM' }
                       ].map((item) => (
                         <div key={item.field} className="flex flex-col">
-                          <span className="mb-1 text-[11px] font-bold uppercase tracking-widest text-slate-500">{item.label}</span>
+                          <span className="mb-1 text-micro uppercase text-slate-500">{item.label}</span>
                           <DoubleClickEditField copyOnly={!canEditAllInformation} value={item.value} onCommit={(value) => updateVehicleOption(0, item.field, value)} normalizeValue={normalizeDecimalInput} placeholder={item.prefix === 'RM' ? 'RM 0.00' : '0.00%'} displayClassName={detailDisplayClass} inputClassName={detailInputClass} emptyText={tr('未填写', 'Not filled', "Tidak diisi")} formatDisplay={(value) => value ? `${item.prefix} ${value}` : tr('未填写', 'Not filled', "Tidak diisi")} ariaLabel={`${canEditAllInformation ? 'Update' : 'Copy'} ${item.label}`} />
                         </div>
                       ))}
@@ -3212,7 +3154,7 @@ function DetailDrawer({
                   </div>
                 )}
 
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                   {isLoanPurchase && (
                     <>
                     {[
@@ -3222,25 +3164,76 @@ function DetailDrawer({
                       { label: tr('婚姻状况', 'Marital Status', "Status Perkahwinan"), field: 'marital_status' as const, value: editedApplicationInfo.personal_info?.marital_status || '', options: MARITAL_STATUS_OPTIONS }
                     ].map((item) => (
                       <div key={item.field} className="flex flex-col">
-                        <span className="mb-1 text-[11px] font-bold uppercase tracking-widest text-slate-500">{item.label}</span>
+                        <span className="mb-1 text-micro uppercase text-slate-500">{item.label}</span>
                         <DoubleClickEditField copyOnly={!canEditAllInformation} mode="select" value={item.value} options={item.options.map((option) => ({ value: option, label: option || 'Not set' }))} onCommit={(value) => updatePersonalInfo(item.field, value)} displayClassName={detailDisplayClass} inputClassName={detailInputClass} emptyText={tr('未填写', 'Not filled', "Tidak diisi")} ariaLabel={`${canEditAllInformation ? 'Update' : 'Copy'} ${item.label}`} />
                       </div>
                     ))}
-                    <div className="flex flex-col">
-                      <span className="mb-1 text-[11px] font-bold uppercase tracking-widest text-slate-500">{tr('居住年数', 'Years at Residence', "Tempoh Menetap")}</span>
-                      <DoubleClickEditField copyOnly={!canEditAllInformation} value={editedApplicationInfo.personal_info?.years_at_residence || ''} onCommit={(value) => updatePersonalInfo('years_at_residence', value)} normalizeValue={(value) => value.replace(/\D/g, '')} displayClassName={detailDisplayClass} inputClassName={detailInputClass} emptyText={tr('未填写', 'Not filled', "Tidak diisi")} ariaLabel={canEditAllInformation ? 'Update years at residence' : 'Copy years at residence'} />
-                    </div>
+                    {hasChildrenQuestion(editedApplicationInfo.personal_info?.marital_status) && (
+                      <div className="flex flex-col" data-testid="application-number-of-children">
+                        <span className="mb-1 text-micro uppercase text-slate-500">{tr('孩子数量', 'Number of Children', "Bilangan Anak")}</span>
+                        <DoubleClickEditField copyOnly={!canEditAllInformation} value={getEffectiveNumberOfChildren(editedApplicationInfo.personal_info)} onCommit={(value) => updatePersonalInfo('number_of_children', value)} normalizeValue={(value) => value.replace(/\D/g, '').slice(0, 2)} displayClassName={detailDisplayClass} inputClassName={detailInputClass} emptyText={tr('未填写', 'Not filled', "Tidak diisi")} ariaLabel={canEditAllInformation ? 'Update number of children' : 'Copy number of children'} />
+                      </div>
+                    )}
+                    {(() => {
+                      const residenceStartYear = editedApplicationInfo.personal_info?.residence_start_year || '';
+                      const residenceStartMonth = editedApplicationInfo.personal_info?.residence_start_month || '';
+                      const residenceDuration = getEmploymentDuration(residenceStartYear, residenceStartMonth);
+                      const yearsAtResidence = editedApplicationInfo.personal_info?.years_at_residence || '';
+                      return (
+                        <div className="flex flex-col" data-testid="residence-start">
+                          <span className="mb-1 text-micro uppercase text-slate-500">{tr('在现址住了多久（年 / 月）', 'Lived Here (Years / Months)', "Tempoh Menetap (Tahun / Bulan)")}</span>
+                          <div className="grid grid-cols-2 gap-2">
+                            <DoubleClickEditField
+                              copyOnly={!canEditAllInformation}
+                              value={residenceDuration ? String(residenceDuration.years) : ''}
+                              onCommit={(value) => updateResidenceDuration('years', value)}
+                              normalizeValue={(value) => value.replace(/\D/g, '').slice(0, 2)}
+                              displayClassName={detailDisplayClass}
+                              inputClassName={detailInputClass}
+                              emptyText={tr('年数', 'Years', "Tahun")}
+                              formatDisplay={(value) => value ? tr(`${value} 年`, `${value} yrs`, `${value} thn`) : tr('年数', 'Years', "Tahun")}
+                              ariaLabel={`${canEditAllInformation ? 'Update' : 'Copy'} Years at Residence`}
+                            />
+                            <DoubleClickEditField
+                              copyOnly={!canEditAllInformation}
+                              value={residenceDuration ? String(residenceDuration.months) : ''}
+                              onCommit={(value) => updateResidenceDuration('months', value)}
+                              normalizeValue={(value) => {
+                                const digits = value.replace(/\D/g, '').slice(0, 2);
+                                return digits === '' ? '' : String(Math.min(Number(digits), 11));
+                              }}
+                              displayClassName={detailDisplayClass}
+                              inputClassName={detailInputClass}
+                              emptyText={tr('月数', 'Months', "Bulan")}
+                              formatDisplay={(value) => value ? tr(`${value} 个月`, `${value} mths`, `${value} bln`) : tr('月数', 'Months', "Bulan")}
+                              ariaLabel={`${canEditAllInformation ? 'Update' : 'Copy'} Months at Residence`}
+                            />
+                          </div>
+                          <span className="mt-1 text-caption text-slate-500" data-testid="residence-duration">
+                            {residenceDuration
+                              ? tr(
+                                `约 ${residenceStartYear} 年 ${residenceStartMonth} 月搬入`,
+                                `Moved in around ${residenceStartMonth}/${residenceStartYear}`,
+                                `Mula menetap sekitar ${residenceStartMonth}/${residenceStartYear}`
+                              )
+                              : yearsAtResidence
+                                ? tr(`居住年数：${yearsAtResidence} 年`, `Years at Residence: ${yearsAtResidence}`, `Tempoh Menetap: ${yearsAtResidence} tahun`)
+                                : tr('填住了几年几个月', 'Enter years and months lived here', "Isi berapa tahun dan bulan menetap")}
+                          </span>
+                        </div>
+                      );
+                    })()}
                     </>
                   )}
-                    <div className="flex flex-col md:col-span-3" data-testid="application-permanent-address">
+                    <div className="flex flex-col md:col-span-2" data-testid="application-permanent-address">
                       <div className="mb-1 flex items-center justify-between gap-2">
-                        <span className="text-[11px] font-bold uppercase tracking-widest text-slate-500">{tr('永久地址（IC）', 'Permanent Address (IC)', "Alamat Tetap (IC)")}</span>
+                        <span className="text-micro uppercase text-slate-500">{tr('永久地址（IC）', 'Permanent Address (IC)', "Alamat Tetap (IC)")}</span>
                         {editedApplicationInfo.personal_info?.full_address && (
                           <a
                             href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(editedApplicationInfo.personal_info.full_address)}`}
                             target="_blank"
                             rel="noreferrer"
-                            className="text-[11px] font-bold text-indigo-600 hover:text-indigo-700"
+                            className="text-caption font-semibold text-indigo-600 hover:text-indigo-700"
                           >
                             Search Google Maps
                           </a>
@@ -3258,15 +3251,15 @@ function DetailDrawer({
                         ariaLabel={canEditAllInformation ? 'Update permanent address (IC)' : 'Copy permanent address (IC)'}
                       />
                     </div>
-                    <div className="flex flex-col md:col-span-3" data-testid="application-resident-address">
+                    <div className="flex flex-col md:col-span-2" data-testid="application-resident-address">
                       <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
-                        <span className="text-[11px] font-bold uppercase tracking-widest text-slate-500">{tr('居住地址', 'Resident Address', "Alamat Kediaman")}</span>
+                        <span className="text-micro uppercase text-slate-500">{tr('居住地址', 'Resident Address', "Alamat Kediaman")}</span>
                         <div className="flex flex-wrap items-center gap-2">
                           {canEditAllInformation && (
                             <button
                               type="button"
                               onClick={() => updatePersonalInfo('resident_address', editedApplicationInfo.personal_info?.full_address || '')}
-                              className="rounded-md bg-slate-100 px-2 py-1 text-[10px] font-bold text-slate-600 transition-colors hover:bg-slate-200 hover:text-slate-900"
+                              className="rounded-chip bg-slate-100 px-2 py-1 text-micro tracking-normal text-slate-600 transition-colors hover:bg-slate-200 hover:text-slate-900"
                             >
                               {tr('与永久地址（IC）相同', 'Same as Permanent Address (IC)', 'Sama seperti Alamat Tetap (IC)')}
                             </button>
@@ -3276,7 +3269,7 @@ function DetailDrawer({
                               href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(editedApplicationInfo.personal_info.resident_address)}`}
                               target="_blank"
                               rel="noreferrer"
-                              className="text-[11px] font-bold text-indigo-600 hover:text-indigo-700"
+                              className="text-caption font-semibold text-indigo-600 hover:text-indigo-700"
                             >
                               Search Google Maps
                             </a>
@@ -3297,32 +3290,32 @@ function DetailDrawer({
                     </div>
                 </div>
 
-                <div className="grid grid-cols-1 gap-4 border-t border-slate-100 pt-4 md:grid-cols-3">
+                <div className="grid grid-cols-1 gap-4 border-t border-slate-100 pt-4 md:grid-cols-2">
                   {currentStaffRole === 'Super Admin' && (
                     <>
                       <div className="flex flex-col" data-testid="application-handling-staff">
-                        <span className="mb-1 text-[11px] font-bold uppercase tracking-widest text-slate-500">{tr('处理 Staff', 'Handling Staff', "Kakitangan Pengendalian")}</span>
+                        <span className="mb-1 text-micro uppercase text-slate-500">{tr('处理 Staff', 'Handling Staff', "Kakitangan Pengendalian")}</span>
                         <DoubleClickEditField mode="select" value={editedApplicationInfo.handler_name} onCommit={updateHandlerName} options={[...activeRoleAccounts.map((account) => ({ value: account.name, label: account.name })), ...(!activeRoleAccounts.some((account) => account.name === editedApplicationInfo.handler_name) && editedApplicationInfo.handler_name ? [{ value: editedApplicationInfo.handler_name, label: editedApplicationInfo.handler_name }] : [])]} displayClassName={detailDisplayClass} inputClassName={detailInputClass} ariaLabel="Update handling staff" />
                       </div>
                       <div className="flex flex-col" data-testid="application-handling-role">
-                        <span className="mb-1 text-[11px] font-bold uppercase tracking-widest text-slate-500">Role</span>
+                        <span className="mb-1 text-micro uppercase text-slate-500">Role</span>
                         <DoubleClickEditField copyOnly value={editedApplicationInfo.handler_role || ''} onCommit={() => undefined} displayClassName={detailDisplayClass} inputClassName={detailInputClass} emptyText="Role follows staff" ariaLabel="Copy handler role" />
                       </div>
                     </>
                   )}
                   <div className="flex flex-col">
-                    <span className="mb-1 text-[11px] font-bold uppercase tracking-widest text-slate-500">{tr('车牌号', 'Vehicle Plate', "Plat Kenderaan")}</span>
+                    <span className="mb-1 text-micro uppercase text-slate-500">{fieldLabel('plateNumber')}</span>
                     <DoubleClickEditField copyOnly={!canEditAllInformation} value={editedApplicationInfo.vehicle_plate} onCommit={(value) => updateApplicationInfo('vehicle_plate', value.toUpperCase())} normalizeValue={(value) => value.trim().toUpperCase()} displayClassName={`${detailDisplayClass} font-mono`} inputClassName={`${detailInputClass} font-mono`} emptyText={tr('未填写', 'Not filled', "Tidak diisi")} ariaLabel={canEditAllInformation ? 'Update vehicle plate' : 'Copy vehicle plate'} />
                   </div>
                 </div>
 
                 <div className="flex items-center justify-between border-b border-slate-100 pb-2 pt-2">
-                  <h3 className="text-sm font-bold text-slate-900">{tr('车辆与购买方式', 'Vehicle & Purchase', "Kenderaan & Belian")}</h3>
+                  <h3 className="text-headline text-slate-900">{tr('车辆与购买方式', 'Vehicle & Purchase', "Kenderaan & Belian")}</h3>
                   {canEditAllInformation && (
                     <button
                       type="button"
                       onClick={addVehicleOption}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-100 bg-indigo-50 px-3 py-2 text-[11px] font-bold text-indigo-600 transition-colors hover:bg-indigo-100"
+                      className="inline-flex items-center gap-1.5 rounded-control border border-indigo-100 bg-indigo-50 px-3 py-2 text-caption font-semibold text-indigo-600 transition-colors hover:bg-indigo-100"
                     >
                       <Plus className="h-3.5 w-3.5" />
                       {tr('新增车辆选择', 'Add Vehicle Choice', "Tambah Pilihan Kenderaan")}
@@ -3331,40 +3324,40 @@ function DetailDrawer({
                 </div>
 
                 {isPrimaryModelMissingFromCatalog && (
-                  <div className="rounded-lg border border-amber-100 bg-amber-50/70 p-3">
+                  <div className="rounded-control border border-amber-100 bg-amber-50/70 p-3">
                     <div className="flex items-start gap-2">
                       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
                       <div className="min-w-0 flex-1">
-                        <p className="text-xs font-bold text-amber-800">
+                        <p className="text-footnote font-semibold text-amber-800">
                           {tr('此车型不在 Vehicle Info 里', 'This model is not in Vehicle Info', "Model ini tiada dalam Vehicle Info")}
                         </p>
-                        <p className="mt-0.5 text-[11px] font-semibold text-amber-700/80">
+                        <p className="mt-0.5 text-caption text-amber-700/80">
                           「{editedApplicationInfo.vehicle_model.trim()}」
                           {tr('尚未加入车型库,加入后才能套用价格与月供方案。', ' is not in the catalog yet — add it to enable pricing and installment plans.', " belum ada dalam katalog — tambah untuk membolehkan harga dan pelan ansuran.")}
                         </p>
                         {canAddVehicleCatalogItem ? (
                           <div className="mt-2 flex flex-wrap items-center gap-2">
-                            <span className="text-[11px] font-bold uppercase tracking-wider text-amber-700">{tr('品牌', 'Brand', "Jenama")}</span>
+                            <span className="text-micro uppercase text-amber-700">{tr('品牌', 'Brand', "Jenama")}</span>
                             <div className="min-w-[140px]">
                               <ToggleOptionGroup
                                 value={newVehicleBrand}
                                 options={(vehicleBrandTags.length > 0 ? vehicleBrandTags : ['Yamaha']).map((brand) => ({ value: brand, label: brand }))}
                                 onChange={(value) => setNewVehicleBrand(value)}
                                 ariaLabel="New vehicle catalog brand"
-                                className="rounded-lg bg-white p-1 ring-1 ring-amber-100"
+                                className="rounded-control bg-white p-1 ring-1 ring-amber-100"
                               />
                             </div>
                             <button
                               type="button"
                               onClick={handleAddVehicleCatalog}
-                              className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-[11px] font-bold text-white transition-colors hover:bg-slate-700"
+                              className="inline-flex items-center gap-1.5 rounded-control bg-slate-900 px-3 py-2 text-caption font-semibold text-white transition-colors hover:bg-slate-700"
                             >
                               <Plus className="h-3.5 w-3.5" />
                               {tr('加入 Vehicle Info', 'Add to Vehicle Info', "Tambah ke Vehicle Info")}
                             </button>
                           </div>
                         ) : (
-                          <p className="mt-1 text-[11px] font-semibold text-amber-700/70">
+                          <p className="mt-1 text-caption text-amber-700/70">
                             {tr('请让 Super Admin 在 Vehicle Info 里加入此车型。', 'Ask a Super Admin to add this model in Vehicle Info.', "Minta Super Admin menambah model ini dalam Vehicle Info.")}
                           </p>
                         )}
@@ -3375,13 +3368,13 @@ function DetailDrawer({
 
                 <div className="space-y-3">
                   {normalizedVehicleOptions.map((vehicleOption, index) => (
-                    <div key={vehicleOption.id} className="rounded-lg border border-slate-100 bg-slate-50/50 p-3">
+                    <div key={vehicleOption.id} className="rounded-control border border-slate-100 bg-slate-50/50 p-3">
                       <div className="mb-3 flex items-center justify-between gap-3">
                         <div>
-                          <p className="text-xs font-bold text-slate-800">
+                          <p className="text-footnote font-semibold text-slate-800">
                             {index === 0 ? tr('主要车辆选择', 'Primary Vehicle Choice', "Pilihan Kenderaan Utama") : tr(`车辆选择 ${index + 1}`, `Vehicle Choice ${index + 1}`, `Pilihan Kenderaan ${index + 1}`)}
                           </p>
-                          <p className="mt-0.5 text-[11px] font-semibold text-slate-500">
+                          <p className="mt-0.5 text-caption text-slate-500">
                             {index === 0 ? tr('作为系统里的主要车型', 'Used as main model in dashboard', "Digunakan sebagai model utama dalam papan pemuka") : tr('客户无法继续时的备用选择', 'Backup choice if customer cannot proceed', "Pilihan sandaran jika pelanggan tidak dapat meneruskan")}
                           </p>
                         </div>
@@ -3389,7 +3382,7 @@ function DetailDrawer({
                           <button
                             type="button"
                             onClick={() => deleteVehicleOption(index)}
-                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-white text-slate-500 ring-1 ring-slate-100 transition-colors hover:text-rose-600"
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-control bg-white text-slate-500 ring-1 ring-slate-100 transition-colors hover:text-rose-600"
                             aria-label={`Delete vehicle choice ${index + 1}`}
                           >
                             <Trash2 className="h-3.5 w-3.5" />
@@ -3399,7 +3392,7 @@ function DetailDrawer({
 
                       <div className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_150px_150px_150px]">
                         <div className="flex flex-col">
-                          <span className="mb-1 text-[11px] font-bold uppercase tracking-widest text-slate-500">{tr('申请车型', 'Vehicle Model', "Model Kenderaan")}</span>
+                          <span className="mb-1 text-micro uppercase text-slate-500">{fieldLabel('vehicleModel')}</span>
                           <DoubleClickEditField
                             copyOnly={!canEditAllInformation}
                             type="text"
@@ -3415,22 +3408,22 @@ function DetailDrawer({
                         </div>
 
                         <div className="flex flex-col">
-                          <span className="mb-1 text-[11px] font-bold uppercase tracking-widest text-slate-500">{tr('品牌', 'Brand', "Jenama")}</span>
-                          <DoubleClickEditField copyOnly value={vehicleOption.vehicle_brand || 'Yamaha'} onCommit={() => undefined} displayClassName="inline-flex self-start rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-500" inputClassName={detailInputClass} ariaLabel={`Copy vehicle choice ${index + 1} brand`} />
+                          <span className="mb-1 text-micro uppercase text-slate-500">{tr('品牌', 'Brand', "Jenama")}</span>
+                          <DoubleClickEditField copyOnly value={vehicleOption.vehicle_brand || 'Yamaha'} onCommit={() => undefined} displayClassName="inline-flex self-start rounded-full bg-slate-100 px-2 py-0.5 text-micro uppercase text-slate-500" inputClassName={detailInputClass} ariaLabel={`Copy vehicle choice ${index + 1} brand`} />
                         </div>
 
                         <div className="flex flex-col">
-                          <span className="mb-1 text-[11px] font-bold uppercase tracking-widest text-slate-500">{tr('新车 / 二手', 'New / Used', "Baharu / Terpakai")}</span>
+                          <span className="mb-1 text-micro uppercase text-slate-500">{tr('新车 / 二手', 'New / Used', "Baharu / Terpakai")}</span>
                           <DoubleClickEditField copyOnly={!canEditAllInformation} mode="select" value={vehicleOption.vehicle_condition || ''} options={[{ value: '', label: 'Not set' }, ...VEHICLE_CONDITION_OPTIONS.filter(Boolean).map((option) => ({ value: option, label: option }))]} onCommit={(value) => updateVehicleOption(index, 'vehicle_condition', value as VehicleCondition)} displayClassName={detailDisplayClass} inputClassName={detailInputClass} emptyText={tr('未填写', 'Not filled', "Tidak diisi")} ariaLabel={`${canEditAllInformation ? 'Update' : 'Copy'} vehicle choice ${index + 1} condition`} />
                         </div>
 
                         <div className="flex flex-col">
-                          <span className="mb-1 text-[11px] font-bold uppercase tracking-widest text-slate-500">{tr('现金 / 贷款', 'Cash / Loan', "Tunai / Pinjaman")}</span>
+                          <span className="mb-1 text-micro uppercase text-slate-500">{tr('现金 / 贷款', 'Cash / Loan', "Tunai / Pinjaman")}</span>
                           <DoubleClickEditField copyOnly={!canEditAllInformation} mode="select" value={vehicleOption.purchase_method || ''} options={[{ value: '', label: 'Not set' }, ...PURCHASE_METHOD_OPTIONS.filter(Boolean).map((option) => ({ value: option, label: option }))]} onCommit={(value) => updateVehicleOption(index, 'purchase_method', value as PurchaseMethod)} displayClassName={detailDisplayClass} inputClassName={detailInputClass} emptyText={tr('未填写', 'Not filled', "Tidak diisi")} ariaLabel={`${canEditAllInformation ? 'Update' : 'Copy'} vehicle choice ${index + 1} purchase method`} />
                         </div>
                         {vehicleOption.vehicle_condition === 'Used' && (
                           <div className="flex flex-col">
-                            <span className="mb-1 text-[11px] font-bold uppercase tracking-widest text-slate-500">{tr('摩托里程', 'Motor Mileage', "Perbatuan Motosikal")}</span>
+                            <span className="mb-1 text-micro uppercase text-slate-500">{tr('摩托里程', 'Motor Mileage', "Perbatuan Motosikal")}</span>
                             <DoubleClickEditField
                               copyOnly={!canEditAllInformation}
                               type="text"
@@ -3446,40 +3439,104 @@ function DetailDrawer({
                       </div>
                     </div>
                   ))}
+                </div>
 
-                  <div className="flex flex-col">
-                    <span className="text-[11px] text-slate-500 uppercase font-bold tracking-widest mb-1">{tr('提交时间', 'Submitted At', "Diserahkan Pada")}</span>
-                    <DoubleClickEditField
-                      copyOnly={!canEditAllInformation}
-                      type="datetime-local"
-                      value={formatDateTimeLocal(editedApplicationInfo.submitted_at)}
-                      onCommit={(value) => updateApplicationInfo('submitted_at', toIsoDateTime(value))}
-                      displayClassName={`${detailDisplayClass} font-mono`}
-                      inputClassName={detailInputClass}
-                      formatDisplay={() => new Date(editedApplicationInfo.submitted_at).toLocaleString(getAppLocale(), {
-                        month: '2-digit',
-                        day: '2-digit',
-                        hour: '2-digit',
-                        minute: '2-digit',
-                        hour12: false
-                      })}
-                      ariaLabel={canEditAllInformation ? 'Update submitted time' : 'Copy submitted time'}
-                    />
+                {/* Loan preferences sit inside Vehicle & Purchase, always expanded
+                    (owner request 2026-09-30); the id keeps missing-field jumps working. */}
+                {isLoanPurchase && (
+                  <div id="detail-section-preferences" data-testid="detail-section-preferences" className="scroll-mt-6 rounded-control border border-slate-100 bg-slate-50/40 p-3">
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <div className="flex flex-col">
+                      <span className="mb-1 text-micro uppercase text-slate-500">{tr('方便接电话', 'Available to Receive Calls', "Masa Sesuai Dihubungi")}</span>
+                      <DoubleClickEditField copyOnly={!canEditAllInformation} value={editedApplicationInfo.preferences?.available_to_receive_calls || ''} onCommit={(value) => updatePreferences('available_to_receive_calls', value)} displayClassName={detailDisplayClass} inputClassName={detailInputClass} emptyText={tr('未填写', 'Not filled', "Tidak diisi")} ariaLabel={canEditAllInformation ? 'Update available call time' : 'Copy available call time'} />
+                    </div>
+                    <div className="flex flex-col">
+                      <span className="mb-1 text-micro uppercase text-slate-500">{tr('薪资收取方式', 'Salary Paid By', "Gaji Dibayar Melalui")}</span>
+                      <DoubleClickEditField
+                        copyOnly={!canEditAllInformation}
+                        mode="select"
+                        value={editedApplicationInfo.preferences?.salary_payment_method || ''}
+                        options={SALARY_PAYMENT_METHOD_OPTIONS.map((option) => ({
+                          value: option,
+                          label: option || tr('未设置', 'Not set', "Belum ditetapkan")
+                        }))}
+                        onCommit={(value) => updatePreferences('salary_payment_method', value)}
+                        displayClassName={detailDisplayClass}
+                        inputClassName={detailInputClass}
+                        emptyText={tr('未填写', 'Not filled', "Tidak diisi")}
+                        ariaLabel={canEditAllInformation ? 'Update salary paid by' : 'Copy salary paid by'}
+                      />
+                    </div>
+                        <div className="flex flex-col">
+                          <span className="mb-1 text-micro uppercase text-slate-500">{fieldLabel('salaryBank')}</span>
+                          <DoubleClickEditField copyOnly={!canEditAllInformation} value={editedApplicationInfo.personal_info?.bank_name || ''} suggestions={salaryBankOptions.map((option) => ({ value: option, label: option }))} placeholder={tr('选择或输入银行', 'Select or type the bank', "Pilih atau taip bank")} normalizeValue={(value) => value.trim()} onCommit={(value) => updatePersonalInfo('bank_name', value)} displayClassName={detailDisplayClass} inputClassName={detailInputClass} emptyText={tr('未填写', 'Not filled', "Tidak diisi")} ariaLabel={canEditAllInformation ? 'Update salary bank' : 'Copy salary bank'} />
+                          <AeonAutoDebitWarning issue={aeonAutoDebitIssue} salaryBankName={salaryBankName} compact />
+                        </div>
+                        <div className="flex flex-col">
+                          <span className="mb-1 inline-flex items-center gap-1 text-micro uppercase text-slate-500">{fieldLabel('bankAccountNumber')}{renderRiskIcon('account_number')}</span>
+                          <DoubleClickEditField copyOnly={!canEditAllInformation} value={editedApplicationInfo.personal_info?.account_number || ''} onCommit={(value) => updatePersonalInfo('account_number', value.replace(/\D/g, ''))} displayClassName={detailDisplayClass} inputClassName={detailInputClass} emptyText={tr('未填写', 'Not filled', "Tidak diisi")} ariaLabel={canEditAllInformation ? 'Update bank account number' : 'Copy bank account number'} />
+                        </div>
+                    <div className="flex flex-col">
+                      <span className="mb-1 text-micro uppercase text-slate-500">{fieldLabel('loanTenureYears')}</span>
+                      <DoubleClickEditField copyOnly={!canEditAllInformation} mode="select" value={editedApplicationInfo.preferences?.loan_tenure || ''} options={[{ value: '', label: tr('未设置', 'Not set', "Belum ditetapkan") }, ...LOAN_TENURE_OPTIONS.map((year) => ({ value: year, label: `${year} years` }))]} onCommit={(value) => updatePreferences('loan_tenure', value)} displayClassName={detailDisplayClass} inputClassName={detailInputClass} emptyText={tr('未填写', 'Not filled', "Tidak diisi")} ariaLabel={canEditAllInformation ? 'Update loan tenure' : 'Copy loan tenure'} />
+                    </div>
+                    </div>
                   </div>
+                )}
 
+                {/* Submitted At sits below the preferences card (owner request 2026-09-30). */}
+                <div className="flex flex-col">
+                  <span className="text-micro uppercase text-slate-500st mb-1">{tr('提交时间', 'Submitted At', "Diserahkan Pada")}</span>
+                  <DoubleClickEditField
+                    copyOnly={!canEditAllInformation}
+                    type="datetime-local"
+                    value={formatDateTimeLocal(editedApplicationInfo.submitted_at)}
+                    onCommit={(value) => updateApplicationInfo('submitted_at', toIsoDateTime(value))}
+                    displayClassName={`${detailDisplayClass} font-mono`}
+                    inputClassName={detailInputClass}
+                    formatDisplay={() => new Date(editedApplicationInfo.submitted_at).toLocaleString(getAppLocale(), {
+                      month: '2-digit',
+                      day: '2-digit',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                      hour12: false
+                    })}
+                    ariaLabel={canEditAllInformation ? 'Update submitted time' : 'Copy submitted time'}
+                  />
                 </div>
 
                 {isLoanPurchase && (
                   <>
-                <details id="detail-section-employment" data-testid="detail-section-employment" className="group scroll-mt-6 rounded-xl border border-slate-200 bg-white">
-                  <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-xl px-4 py-3 transition-colors hover:bg-slate-50 [&::-webkit-details-marker]:hidden">
+                <details id="detail-section-employment" data-testid="detail-section-employment" className="group scroll-mt-6 rounded-card border border-slate-200 bg-white">
+                  <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-card px-4 py-3 transition-colors hover:bg-slate-50 [&::-webkit-details-marker]:hidden">
                     <span>
-                      <span className="block text-sm font-bold text-slate-900">{tr('就业资料', 'Employment Details', "Butiran Pekerjaan")}</span>
-                      <span className="mt-0.5 block text-[11px] font-semibold text-slate-500">{tr('公司、职位、年资', 'Company, position, tenure', "Syarikat, jawatan, tempoh")}</span>
+                      <span className="block text-headline text-slate-900">{tr('就业资料', 'Employment Details', "Butiran Pekerjaan")}</span>
+                      <span className="mt-0.5 block text-caption text-slate-500">{tr('职业类型、公司、职位、年资', 'Occupation type, company, position, tenure', "Jenis pekerjaan, syarikat, jawatan, tempoh")}</span>
                     </span>
                     <ChevronDown className="h-4 w-4 shrink-0 text-slate-500 transition-transform group-open:rotate-180" />
                   </summary>
-                  <div className="grid grid-cols-1 gap-4 border-t border-slate-100 px-4 pb-4 pt-4 md:grid-cols-3">
+                  <div className="grid grid-cols-1 gap-4 border-t border-slate-100 px-4 pb-4 pt-4 md:grid-cols-2">
+                    <div className="flex flex-col" data-testid="employment-occupation-type">
+                      <span className="mb-1 text-micro uppercase text-slate-500">{tr('职业类型', 'Occupation Type', "Jenis Pekerjaan")}</span>
+                      <DoubleClickEditField
+                        copyOnly={!canEditAllInformation}
+                        mode="select"
+                        value={editedApplicationInfo.employment_details?.occupation_type || ''}
+                        options={OCCUPATION_TYPE_OPTIONS.map((option) => ({
+                          value: option,
+                          label: option === 'Employee'
+                            ? tr('受雇', 'Employee', "Pekerja")
+                            : option === 'Self-employed'
+                              ? tr('自雇', 'Self-employed', "Bekerja Sendiri")
+                              : tr('未设置', 'Not set', "Belum ditetapkan")
+                        }))}
+                        onCommit={(value) => updateEmploymentDetails('occupation_type', value)}
+                        displayClassName={detailDisplayClass}
+                        inputClassName={detailInputClass}
+                        emptyText={tr('未填写', 'Not filled', "Tidak diisi")}
+                        ariaLabel={canEditAllInformation ? 'Update Occupation Type' : 'Copy Occupation Type'}
+                      />
+                    </div>
                     {[
                       { label: 'Company Name', value: editedApplicationInfo.employment_details?.company_name || '', field: 'company_name' as const },
                       { label: 'Position', value: editedApplicationInfo.employment_details?.position || '', field: 'position' as const },
@@ -3487,9 +3544,63 @@ function DetailDrawer({
                       { label: tr('每月净薪资', 'Net Monthly Salary', "Gaji Bulanan Bersih"), value: editedApplicationInfo.employment_details?.net_monthly_salary || '', field: 'net_monthly_salary' as const, normalizeValue: normalizeDecimalInput },
                       { label: 'Years Employed', value: editedApplicationInfo.employment_details?.years_employed || '', field: 'years_employed' as const, type: 'number' as const, normalizeValue: (value: string) => value.replace(/\D/g, '') },
                       { label: 'Office Phone', value: editedApplicationInfo.employment_details?.office_phone_no || '', field: 'office_phone_no' as const }
-                    ].map((item) => (
+                    ].map((item) => item.field === 'years_employed' ? (() => {
+                      const employmentStartYear = editedApplicationInfo.employment_details?.employment_start_year || '';
+                      const employmentStartMonth = editedApplicationInfo.employment_details?.employment_start_month || '';
+                      const employmentDuration = getEmploymentDuration(employmentStartYear, employmentStartMonth);
+                      return (
+                        <div key={item.field} className="flex flex-col" data-testid="employment-start">
+                          <span className="mb-1 text-micro uppercase text-slate-500">{tr('开始上班（年 / 月）', 'Started Working (Year / Month)', "Mula Bekerja (Tahun / Bulan)")}</span>
+                          <div className="grid grid-cols-2 gap-2">
+                            <DoubleClickEditField
+                              copyOnly={!canEditAllInformation}
+                              mode="select"
+                              value={employmentStartYear}
+                              options={[
+                                { value: '', label: tr('年份', 'Year', "Tahun") },
+                                ...getEmploymentStartYearOptions().map((year) => ({ value: year, label: year }))
+                              ]}
+                              onCommit={(value) => updateEmploymentStart('employment_start_year', value)}
+                              displayClassName={detailDisplayClass}
+                              inputClassName={detailInputClass}
+                              emptyText={tr('年份', 'Year', "Tahun")}
+                              ariaLabel={`${canEditAllInformation ? 'Update' : 'Copy'} Employment Start Year`}
+                            />
+                            <DoubleClickEditField
+                              copyOnly={!canEditAllInformation}
+                              mode="select"
+                              value={employmentStartMonth}
+                              options={[
+                                { value: '', label: tr('月份', 'Month', "Bulan") },
+                                ...Array.from({ length: 12 }, (_, index) => {
+                                  const month = String(index + 1);
+                                  return { value: month, label: tr(`${month} 月`, `Month ${month}`, `Bulan ${month}`) };
+                                })
+                              ]}
+                              onCommit={(value) => updateEmploymentStart('employment_start_month', value)}
+                              displayClassName={detailDisplayClass}
+                              inputClassName={detailInputClass}
+                              emptyText={tr('月份', 'Month', "Bulan")}
+                              formatDisplay={(value) => value ? tr(`${value} 月`, `Month ${value}`, `Bulan ${value}`) : tr('月份', 'Month', "Bulan")}
+                              ariaLabel={`${canEditAllInformation ? 'Update' : 'Copy'} Employment Start Month`}
+                            />
+                          </div>
+                          <span className="mt-1 text-caption text-slate-500" data-testid="employment-duration">
+                            {employmentDuration
+                              ? tr(
+                                `已工作 ${employmentDuration.years} 年 ${employmentDuration.months} 个月`,
+                                `Worked ${employmentDuration.years} yrs ${employmentDuration.months} mths`,
+                                `Bekerja ${employmentDuration.years} thn ${employmentDuration.months} bln`
+                              )
+                              : item.value
+                                ? tr(`工作年数：${item.value} 年`, `Years Employed: ${item.value}`, `Tahun Bekerja: ${item.value}`)
+                                : tr('选择年份和月份后自动计算年资', 'Pick year and month to calculate tenure', "Pilih tahun dan bulan untuk kira tempoh")}
+                          </span>
+                        </div>
+                      );
+                    })() : (
                       <div key={item.field} className="flex flex-col">
-                        <span className="mb-1 text-[11px] font-bold uppercase tracking-widest text-slate-500">{item.label}</span>
+                        <span className="mb-1 text-micro uppercase text-slate-500">{item.label}</span>
                         <DoubleClickEditField
                           copyOnly={!canEditAllInformation}
                           type={item.type || 'text'}
@@ -3504,8 +3615,8 @@ function DetailDrawer({
                         />
                       </div>
                     ))}
-                    <div className="flex flex-col md:col-span-3">
-                      <span className="mb-1 text-[11px] font-bold uppercase tracking-widest text-slate-500">{tr('公司地址', 'Company Address', "Alamat Syarikat")}</span>
+                    <div className="flex flex-col md:col-span-2">
+                      <span className="mb-1 text-micro uppercase text-slate-500">{tr('公司地址', 'Company Address', "Alamat Syarikat")}</span>
                       <DoubleClickEditField
                         copyOnly={!canEditAllInformation}
                         mode="textarea"
@@ -3521,25 +3632,28 @@ function DetailDrawer({
                   </div>
                 </details>
 
-                <details id="detail-section-emergency" data-testid="detail-section-emergency" className="group scroll-mt-6 rounded-xl border border-slate-200 bg-white">
-                  <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-xl px-4 py-3 transition-colors hover:bg-slate-50 [&::-webkit-details-marker]:hidden">
+                  </>
+                )}
+
+                <details id="detail-section-emergency" data-testid="detail-section-emergency" className="group scroll-mt-6 rounded-card border border-slate-200 bg-white">
+                  <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-card px-4 py-3 transition-colors hover:bg-slate-50 [&::-webkit-details-marker]:hidden">
                     <span>
-                      <span className="block text-sm font-bold text-slate-900">{tr('紧急联系人', 'Emergency Contacts', "Kenalan Kecemasan")}</span>
-                      <span className="mt-0.5 block text-[11px] font-semibold text-slate-500">{tr('联系人 1 / 联系人 2', 'Contact 1 / Contact 2', "Kenalan 1 / Kenalan 2")}</span>
+                      <span className="block text-headline text-slate-900">{tr('紧急联系人', 'Emergency Contacts', "Kenalan Kecemasan")}</span>
+                      <span className="mt-0.5 block text-caption text-slate-500">{tr('联系人 1 / 联系人 2', 'Contact 1 / Contact 2', "Kenalan 1 / Kenalan 2")}</span>
                     </span>
                     <ChevronDown className="h-4 w-4 shrink-0 text-slate-500 transition-transform group-open:rotate-180" />
                   </summary>
                   <div className="grid grid-cols-1 gap-4 border-t border-slate-100 px-4 pb-4 pt-4 md:grid-cols-2">
                     {normalizeEmergencyContacts(editedApplicationInfo.emergency_contacts).map((contact, index) => (
-                      <div key={`emergency-contact-${index}`} className="space-y-3 rounded-lg border border-slate-100 bg-slate-50/50 p-3">
-                        <p className="text-[11px] font-bold uppercase tracking-widest text-slate-500">{tr(`紧急联系人 ${index + 1}`, `Emergency Contact ${index + 1}`, `Hubungan Kecemasan ${index + 1}`)}</p>
+                      <div key={`emergency-contact-${index}`} className="space-y-3 rounded-control border border-slate-100 bg-slate-50/50 p-3">
+                        <p className="text-micro uppercase text-slate-500">{tr(`紧急联系人 ${index + 1}`, `Emergency Contact ${index + 1}`, `Hubungan Kecemasan ${index + 1}`)}</p>
                         {[
                           { label: 'Full Name', value: contact.full_name, field: 'full_name' as const },
                           { label: 'Relationship', value: contact.relationship, field: 'relationship' as const },
                           { label: 'Phone Number', value: contact.phone_no, field: 'phone_no' as const }
                         ].map((item) => (
                           <div key={item.field} className="flex flex-col">
-                            <span className="mb-1 text-[11px] font-bold uppercase tracking-widest text-slate-500">{item.label}</span>
+                            <span className="mb-1 text-micro uppercase text-slate-500">{item.label}</span>
                             <DoubleClickEditField
                               copyOnly={!canEditAllInformation}
                               value={item.value}
@@ -3553,7 +3667,7 @@ function DetailDrawer({
                           </div>
                         ))}
                         <div className="flex flex-col">
-                          <span className="mb-1 text-[11px] font-bold uppercase tracking-widest text-slate-500">{tr('详细地址', 'Full Address', "Alamat Penuh")}</span>
+                          <span className="mb-1 text-micro uppercase text-slate-500">{tr('详细地址', 'Full Address', "Alamat Penuh")}</span>
                           <DoubleClickEditField
                             copyOnly={!canEditAllInformation}
                             mode="textarea"
@@ -3571,68 +3685,81 @@ function DetailDrawer({
                   </div>
                 </details>
 
-                <details id="detail-section-preferences" data-testid="detail-section-preferences" className="group scroll-mt-6 rounded-xl border border-slate-200 bg-white">
-                  <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-xl px-4 py-3 transition-colors hover:bg-slate-50 [&::-webkit-details-marker]:hidden">
-                    <span>
-                      <span className="block text-sm font-bold text-slate-900">{tr('附加资料与偏好', 'Additional Details & Preferences', "Butiran Tambahan & Keutamaan")}</span>
-                      <span className="mt-0.5 block text-[11px] font-semibold text-slate-500">{tr('电话、薪资方式与贷款年期', 'Calls, salary method and loan tenure', "Panggilan, kaedah gaji dan tempoh pinjaman")}</span>
+                <details id="detail-section-remark" data-testid="detail-section-remark" className="group scroll-mt-6 rounded-card border border-slate-200 bg-white">
+                  <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-card px-4 py-3 transition-colors hover:bg-slate-50 [&::-webkit-details-marker]:hidden">
+                    <span className="min-w-0">
+                      <span className="block text-headline text-slate-900">{tr('备注', 'Remark', "Catatan")}</span>
+                      <span className="mt-0.5 block truncate text-caption text-slate-500">{editedRemarks.trim() || tr('这位客户的内部备注', 'Internal notes for this customer', "Catatan dalaman untuk pelanggan ini")}</span>
                     </span>
                     <ChevronDown className="h-4 w-4 shrink-0 text-slate-500 transition-transform group-open:rotate-180" />
                   </summary>
-                  <div className="grid grid-cols-1 gap-4 border-t border-slate-100 px-4 pb-4 pt-4 md:grid-cols-3">
-                    <div className="flex flex-col">
-                      <span className="mb-1 text-[11px] font-bold uppercase tracking-widest text-slate-500">{tr('方便接电话', 'Available to Receive Calls', "Masa Sesuai Dihubungi")}</span>
-                      <DoubleClickEditField copyOnly={!canEditAllInformation} value={editedApplicationInfo.preferences?.available_to_receive_calls || ''} onCommit={(value) => updatePreferences('available_to_receive_calls', value)} displayClassName={detailDisplayClass} inputClassName={detailInputClass} emptyText={tr('未填写', 'Not filled', "Tidak diisi")} ariaLabel={canEditAllInformation ? 'Update available call time' : 'Copy available call time'} />
-                    </div>
-                    <div className="flex flex-col">
-                      <span className="mb-1 text-[11px] font-bold uppercase tracking-widest text-slate-500">{tr('薪资收取方式', 'Salary Paid By', "Gaji Dibayar Melalui")}</span>
-                      <DoubleClickEditField
-                        copyOnly={!canEditAllInformation}
-                        mode="select"
-                        value={editedApplicationInfo.preferences?.salary_payment_method || ''}
-                        options={SALARY_PAYMENT_METHOD_OPTIONS.map((option) => ({
-                          value: option,
-                          label: option || tr('未设置', 'Not set', "Belum ditetapkan")
-                        }))}
-                        onCommit={(value) => {
-                          updatePreferences('salary_payment_method', value);
-                          if (value !== 'Bank') {
-                            setEditedApplicationInfo((current) => ({
-                              ...current,
-                              personal_info: {
-                                ...normalizePersonalInfo(current.personal_info),
-                                bank_name: '',
-                                account_number: ''
-                              }
-                            }));
-                          }
-                        }}
-                        displayClassName={detailDisplayClass}
-                        inputClassName={detailInputClass}
-                        emptyText={tr('未填写', 'Not filled', "Tidak diisi")}
-                        ariaLabel={canEditAllInformation ? 'Update salary paid by' : 'Copy salary paid by'}
-                      />
-                    </div>
-                    {editedApplicationInfo.preferences?.salary_payment_method === 'Bank' && (
-                      <>
-                        <div className="flex flex-col">
-                          <span className="mb-1 text-[11px] font-bold uppercase tracking-widest text-slate-500">{tr('薪资银行', 'Salary Bank', "Bank Gaji")}</span>
-                          <DoubleClickEditField copyOnly={!canEditAllInformation} mode="select" value={editedApplicationInfo.personal_info?.bank_name || ''} options={['', ...salaryBankOptions].map((option) => ({ value: option, label: option || tr('未设置', 'Not set', "Belum ditetapkan") }))} onCommit={(value) => updatePersonalInfo('bank_name', value)} displayClassName={detailDisplayClass} inputClassName={detailInputClass} emptyText={tr('未填写', 'Not filled', "Tidak diisi")} ariaLabel={canEditAllInformation ? 'Update salary bank' : 'Copy salary bank'} />
+                  <div className="border-t border-slate-100 px-4 pb-4 pt-4">
+                    {remarkDraft !== null ? (
+                      <div className="flex flex-col gap-2">
+                        <textarea
+                          rows={4}
+                          value={remarkDraft}
+                          autoFocus
+                          onChange={(event) => setRemarkDraft(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Escape') setRemarkDraft(null);
+                            if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+                              setEditedRemarks(remarkDraft);
+                              setRemarkDraft(null);
+                            }
+                          }}
+                          className={`${detailInputClass} w-full`}
+                          aria-label="Remark text"
+                        />
+                        <div className="flex justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setRemarkDraft(null)}
+                            className="min-h-9 rounded-control px-3 text-footnote text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50"
+                          >
+                            {tr('取消', 'Cancel', "Batal")}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditedRemarks(remarkDraft);
+                              setRemarkDraft(null);
+                            }}
+                            className="min-h-9 rounded-control bg-brand px-3 text-footnote text-white hover:opacity-90"
+                          >
+                            {tr('完成', 'Done', "Selesai")}
+                          </button>
                         </div>
-                        <div className="flex flex-col">
-                          <span className="mb-1 inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-widest text-slate-500">{tr('银行户口号码', 'Bank Account Number', "Nombor Akaun Bank")}{renderRiskIcon('account_number')}</span>
-                          <DoubleClickEditField copyOnly={!canEditAllInformation} value={editedApplicationInfo.personal_info?.account_number || ''} onCommit={(value) => updatePersonalInfo('account_number', value.replace(/\D/g, ''))} displayClassName={detailDisplayClass} inputClassName={detailInputClass} emptyText={tr('未填写', 'Not filled', "Tidak diisi")} ariaLabel={canEditAllInformation ? 'Update bank account number' : 'Copy bank account number'} />
+                      </div>
+                    ) : (
+                      <div className="flex items-start gap-2">
+                        <div className="min-w-0 flex-1">
+                          <DoubleClickEditField
+                            copyOnly={!canEditAllInformation}
+                            mode="textarea"
+                            rows={4}
+                            value={editedRemarks}
+                            onCommit={(value) => setEditedRemarks(value)}
+                            displayClassName={`${detailDisplayClass} w-full text-left whitespace-pre-wrap`}
+                            inputClassName={`${detailInputClass} w-full`}
+                            emptyText={tr('未填写', 'Not filled', "Tidak diisi")}
+                            ariaLabel={canEditAllInformation ? 'Update remark' : 'Copy remark'}
+                          />
                         </div>
-                      </>
+                        {canEditAllInformation && (
+                          <button
+                            type="button"
+                            onClick={() => setRemarkDraft(editedRemarks)}
+                            className="inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-control px-3 text-footnote text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50 hover:text-slate-900"
+                          >
+                            <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+                            {tr('编辑', 'Edit', "Edit")}
+                          </button>
+                        )}
+                      </div>
                     )}
-                    <div className="flex flex-col">
-                      <span className="mb-1 text-[11px] font-bold uppercase tracking-widest text-slate-500">{tr('贷款年期', 'Loan Tenure', "Tempoh Pinjaman")}</span>
-                      <DoubleClickEditField copyOnly={!canEditAllInformation} mode="select" value={editedApplicationInfo.preferences?.loan_tenure || ''} options={[{ value: '', label: tr('未设置', 'Not set', "Belum ditetapkan") }, ...LOAN_TENURE_OPTIONS.map((year) => ({ value: year, label: `${year} years` }))]} onCommit={(value) => updatePreferences('loan_tenure', value)} displayClassName={detailDisplayClass} inputClassName={detailInputClass} emptyText={tr('未填写', 'Not filled', "Tidak diisi")} ariaLabel={canEditAllInformation ? 'Update loan tenure' : 'Copy loan tenure'} />
-                    </div>
                   </div>
                 </details>
-                  </>
-                )}
               </div>
 
               <div
@@ -3643,12 +3770,12 @@ function DetailDrawer({
               >
                 <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                   <div>
-                    <h3 className="text-sm font-bold text-slate-900">{tr('文件 / 资料清单', 'File / Document Checklist', "Senarai Semak Fail / Dokumen")}</h3>
-                    <p className="mt-0.5 text-[11px] text-slate-500">
-                      {tr('缺失项会进任务箱提醒。', 'Missing items show in Task Inbox.', "Item yang hilang ditunjukkan dalam peti masuk tugasan.")}
+                    <h3 className="text-headline text-slate-900">{tr('文件 / 资料清单', 'File / Document Checklist', "Senarai Semak Fail / Dokumen")}</h3>
+                    <p className="mt-0.5 text-caption text-slate-500">
+                      {tr('缺失项会进首页提醒。', 'Missing items show on Home.', "Item yang hilang ditunjukkan di Laman Utama.")}
                     </p>
                   </div>
-                  <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px] font-bold ring-1 ${
+                  <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-caption font-semibold ring-1 ${
                     missingDocumentLabels.length > 0
                       ? 'bg-amber-50 text-amber-700 ring-amber-100'
                       : 'bg-emerald-50 text-emerald-700 ring-emerald-100'
@@ -3684,22 +3811,29 @@ function DetailDrawer({
                     const uploadLimitReached = uploadedDocuments.length >= uploadLimit;
 
                     return (
-                      <div id={`detail-missing-document-${documentItem.key}`} key={documentItem.key} data-testid={`document-checklist-${documentItem.key}`} className="scroll-mt-6 rounded-xl border border-slate-100 bg-slate-50/60 p-4">
+                      <FileDropZone
+                        key={documentItem.key}
+                        id={`detail-missing-document-${documentItem.key}`}
+                        testId={`document-checklist-${documentItem.key}`}
+                        className="scroll-mt-6 rounded-card border border-slate-100 bg-slate-50/60 p-4"
+                        disabled={!canManageDocuments || isUploadingPayslip || uploadLimitReached}
+                        onFiles={(files) => handleDocumentUpload(documentItem.key, files)}
+                      >
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
                             <div className="flex items-center gap-2">
-                              <span className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ring-1 ${style.chip}`}>
+                              <span className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control ring-1 ${style.chip}`}>
                                 <span className={style.shape} />
                               </span>
                               <div className="min-w-0">
-                                <p className="truncate text-sm font-bold text-slate-900">{documentItem.label}</p>
-                                <p className="mt-0.5 text-[11px] text-slate-500">
+                                <p className="truncate text-headline text-slate-900">{documentItem.label}</p>
+                                <p className="mt-0.5 text-caption text-slate-500">
                                   {documentHelper} · {uploadedDocuments.length}/{uploadLimit}
                                 </p>
                               </div>
                             </div>
                           </div>
-                          <span className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-bold ring-1 ${style.chip}`}>
+                          <span className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-caption font-semibold ring-1 ${style.chip}`}>
                             {style.icon}
                             {documentItem.status}
                           </span>
@@ -3707,7 +3841,7 @@ function DetailDrawer({
 
                         {canManageDocuments && (
                           <div className="mt-3 flex flex-wrap items-center gap-2">
-                            <label className={`inline-flex items-center justify-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-bold transition-colors ${
+                            <label className={`inline-flex items-center justify-center gap-1.5 rounded-control border px-2.5 py-1.5 text-caption font-semibold transition-colors ${
                               isUploadingPayslip || uploadLimitReached
                                 ? 'border-slate-100 bg-slate-100 text-slate-500'
                                 : 'cursor-pointer border-indigo-100 bg-white text-indigo-600 hover:bg-indigo-50'
@@ -3742,7 +3876,7 @@ function DetailDrawer({
                                 documentItem.key,
                                 isNotRequiredDocument ? 'Missing' : 'Not Required'
                               )}
-                              className={`inline-flex items-center gap-2 whitespace-nowrap rounded-full px-2 py-1 text-[11px] font-bold ring-1 transition-colors ${
+                              className={`inline-flex items-center gap-2 whitespace-nowrap rounded-full px-2 py-1 text-caption font-semibold ring-1 transition-colors ${
                                 isDocumentSwitchOn
                                   ? 'bg-emerald-50 text-emerald-700 ring-emerald-100'
                                   : 'bg-rose-50 text-rose-700 ring-rose-100'
@@ -3769,13 +3903,13 @@ function DetailDrawer({
                             const isDocumentReady = documentLoadState === 'loaded' && Boolean(document.file_data_url);
 
                             return (
-                              <div key={document.id} className="flex flex-col gap-2 rounded-lg bg-white px-3 py-2 ring-1 ring-slate-100 sm:flex-row sm:items-center sm:justify-between">
+                              <div key={document.id} className="flex flex-col gap-2 rounded-control bg-white px-3 py-2 ring-1 ring-slate-100 sm:flex-row sm:items-center sm:justify-between">
                                 <div className="flex min-w-0 items-center gap-3">
                                   {isImageDocument && isDocumentReady ? (
                                     <button
                                       type="button"
                                       onClick={() => handleOpenDocumentPreview(document)}
-                                      className="group relative h-12 w-12 shrink-0 overflow-hidden rounded-lg bg-slate-100 ring-1 ring-slate-100 transition-transform hover:scale-[1.02]"
+                                      className="group relative h-12 w-12 shrink-0 overflow-hidden rounded-control bg-slate-100 ring-1 ring-slate-100 transition-transform hover:scale-[1.02]"
                                       aria-label={`Preview ${document.file_name}`}
                                     >
                                       <img
@@ -3786,13 +3920,13 @@ function DetailDrawer({
                                       <span className="absolute inset-0 bg-slate-950/0 transition-colors group-hover:bg-slate-950/10" />
                                     </button>
                                   ) : (
-                                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-slate-50 text-[11px] font-bold uppercase text-slate-500 ring-1 ring-slate-100">
+                                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-control bg-slate-50 text-micro uppercase text-slate-500 ring-1 ring-slate-100">
                                       {documentLoadState === 'loading' ? 'Loading' : 'File'}
                                     </div>
                                   )}
                                   <div className="min-w-0">
-                                    <p className="truncate text-xs font-bold text-slate-700" title={document.file_name}>{document.file_name}</p>
-                                    <p className="mt-0.5 text-[11px] text-slate-500">
+                                    <p className="truncate text-footnote font-semibold text-slate-700" title={document.file_name}>{document.file_name}</p>
+                                    <p className="mt-0.5 text-caption text-slate-500">
                                       {formatFileSize(document.file_size)} · {document.uploaded_by}
                                     </p>
                                     {documentLoadState === 'error' && (
@@ -3800,12 +3934,12 @@ function DetailDrawer({
                                         <button
                                           type="button"
                                           onClick={() => void loadDocumentSource(document, true)}
-                                          className="text-[11px] font-bold text-rose-600 hover:text-rose-700"
+                                          className="text-caption font-semibold text-rose-600 hover:text-rose-700"
                                         >
                                           {tr('文件载入失败 · 重试', 'File unavailable · Retry', "Fail tidak tersedia · Cuba lagi")}
                                         </button>
                                         {canManageDocuments && (
-                                          <label className={`cursor-pointer text-[11px] font-bold text-indigo-600 hover:text-indigo-700 ${
+                                          <label className={`cursor-pointer text-caption font-semibold text-indigo-600 hover:text-indigo-700 ${
                                             isUploadingPayslip ? 'pointer-events-none opacity-50' : ''
                                           }`}>
                                             {tr('补传原文件', 'Re-upload file', "Muat naik semula fail")}
@@ -3834,7 +3968,7 @@ function DetailDrawer({
                                     type="button"
                                     onClick={() => handleOpenDocumentPreview(document)}
                                     disabled={!isDocumentReady}
-                                    className="rounded-md px-2 py-1 text-[11px] font-bold text-indigo-600 ring-1 ring-indigo-100 transition-colors hover:bg-indigo-50 disabled:cursor-wait disabled:text-slate-300 disabled:ring-slate-100"
+                                    className="rounded-chip px-2 py-1 text-caption font-semibold text-indigo-600 ring-1 ring-indigo-100 transition-colors hover:bg-indigo-50 disabled:cursor-wait disabled:text-slate-300 disabled:ring-slate-100"
                                   >
                                     View
                                   </button>
@@ -3842,7 +3976,7 @@ function DetailDrawer({
                                     type="button"
                                     onClick={() => void downloadDocument(document)}
                                     disabled={documentLoadState === 'loading'}
-                                    className="rounded-md px-2 py-1 text-[11px] font-bold text-slate-500 ring-1 ring-slate-100 transition-colors hover:text-indigo-600 disabled:cursor-wait disabled:text-slate-300"
+                                    className="rounded-chip px-2 py-1 text-caption font-semibold text-slate-500 ring-1 ring-slate-100 transition-colors hover:text-indigo-600 disabled:cursor-wait disabled:text-slate-300"
                                   >
                                     Download
                                   </button>
@@ -3850,7 +3984,7 @@ function DetailDrawer({
                                     <button
                                       type="button"
                                       onClick={() => deleteDocument(document.id)}
-                                      className="rounded-md p-1.5 text-slate-500 transition-colors hover:bg-rose-50 hover:text-rose-600"
+                                      className="rounded-chip p-1.5 text-slate-500 transition-colors hover:bg-rose-50 hover:text-rose-600"
                                       aria-label={`Delete ${document.file_name}`}
                                     >
                                       <Trash2 className="h-3.5 w-3.5" />
@@ -3862,12 +3996,12 @@ function DetailDrawer({
                           })}
 
                           {uploadedDocuments.length === 0 && (
-                            <p className="rounded-lg bg-white px-3 py-2 text-[11px] font-semibold text-slate-500 ring-1 ring-slate-100">
+                            <p className="rounded-control bg-white px-3 py-2 text-caption text-slate-500 ring-1 ring-slate-100">
                               No file uploaded.
                             </p>
                           )}
                         </div>
-                      </div>
+                      </FileDropZone>
                     );
                   })}
                 </div>
@@ -3877,11 +4011,11 @@ function DetailDrawer({
 
               {/* Bank application records stored under this customer ID */}
               {activeDetailTab === 'bank' && isLoanPurchase && pendingAction !== 'Complete Application' && (
-              <div id="detail-panel-bank" role="tabpanel" aria-labelledby="detail-tab-bank" data-testid="detail-panel-bank" className="space-y-4">
+              <div id="detail-panel-bank" aria-label="Banks" data-testid="detail-panel-bank" className="space-y-4">
                 <div className="flex items-center justify-between gap-3">
                   <div>
-                    <h3 className="text-sm font-bold text-slate-900">{tr('银行申请', 'Bank Applications', "Permohonan Bank")}</h3>
-                    <p className="mt-0.5 text-[11px] text-slate-500">
+                    <h3 className="text-headline text-slate-900">{tr('银行申请', 'Bank Applications', "Permohonan Bank")}</h3>
+                    <p className="mt-0.5 text-caption text-slate-500">
                       {tr('可记录多间银行申请。', 'Multiple bank applications supported.', "Berbilang permohonan bank disokong.")}
                     </p>
                   </div>
@@ -3889,13 +4023,15 @@ function DetailDrawer({
                     <button
                       type="button"
                       onClick={handleAddBankApplication}
-                      className="inline-flex items-center gap-1.5 rounded-lg bg-red-800 px-3 py-2 text-xs font-bold text-white transition-colors hover:bg-red-900"
+                      className="inline-flex items-center gap-1.5 rounded-control bg-brand px-3 py-2 text-callout text-white transition-colors hover:bg-brand-deep"
                     >
                       <Plus className="h-3.5 w-3.5" />
                       {tr('新增银行', 'Add Bank', "Tambah Bank")}
                     </button>
                   )}
                 </div>
+
+                <AeonAutoDebitWarning issue={aeonAutoDebitIssue} salaryBankName={salaryBankName} />
 
                 <div className="space-y-3">
                   {editedBankApplications.map((bankApplication, index) => {
@@ -3909,7 +4045,7 @@ function DetailDrawer({
                     <div
                       key={bankApplication.id}
                       data-testid={`bank-application-${bankApplication.id}`}
-                      className={`rounded-xl border bg-white p-4 shadow-sm transition-colors ${
+                      className={`rounded-card border bg-white p-4 shadow-e1 transition-colors ${
                         isExpanded ? 'border-indigo-100 ring-1 ring-indigo-50' : 'border-slate-100 hover:border-indigo-100'
                       }`}
                     >
@@ -3928,7 +4064,7 @@ function DetailDrawer({
                               toggleBankApplicationEditor(bankApplication.id);
                             }
                           }}
-                          className={`min-w-0 rounded-lg outline-none ${
+                          className={`min-w-0 rounded-control outline-none ${
                             canManageBankApplications
                               ? 'cursor-pointer focus-visible:ring-2 focus-visible:ring-indigo-100'
                               : ''
@@ -3945,35 +4081,77 @@ function DetailDrawer({
                               size="md"
                             />
                             <div className="min-w-0">
-                              <p className="truncate text-sm font-bold text-slate-800">
+                              <p className="truncate text-headline text-slate-800">
                                 #{index + 1} {bankApplication.bank_name || tr('银行申请', 'Bank Application', "Permohonan Bank")}
                               </p>
                             </div>
-                            <span className={`rounded-full border px-2 py-0.5 text-[11px] font-bold ${getBankStatusBadgeClass(bankApplication.status)}`}>
+                            <span className={`rounded-full border px-2 py-0.5 text-caption font-semibold ${getBankStatusBadgeClass(bankApplication.status)}`}>
                               {trBankStatus(bankApplication.status)}
                             </span>
                           </div>
-                          <p className="mt-1 font-mono text-[11px] text-slate-500">{bankApplication.id}</p>
+                          <p className="mt-1 font-mono text-caption text-slate-500">{bankApplication.id}</p>
                           <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-3">
-                            <div className="rounded-lg bg-slate-50 px-3 py-2">
-                              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{tr('轮次', 'Round', "Bulat")}</p>
-                              <p className="mt-0.5 text-xs font-bold text-slate-700">{bankApplication.round_no}</p>
+                            <div className="rounded-control bg-slate-50 px-3 py-2">
+                              <p className="text-micro uppercase text-slate-500">{tr('轮次', 'Round', "Bulat")}</p>
+                              <p className="mt-0.5 text-footnote font-semibold text-slate-700">{bankApplication.round_no}</p>
                             </div>
-                            <div className="rounded-lg bg-slate-50 px-3 py-2">
-                              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{tr('原因', 'Reason', "Sebab")}</p>
-                              <p className="mt-0.5 line-clamp-1 text-xs font-semibold text-slate-700">
+                            <div className="rounded-control bg-slate-50 px-3 py-2">
+                              <p className="text-micro uppercase text-slate-500">{tr('原因', 'Reason', "Sebab")}</p>
+                              <p className="mt-0.5 line-clamp-1 text-footnote text-slate-700">
                                 {bankApplication.reject_reason || bankApplication.status_reason || bankApplication.reject_code || '-'}
                               </p>
                             </div>
-                            <div className="rounded-lg bg-slate-50 px-3 py-2">
-                              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{tr('下一步', 'Next', "Seterusnya")}</p>
-                              <p className="mt-0.5 line-clamp-1 text-xs font-semibold text-slate-700">{summaryText}</p>
+                            <div className="rounded-control bg-slate-50 px-3 py-2">
+                              <p className="text-micro uppercase text-slate-500">{tr('下一步', 'Next', "Seterusnya")}</p>
+                              <p className="mt-0.5 line-clamp-1 text-footnote text-slate-700">{summaryText}</p>
                             </div>
                           </div>
                           {showOfferFields && (
-                            <p className="mt-2 text-[11px] font-semibold text-emerald-600">
-                              Offer {bankApplication.offer_amount ? `RM ${bankApplication.offer_amount}` : 'recorded'}
+                            <p className="mt-2 text-caption text-emerald-600">
+                              {[
+                                `Offer ${bankApplication.offer_amount ? `RM ${bankApplication.offer_amount}` : 'recorded'}`,
+                                getBankSellingPrice(application, bankApplication) ? `${fieldLabel('sellingPrice')} RM ${getBankSellingPrice(application, bankApplication)}` : '',
+                                bankApplication.deposit_amount ? `${fieldLabel('deposit')} RM ${bankApplication.deposit_amount}` : '',
+                                bankApplication.tenure ? `${bankApplication.tenure} ${tr('个月', 'months', 'bulan')}` : '',
+                                bankApplication.monthly_installment ? `${fieldLabel('monthlyInstalment')} RM ${bankApplication.monthly_installment}` : '',
+                                bankApplication.number_plate || '',
+                                bankApplication.engine_number ? `${fieldLabel('engineNumber')} ${bankApplication.engine_number}` : '',
+                                bankApplication.chassis_number ? `${fieldLabel('chassisNumber')} ${bankApplication.chassis_number}` : ''
+                              ].filter(Boolean).join(' · ')}
                             </p>
+                          )}
+                          {showOfferFields && (
+                            <div className="mt-2 flex flex-wrap items-center gap-2" onClick={(event) => event.stopPropagation()}>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  void navigator.clipboard?.writeText(buildBankFinanceSummary(application, bankApplication)).then(
+                                    () => setCopiedFinanceBankId(bankApplication.id),
+                                    () => setCopiedFinanceBankId('')
+                                  );
+                                }}
+                                className="min-h-8 rounded-control px-3 text-caption font-semibold text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50 hover:text-slate-900"
+                                aria-label={`Copy finance summary for ${bankApplication.id}`}
+                              >
+                                {copiedFinanceBankId === bankApplication.id
+                                  ? tr('已复制', 'Copied', 'Disalin')
+                                  : tr('复制贷款资料', 'Copy finance summary', 'Salin ringkasan pembiayaan')}
+                              </button>
+                              {getMissingApprovedBankFields(bankApplication).length > 0 && (
+                                <span className="text-caption text-amber-700" data-testid={`approved-bank-missing-${bankApplication.id}`}>
+                                  {tr('批准后要填月供和年期', 'Fill in the instalment and tenure', 'Isi ansuran dan tempoh')}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                          {showOfferFields && onRecordUnitExchange && (
+                            <UnitExchangeCard
+                              bankApplicationId={bankApplication.id}
+                              exchanges={(application.unit_exchanges || []).filter((exchange) => exchange.bank_application_id === bankApplication.id)}
+                              canRecord={isOperationsLead(currentStaffRole) || application.handler_name === currentStaffName || (currentStaffRole === 'Admin' && application.admin_owner_name === currentStaffName)}
+                              vehicleModelSuggestions={vehicleModelSuggestions.map((suggestion) => suggestion.value)}
+                              onRecord={(input) => onRecordUnitExchange(application.id, input)}
+                            />
                           )}
                         </div>
                         <div className="flex max-w-2xl shrink-0 flex-wrap items-center justify-end gap-2" onClick={(event) => event.stopPropagation()}>
@@ -3982,8 +4160,8 @@ function DetailDrawer({
                               <button
                                 type="button"
                                 disabled={isSubmitting}
-                                onClick={() => void confirmQuickBankApproval(bankApplication)}
-                                className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-700 px-3 py-2 text-[11px] font-bold text-white transition-colors hover:bg-emerald-800 disabled:cursor-wait disabled:bg-slate-300"
+                                onClick={() => openQuickBankAction(bankApplication, 'approve')}
+                                className="inline-flex items-center gap-1.5 rounded-control bg-emerald-700 px-3 py-2 text-caption font-semibold text-white transition-colors hover:bg-emerald-800 disabled:cursor-wait disabled:bg-slate-300"
                               >
                                 <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
                                 {tr('已批准', 'Approved', "Diluluskan")}
@@ -3991,23 +4169,8 @@ function DetailDrawer({
                               <button
                                 type="button"
                                 disabled={isSubmitting}
-                                onClick={() => {
-                                  const rejectCodes = normalizeRejectCodes(bankApplication.reject_code);
-                                  const rejectCode = rejectCodes.join(', ');
-                                  setQuickFollowUpBankId('');
-                                  setQuickFollowUpNextAction('');
-                                  setQuickCancelBankId('');
-                                  setQuickCancelReason('');
-                                  setQuickRejectBankId(bankApplication.id);
-                                  setQuickRejectCode(rejectCode);
-                                  setQuickRejectReason(
-                                    rejectCodes.length > 0
-                                      ? getLinkedRejectReason(rejectCode, errorCodeDefinitions)
-                                      : bankApplication.reject_reason || bankApplication.status_reason || ''
-                                  );
-                                  setQuickRejectNextStep('TRY_ANOTHER_BANK');
-                                }}
-                                className="inline-flex items-center gap-1.5 rounded-lg bg-purple-700 px-3 py-2 text-[11px] font-bold text-white transition-colors hover:bg-purple-800 disabled:cursor-wait disabled:bg-slate-300"
+                                onClick={() => openQuickBankAction(bankApplication, 'follow-up-reject')}
+                                className="inline-flex items-center gap-1.5 rounded-control bg-purple-700 px-3 py-2 text-caption font-semibold text-white transition-colors hover:bg-purple-800 disabled:cursor-wait disabled:bg-slate-300"
                               >
                                 <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
                                 {tr('跟进拒绝银行', 'Follow Up Reject Bank', "Susulan Bank Ditolak")}
@@ -4015,46 +4178,17 @@ function DetailDrawer({
                               <button
                                 type="button"
                                 disabled={isSubmitting}
-                                onClick={() => {
-                                  setQuickRejectBankId('');
-                                  setQuickRejectCode('');
-                                  setQuickRejectReason('');
-                                  setQuickRejectNextStep('');
-                                  setQuickCancelBankId('');
-                                  setQuickCancelReason('');
-                                  setQuickFollowUpBankId(bankApplication.id);
-                                  setQuickFollowUpNextAction(
-                                    getBankRequestedDocumentKey(bankApplication.next_action)
-                                      ? bankApplication.next_action
-                                      : ''
-                                  );
-                                }}
-                                className="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-2 text-[11px] font-bold text-white transition-colors hover:bg-amber-700 disabled:cursor-wait disabled:bg-slate-300"
+                                onClick={() => openQuickBankAction(bankApplication, 'follow-up-document')}
+                                className="inline-flex items-center gap-1.5 rounded-control bg-amber-600 px-3 py-2 text-caption font-semibold text-white transition-colors hover:bg-amber-700 disabled:cursor-wait disabled:bg-slate-300"
                               >
                                 <CalendarClock className="h-3.5 w-3.5" aria-hidden="true" />
-                                {tr('跟进补文件', 'Follow Up Document', "Susulan Dokumen")}
+                                {tr('待补文件', 'Pending Document', "Dokumen Tertunda")}
                               </button>
                               <button
                                 type="button"
                                 disabled={isSubmitting}
-                                onClick={() => {
-                                  const rejectCodes = normalizeRejectCodes(bankApplication.reject_code);
-                                  const rejectCode = rejectCodes.join(', ');
-                                  const definition = getRejectDefinitions(rejectCode, errorCodeDefinitions)[0];
-                                  setQuickFollowUpBankId('');
-                                  setQuickFollowUpNextAction('');
-                                  setQuickCancelBankId('');
-                                  setQuickCancelReason('');
-                                  setQuickRejectBankId(bankApplication.id);
-                                  setQuickRejectCode(rejectCode);
-                                  setQuickRejectReason(
-                                    rejectCodes.length > 0
-                                      ? getLinkedRejectReason(rejectCode, errorCodeDefinitions)
-                                      : bankApplication.reject_reason || bankApplication.status_reason || ''
-                                  );
-                                  setQuickRejectNextStep(bankApplication.reject_next_step || definition?.default_next_step || '');
-                                }}
-                                className="inline-flex items-center gap-1.5 rounded-lg bg-rose-700 px-3 py-2 text-[11px] font-bold text-white transition-colors hover:bg-rose-800 disabled:cursor-wait disabled:bg-slate-300"
+                                onClick={() => openQuickBankAction(bankApplication, 'reject')}
+                                className="inline-flex items-center gap-1.5 rounded-control bg-rose-700 px-3 py-2 text-caption font-semibold text-white transition-colors hover:bg-rose-800 disabled:cursor-wait disabled:bg-slate-300"
                               >
                                 <X className="h-3.5 w-3.5" aria-hidden="true" />
                                 {tr('已拒绝', 'Rejected', "Ditolak")}
@@ -4062,17 +4196,8 @@ function DetailDrawer({
                               <button
                                 type="button"
                                 disabled={isSubmitting}
-                                onClick={() => {
-                                  setQuickRejectBankId('');
-                                  setQuickRejectCode('');
-                                  setQuickRejectReason('');
-                                  setQuickRejectNextStep('');
-                                  setQuickFollowUpBankId('');
-                                  setQuickFollowUpNextAction('');
-                                  setQuickCancelBankId(bankApplication.id);
-                                  setQuickCancelReason(bankApplication.status_reason || '');
-                                }}
-                                className="inline-flex items-center gap-1.5 rounded-lg bg-slate-700 px-3 py-2 text-[11px] font-bold text-white transition-colors hover:bg-slate-800 disabled:cursor-wait disabled:bg-slate-300"
+                                onClick={() => openQuickBankAction(bankApplication, 'cancel')}
+                                className="inline-flex items-center gap-1.5 rounded-control bg-slate-700 px-3 py-2 text-caption font-semibold text-white transition-colors hover:bg-slate-800 disabled:cursor-wait disabled:bg-slate-300"
                               >
                                 <MinusCircle className="h-3.5 w-3.5" aria-hidden="true" />
                                 {tr('取消申请', 'Cancel', "Batal")}
@@ -4084,7 +4209,7 @@ function DetailDrawer({
                               type="button"
                               aria-expanded={isExpanded}
                               onClick={() => toggleBankApplicationEditor(bankApplication.id)}
-                              className="hidden rounded-lg bg-slate-50 px-3 py-2 text-[11px] font-bold text-slate-500 transition-colors hover:bg-indigo-50 hover:text-indigo-600 md:inline-flex"
+                              className="hidden rounded-control bg-slate-50 px-3 py-2 text-caption font-semibold text-slate-500 transition-colors hover:bg-indigo-50 hover:text-indigo-600 md:inline-flex"
                             >
                               {isExpanded
                                 ? tr('收起编辑', 'Close edit', "Tutup suntingan")
@@ -4095,7 +4220,7 @@ function DetailDrawer({
                             <button
                               type="button"
                               onClick={() => deleteBankApplication(bankApplication.id)}
-                              className="rounded-lg p-2 text-slate-500 transition-colors hover:bg-rose-50 hover:text-rose-600"
+                              className="rounded-control p-2 text-slate-500 transition-colors hover:bg-rose-50 hover:text-rose-600"
                               aria-label={`Delete ${bankApplication.bank_name}`}
                             >
                               <Trash2 className="h-4 w-4" />
@@ -4106,11 +4231,11 @@ function DetailDrawer({
 
                       {quickFollowUpBankId === bankApplication.id && ['Submitted', 'Pending Review'].includes(bankApplication.status) && (
                         <div
-                          className="mt-4 flex flex-col gap-2 rounded-xl border border-amber-100 bg-amber-50 p-3 sm:flex-row sm:items-end"
+                          className="mt-4 flex flex-col gap-2 rounded-card border border-amber-100 bg-amber-50 p-3 sm:flex-row sm:items-end"
                           onClick={(event) => event.stopPropagation()}
                         >
                           <label className="flex min-w-0 flex-1 flex-col gap-1.5">
-                            <span className="text-[10px] font-bold uppercase tracking-wider text-amber-700">
+                            <span className="text-micro uppercase text-amber-700">
                               {tr('下一步（必填）', 'Next Action (required)', "Tindakan Seterusnya (wajib)")}
                             </span>
                             <BankNextActionSelect
@@ -4123,23 +4248,32 @@ function DetailDrawer({
                               ariaLabel={`Follow up next action for ${bankApplication.id}`}
                             />
                           </label>
+                          <div className="min-w-0 flex-1">
+                            <BankDecisionRemarkInput
+                              value={quickDecisionRemark}
+                              onChange={setQuickDecisionRemark}
+                              tone="amber"
+                              ariaLabel={`Pending document custom reason for ${bankApplication.id}`}
+                            />
+                          </div>
                           <button
                             type="button"
                             disabled={isSubmitting || !getBankRequestedDocumentKey(quickFollowUpNextAction)}
                             onClick={() => {
-                              void saveQuickBankFollowUp(bankApplication, quickFollowUpNextAction);
+                              void saveQuickBankFollowUp(bankApplication, quickFollowUpNextAction, quickDecisionRemark);
                             }}
-                            className="h-9 rounded-lg bg-amber-600 px-3 text-[11px] font-bold text-white transition-colors hover:bg-amber-700 disabled:cursor-wait disabled:bg-slate-300"
+                            className="h-9 rounded-control bg-amber-600 px-3 text-caption font-semibold text-white transition-colors hover:bg-amber-700 disabled:cursor-wait disabled:bg-slate-300"
                           >
-                            {tr('确认补文件跟进', 'Confirm Follow Up Document', "Sahkan Susulan Dokumen")}
+                            {tr('确认待补文件', 'Confirm Pending Document', "Sahkan Dokumen Tertunda")}
                           </button>
                           <button
                             type="button"
                             onClick={() => {
                               setQuickFollowUpBankId('');
                               setQuickFollowUpNextAction('');
+                              setQuickDecisionRemark('');
                             }}
-                            className="h-9 rounded-lg border border-amber-100 bg-white px-3 text-[11px] font-bold text-slate-500 transition-colors hover:bg-amber-100 hover:text-amber-700"
+                            className="h-9 rounded-control border border-amber-100 bg-white px-3 text-caption font-semibold text-slate-500 transition-colors hover:bg-amber-100 hover:text-amber-700"
                           >
                             {tr('取消', 'Cancel', "Batal")}
                           </button>
@@ -4148,11 +4282,11 @@ function DetailDrawer({
 
                       {quickRejectBankId === bankApplication.id && ['Submitted', 'Pending Review'].includes(bankApplication.status) && (
                         <div
-                          className="mt-4 grid grid-cols-1 gap-3 rounded-xl border border-rose-100 bg-rose-50 p-3 lg:grid-cols-[minmax(0,1fr)_minmax(13rem,0.45fr)_auto_auto] lg:items-end"
+                          className="mt-4 grid grid-cols-1 gap-3 rounded-card border border-rose-100 bg-rose-50 p-3 lg:grid-cols-[minmax(0,1fr)_minmax(13rem,0.45fr)_auto_auto] lg:items-end"
                           onClick={(event) => event.stopPropagation()}
                         >
                           <div className="flex min-w-0 flex-col gap-1.5">
-                            <span className="text-[10px] font-bold uppercase tracking-wider text-rose-700">
+                            <span className="text-micro uppercase text-rose-700">
                               {tr('拒贷代码（可多个，选填）', 'Reject CODEs (multiple, optional)', "KOD Tolak (berbilang, pilihan)")}
                             </span>
                             <BankRejectCodesInput
@@ -4166,14 +4300,15 @@ function DetailDrawer({
                                     ? getLinkedRejectReason(value, errorCodeDefinitions)
                                     : ''
                                 );
-                                if (!quickRejectNextStep && definitions[0]?.default_next_step) {
-                                  setQuickRejectNextStep(definitions[0].default_next_step);
+                                const defaultNextStep = definitions[0]?.default_next_step;
+                                if (quickRejectMode === 'final' && !quickRejectNextStep && defaultNextStep && FINAL_REJECT_NEXT_STEPS.includes(defaultNextStep)) {
+                                  setQuickRejectNextStep(defaultNextStep);
                                 }
                               }}
                               ariaLabel={`Reject CODE for ${bankApplication.id}`}
                               autoFocus
                             />
-                            <p className="text-[10px] font-semibold text-rose-500">
+                            <p className="text-caption text-rose-500">
                               {tr(
                                 '每个 CODE 会自动关联 Reject Reason；没有 CODE 时请手动填写。',
                                 'Each CODE links its Reject Reason automatically; enter a reason manually when there is no CODE.',
@@ -4181,7 +4316,7 @@ function DetailDrawer({
                               )}
                             </p>
                             {normalizeRejectCodes(quickRejectCode).length > 0 ? (
-                              <div className="min-h-10 rounded-lg border border-rose-100 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
+                              <div className="min-h-10 rounded-control border border-rose-100 bg-white px-3 py-2 text-footnote text-slate-700">
                                 {quickRejectReason}
                               </div>
                             ) : (
@@ -4191,32 +4326,63 @@ function DetailDrawer({
                                 onChange={(event) => setQuickRejectReason(event.target.value)}
                                 placeholder={tr('输入拒绝原因', 'Enter reject reason', 'Masukkan sebab penolakan')}
                                 aria-label={`Reject reason for ${bankApplication.id}`}
-                                className="min-h-16 resize-none rounded-lg border border-rose-100 bg-white px-3 py-2 text-xs text-slate-700 outline-none focus:border-rose-300 focus:ring-2 focus:ring-rose-100"
+                                className="min-h-16 resize-none rounded-control border border-rose-100 bg-white px-3 py-2 text-footnote text-slate-700 outline-none focus:border-rose-300 focus:ring-2 focus:ring-rose-100"
                               />
                             )}
                           </div>
-                          <label className="flex min-w-52 flex-col gap-1.5">
-                            <span className="text-[10px] font-bold uppercase tracking-wider text-rose-700">
-                              {tr('下一步（必选）', 'Next Step (required)', "Langkah Seterusnya (wajib)")}
-                            </span>
-                            <select
-                              value={quickRejectNextStep}
-                              onChange={(event) => setQuickRejectNextStep(event.target.value as RejectNextStepType)}
-                              aria-label={`Reject next step for ${bankApplication.id}`}
-                              className="h-9 rounded-lg border border-rose-100 bg-white px-3 text-xs font-bold text-slate-700 outline-none focus:border-rose-300 focus:ring-2 focus:ring-rose-100"
-                            >
-                              <option value="">{tr('选择下一步', 'Select next step', "Pilih langkah")}</option>
-                              {REJECT_NEXT_STEPS.map((nextStep) => (
-                                <option key={nextStep} value={nextStep}>{rejectNextStepLabel(nextStep)}</option>
-                              ))}
-                            </select>
-                          </label>
+                          {quickRejectMode === 'follow-up' ? (
+                            <label className="flex min-w-52 flex-col gap-1.5">
+                              <span className="text-micro uppercase text-rose-700">
+                                {tr('要补的文件（必选）', 'Document to provide (required)', "Dokumen diperlukan (wajib)")}
+                              </span>
+                              <BankNextActionSelect
+                                value={quickRejectDocument}
+                                options={bankDocumentRequestOptions}
+                                onChange={setQuickRejectDocument}
+                                required
+                                ariaLabel={`Reject document request for ${bankApplication.id}`}
+                              />
+                              <p className="text-caption text-rose-500">
+                                {tr(
+                                  'Sales 补齐后按 Documents Ready，Admin 再送同一家银行（新一轮）。',
+                                  'After Sales uses Documents Ready, Admin resubmits to the same bank as a new round.',
+                                  'Selepas Jualan menggunakan Documents Ready, Pentadbir menghantar semula ke bank yang sama sebagai pusingan baharu.'
+                                )}
+                              </p>
+                            </label>
+                          ) : (
+                            <label className="flex min-w-52 flex-col gap-1.5">
+                              <span className="text-micro uppercase text-rose-700">
+                                {tr('下一步（必选）', 'Next Step (required)', "Langkah Seterusnya (wajib)")}
+                              </span>
+                              <select
+                                value={quickRejectNextStep}
+                                onChange={(event) => setQuickRejectNextStep(event.target.value as RejectNextStepType)}
+                                aria-label={`Reject next step for ${bankApplication.id}`}
+                                className="h-9 rounded-control border border-rose-100 bg-white px-3 text-callout text-slate-700 outline-none focus:border-rose-300 focus:ring-2 focus:ring-rose-100"
+                              >
+                                <option value="">{tr('选择下一步', 'Select next step', "Pilih langkah")}</option>
+                                {FINAL_REJECT_NEXT_STEPS.map((nextStep) => (
+                                  <option key={nextStep} value={nextStep}>{rejectNextStepLabel(nextStep)}</option>
+                                ))}
+                              </select>
+                            </label>
+                          )}
+                          <div className="lg:col-span-4">
+                            <BankDecisionRemarkInput
+                              value={quickDecisionRemark}
+                              onChange={setQuickDecisionRemark}
+                              tone="rose"
+                              ariaLabel={`Reject custom reason for ${bankApplication.id}`}
+                            />
+                          </div>
                           <button
                             type="button"
                             disabled={
                               isSubmitting ||
                               !quickRejectNextStep ||
-                              !quickRejectReason.trim()
+                              !quickRejectReason.trim() ||
+                              (quickRejectMode === 'follow-up' && !getBankRequestedDocumentKey(quickRejectDocument))
                             }
                             onClick={() => {
                               void saveQuickBankApplicationStatus(
@@ -4224,12 +4390,16 @@ function DetailDrawer({
                                 'Rejected',
                                 quickRejectCode,
                                 quickRejectNextStep || undefined,
-                                quickRejectReason
+                                quickRejectReason,
+                                quickRejectMode === 'follow-up' ? quickRejectDocument : undefined,
+                                quickDecisionRemark
                               );
                             }}
-                            className="h-9 rounded-lg bg-rose-700 px-3 text-[11px] font-bold text-white transition-colors hover:bg-rose-800 disabled:cursor-wait disabled:bg-slate-300"
+                            className="h-9 rounded-control bg-rose-700 px-3 text-caption font-semibold text-white lg:col-start-3 transition-colors hover:bg-rose-800 disabled:cursor-wait disabled:bg-slate-300"
                           >
-                            {tr('确认拒绝', 'Confirm Rejected', "Sahkan Ditolak")}
+                            {quickRejectMode === 'follow-up'
+                              ? tr('确认补文件再送', 'Confirm Follow Up Reject', "Sahkan Susulan Ditolak")
+                              : tr('确认拒绝', 'Confirm Rejected', "Sahkan Ditolak")}
                           </button>
                           <button
                             type="button"
@@ -4238,8 +4408,9 @@ function DetailDrawer({
                               setQuickRejectCode('');
                               setQuickRejectReason('');
                               setQuickRejectNextStep('');
+                              setQuickDecisionRemark('');
                             }}
-                            className="h-9 rounded-lg border border-rose-100 bg-white px-3 text-[11px] font-bold text-slate-500 transition-colors hover:bg-rose-100 hover:text-rose-700"
+                            className="h-9 rounded-control border border-rose-100 bg-white px-3 text-caption font-semibold text-slate-500 transition-colors hover:bg-rose-100 hover:text-rose-700"
                           >
                             {tr('取消', 'Cancel', "Batal")}
                           </button>
@@ -4248,11 +4419,11 @@ function DetailDrawer({
 
                       {quickCancelBankId === bankApplication.id && ['Submitted', 'Pending Review'].includes(bankApplication.status) && (
                         <div
-                          className="mt-4 flex flex-col gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:flex-row sm:items-end"
+                          className="mt-4 flex flex-col gap-2 rounded-card border border-slate-200 bg-slate-50 p-3 sm:flex-row sm:items-end"
                           onClick={(event) => event.stopPropagation()}
                         >
                           <label className="flex min-w-0 flex-1 flex-col gap-1.5">
-                            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-600">
+                            <span className="text-micro uppercase text-slate-600">
                               {tr('取消原因（必填）', 'Cancellation Reason (required)', "Sebab Pembatalan (wajib)")}
                             </span>
                             <textarea
@@ -4262,7 +4433,7 @@ function DetailDrawer({
                               placeholder={tr('输入取消这间银行申请的原因', 'Enter why this bank application is being cancelled', 'Masukkan sebab permohonan bank ini dibatalkan')}
                               aria-label={`Cancellation reason for ${bankApplication.id}`}
                               autoFocus
-                              className="min-h-16 resize-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-100"
+                              className="min-h-16 resize-none rounded-control border border-slate-200 bg-white px-3 py-2 text-footnote text-slate-700 outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-100"
                             />
                           </label>
                           <button
@@ -4271,7 +4442,7 @@ function DetailDrawer({
                             onClick={() => {
                               void saveQuickBankCancellation(bankApplication, quickCancelReason);
                             }}
-                            className="h-9 rounded-lg bg-slate-700 px-3 text-[11px] font-bold text-white transition-colors hover:bg-slate-800 disabled:cursor-wait disabled:bg-slate-300"
+                            className="h-9 rounded-control bg-slate-700 px-3 text-caption font-semibold text-white transition-colors hover:bg-slate-800 disabled:cursor-wait disabled:bg-slate-300"
                           >
                             {tr('确认取消申请', 'Confirm Cancel', "Sahkan Batal")}
                           </button>
@@ -4281,7 +4452,7 @@ function DetailDrawer({
                               setQuickCancelBankId('');
                               setQuickCancelReason('');
                             }}
-                            className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-[11px] font-bold text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700"
+                            className="h-9 rounded-control border border-slate-200 bg-white px-3 text-caption font-semibold text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700"
                           >
                             {tr('返回', 'Back', "Kembali")}
                           </button>
@@ -4306,16 +4477,16 @@ function DetailDrawer({
                             done: isTerminalBankStatus(bankApplication.status) && Boolean(decisionAt)
                           }
                         ].map((step, stepIndex) => (
-                          <div key={step.title} className="relative rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+                          <div key={step.title} className="relative rounded-control border border-slate-100 bg-slate-50 px-3 py-2">
                             <div className="flex items-center gap-2">
-                              <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-bold ${
+                              <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-caption font-semibold ${
                                 step.done ? 'bg-emerald-500 text-white' : 'bg-white text-slate-500 ring-1 ring-slate-200'
                               }`}>
                                 {stepIndex + 1}
                               </span>
                               <div className="min-w-0">
-                                <p className="truncate text-[11px] font-bold uppercase tracking-wider text-slate-500">{step.title}</p>
-                                <p className="mt-0.5 truncate font-mono text-xs font-semibold text-slate-700">{step.value}</p>
+                                <p className="truncate text-micro uppercase text-slate-500">{step.title}</p>
+                                <p className="mt-0.5 truncate font-mono text-footnote text-slate-700">{step.value}</p>
                               </div>
                             </div>
                           </div>
@@ -4326,7 +4497,7 @@ function DetailDrawer({
                       <div className="mt-4 border-t border-slate-100 pt-4" data-dce-single-click-edit="">
                       <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
                         <label className="flex flex-col gap-1.5">
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{tr('银行', 'Bank', "Bank")}</span>
+                          <span className="text-micro uppercase text-slate-500">{tr('银行', 'Bank', "Bank")}</span>
                           <DoubleClickEditField
                             mode="select"
                             value={bankApplication.bank_name}
@@ -4339,7 +4510,7 @@ function DetailDrawer({
                         </label>
 
                         <label className="flex flex-col gap-1.5">
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{tr('轮次', 'Round', "Bulat")}</span>
+                          <span className="text-micro uppercase text-slate-500">{tr('轮次', 'Round', "Bulat")}</span>
                           <DoubleClickEditField
                             type="number"
                             value={bankApplication.round_no}
@@ -4352,7 +4523,7 @@ function DetailDrawer({
                         </label>
 
                         <label className="flex flex-col gap-1.5">
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{tr('申请状态', 'Application Status', "Status Permohonan")}</span>
+                          <span className="text-micro uppercase text-slate-500">{tr('申请状态', 'Application Status', "Status Permohonan")}</span>
                           <DoubleClickEditField
                             mode="select"
                             value={bankApplication.status}
@@ -4371,8 +4542,11 @@ function DetailDrawer({
                         </label>
 
                         <label className="flex flex-col gap-1.5">
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{tr('客户申请日期', 'Customer Applied Date', "Tarikh Permohonan Pelanggan")}</span>
+                          <span className="text-micro uppercase text-slate-500">{tr('客户申请日期', 'Customer Applied Date', "Tarikh Permohonan Pelanggan")}</span>
                           <DoubleClickEditField
+                            // submitted_at is application information: Rules
+                            // refuse it without the Edit Loan Application switch.
+                            copyOnly={!canEditAllInformation}
                             type="date"
                             value={formatDateInput(editedApplicationInfo.submitted_at)}
                             onCommit={(value) => updateApplicationInfo('submitted_at', toIsoDate(value))}
@@ -4384,7 +4558,7 @@ function DetailDrawer({
                         </label>
 
                         <label className="flex flex-col gap-1.5">
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{tr('提交人', 'Submitted By', "Dihantar Oleh")}</span>
+                          <span className="text-micro uppercase text-slate-500">{tr('提交人', 'Submitted By', "Dihantar Oleh")}</span>
                           <DoubleClickEditField
                             type="text"
                             value={bankApplication.submitted_by}
@@ -4396,7 +4570,7 @@ function DetailDrawer({
                         </label>
 
                         <label className="flex flex-col gap-1.5">
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{tr('提交银行日期', 'Submitted To Bank Date', "Tarikh Dihantar ke Bank")}</span>
+                          <span className="text-micro uppercase text-slate-500">{tr('提交银行日期', 'Submitted To Bank Date', "Tarikh Dihantar ke Bank")}</span>
                           <DoubleClickEditField
                             type="date"
                             value={formatDateInput(bankApplication.submitted_at)}
@@ -4415,7 +4589,7 @@ function DetailDrawer({
                         </label>
 
                         <label className="flex flex-col gap-1.5">
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{tr('银行跟进日期', 'Bank Follow Up Date', "Tarikh susulan bank")}</span>
+                          <span className="text-micro uppercase text-slate-500">{tr('银行跟进日期', 'Bank Follow Up Date', "Tarikh susulan bank")}</span>
                           <DoubleClickEditField
                             type="date"
                             value={formatDateInput(bankApplication.next_follow_up_at || '')}
@@ -4436,7 +4610,7 @@ function DetailDrawer({
 
                         {bankApplication.status === 'Rejected' && (
                           <div className="flex flex-col gap-1.5 md:col-span-2">
-                            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                            <span className="text-micro uppercase text-slate-500">
                               {tr('拒贷代码（可多个）', 'Reject CODEs (multiple)', "KOD Tolak (berbilang)")}
                             </span>
                             <BankRejectCodesInput
@@ -4461,7 +4635,7 @@ function DetailDrawer({
                               }}
                               ariaLabel={`Update reject code for ${bankApplication.id}`}
                             />
-                            <p className="text-[10px] font-semibold text-slate-500">
+                            <p className="text-caption text-slate-500">
                               {tr(
                                 'CODE 必须先存在 Error Code Database；每个 CODE 会自动关联 Reject Reason。',
                                 'CODEs must exist in Error Code Database; each CODE links its Reject Reason automatically.',
@@ -4474,7 +4648,7 @@ function DetailDrawer({
                         {showOfferFields && (
                           <>
                             <label className="flex flex-col gap-1.5">
-                              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{tr('批核金额', 'Offer Amount', "Amaun Tawaran")}</span>
+                              <span className="text-micro uppercase text-slate-500">{fieldLabel('approvedLoan')}</span>
                               <DoubleClickEditField
                                 type="text"
                                 value={bankApplication.offer_amount}
@@ -4488,7 +4662,24 @@ function DetailDrawer({
                             </label>
 
                             <label className="flex flex-col gap-1.5">
-                              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Interest %</span>
+                              <span className="text-micro uppercase text-slate-500">{fieldLabel('sellingPrice')}</span>
+                              <DoubleClickEditField
+                                type="text"
+                                value={bankApplication.selling_price || ''}
+                                onCommit={(value) => updateBankApplication(bankApplication.id, { selling_price: value })}
+                                normalizeValue={(value) => value.replace(/[^\d.]/g, '')}
+                                placeholder={getBankSellingPrice(application, { ...bankApplication, selling_price: '' }) || '11340'}
+                                emptyText={getBankSellingPrice(application, bankApplication)
+                                  ? tr(`用车价 RM ${getBankSellingPrice(application, bankApplication)}`, `From the deal: RM ${getBankSellingPrice(application, bankApplication)}`, `Dari urusan: RM ${getBankSellingPrice(application, bankApplication)}`)
+                                  : tr('点击填写', 'Click to fill', "Klik untuk mengisi")}
+                                displayClassName={detailDisplayClass}
+                                inputClassName={detailInputClass}
+                                ariaLabel={`Update selling price for ${bankApplication.id}`}
+                              />
+                            </label>
+
+                            <label className="flex flex-col gap-1.5">
+                              <span className="text-micro uppercase text-slate-500">Interest %</span>
                               <DoubleClickEditField
                                 type="text"
                                 value={bankApplication.interest_rate}
@@ -4502,7 +4693,7 @@ function DetailDrawer({
                             </label>
 
                             <label className="flex flex-col gap-1.5">
-                              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{tr('期限（月）', 'Tenure Month', "Bulan Pegangan")}</span>
+                              <span className="text-micro uppercase text-slate-500">{fieldLabel('tenureMonths')}<span className="text-rose-500"> *</span></span>
                               <DoubleClickEditField
                                 type="text"
                                 value={bankApplication.tenure}
@@ -4513,10 +4704,15 @@ function DetailDrawer({
                                 inputClassName={detailInputClass}
                                 ariaLabel={`Update tenure for ${bankApplication.id}`}
                               />
+                              {Number(bankApplication.tenure) > 0 && (
+                                <span className="text-caption text-slate-500">
+                                  {tr(`= ${Math.round(Number(bankApplication.tenure) / 12 * 10) / 10} 年`, `= ${Math.round(Number(bankApplication.tenure) / 12 * 10) / 10} years`, `= ${Math.round(Number(bankApplication.tenure) / 12 * 10) / 10} tahun`)}
+                                </span>
+                              )}
                             </label>
 
                             <label className="flex flex-col gap-1.5">
-                              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{tr('月供', 'Monthly', "Bulanan")}</span>
+                              <span className="text-micro uppercase text-slate-500">{fieldLabel('monthlyInstalment')}<span className="text-rose-500"> *</span></span>
                               <DoubleClickEditField
                                 type="text"
                                 value={bankApplication.monthly_installment}
@@ -4528,6 +4724,65 @@ function DetailDrawer({
                                 ariaLabel={`Update monthly installment for ${bankApplication.id}`}
                               />
                             </label>
+                            <label className="flex flex-col gap-1.5">
+                              <span className="text-micro uppercase text-slate-500">{fieldLabelWith('deposit', OPTIONAL)}</span>
+                              <DoubleClickEditField
+                                type="text"
+                                value={bankApplication.deposit_amount || ''}
+                                onCommit={(value) => updateBankApplication(bankApplication.id, { deposit_amount: value })}
+                                normalizeValue={(value) => value.replace(/[^\d.]/g, '')}
+                                placeholder="500"
+                                emptyText={tr('点击填写', 'Click to fill', "Klik untuk mengisi")}
+                                displayClassName={detailDisplayClass}
+                                inputClassName={detailInputClass}
+                                ariaLabel={`Update deposit for ${bankApplication.id}`}
+                              />
+                            </label>
+
+                            <label className="flex flex-col gap-1.5">
+                              <span className="text-micro uppercase text-slate-500">{fieldLabelWith('plateNumber', OPTIONAL)}</span>
+                              <DoubleClickEditField
+                                type="text"
+                                value={bankApplication.number_plate || ''}
+                                onCommit={(value) => updateBankApplication(bankApplication.id, { number_plate: value })}
+                                normalizeValue={(value) => value.toUpperCase()}
+                                placeholder="PKN 1234"
+                                emptyText={tr('点击填写', 'Click to fill', "Klik untuk mengisi")}
+                                displayClassName={detailDisplayClass}
+                                inputClassName={detailInputClass}
+                                ariaLabel={`Update number plate for ${bankApplication.id}`}
+                              />
+                            </label>
+
+                            <label className="flex flex-col gap-1.5">
+                              <span className="text-micro uppercase text-slate-500">{fieldLabel('engineNumber')}</span>
+                              <DoubleClickEditField
+                                type="text"
+                                value={bankApplication.engine_number || ''}
+                                onCommit={(value) => updateBankApplication(bankApplication.id, { engine_number: value })}
+                                normalizeValue={(value) => value.toUpperCase()}
+                                placeholder="E3X9E-123456"
+                                emptyText={tr('点击填写', 'Click to fill', "Klik untuk mengisi")}
+                                displayClassName={detailDisplayClass}
+                                inputClassName={detailInputClass}
+                                ariaLabel={`Update engine number for ${bankApplication.id}`}
+                              />
+                            </label>
+
+                            <label className="flex flex-col gap-1.5">
+                              <span className="text-micro uppercase text-slate-500">{fieldLabel('chassisNumber')}</span>
+                              <DoubleClickEditField
+                                type="text"
+                                value={bankApplication.chassis_number || ''}
+                                onCommit={(value) => updateBankApplication(bankApplication.id, { chassis_number: value })}
+                                normalizeValue={(value) => value.toUpperCase()}
+                                placeholder="PMKSG1234X0123456"
+                                emptyText={tr('点击填写', 'Click to fill', "Klik untuk mengisi")}
+                                displayClassName={detailDisplayClass}
+                                inputClassName={detailInputClass}
+                                ariaLabel={`Update chassis number for ${bankApplication.id}`}
+                              />
+                            </label>
                           </>
                         )}
                       </div>
@@ -4535,9 +4790,9 @@ function DetailDrawer({
                       <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
                         {reasonUi.showReason && (
                           <label className="flex flex-col gap-1.5">
-                            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{reasonUi.label}</span>
+                            <span className="text-micro uppercase text-slate-500">{reasonUi.label}</span>
                             {bankApplication.status === 'Rejected' && normalizeRejectCodes(bankApplication.reject_code).length > 0 ? (
-                              <div className="min-h-16 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700">
+                              <div className="min-h-16 rounded-control border border-slate-100 bg-slate-50 px-3 py-2 text-footnote text-slate-700">
                                 {getLinkedRejectReason(bankApplication.reject_code, errorCodeDefinitions)}
                               </div>
                             ) : bankApplication.status === 'Rejected' ? (
@@ -4549,7 +4804,7 @@ function DetailDrawer({
                                   status_reason: event.target.value
                                 })}
                                 placeholder={reasonUi.placeholder}
-                                className="min-h-16 resize-none rounded-lg border border-slate-100 bg-white px-3 py-2 text-xs text-slate-700 outline-none focus:ring-1 focus:ring-indigo-100"
+                                className="min-h-16 resize-none rounded-control border border-slate-100 bg-white px-3 py-2 text-footnote text-slate-700 outline-none focus:ring-1 focus:ring-indigo-100"
                                 aria-label={`Update reason for ${bankApplication.id}`}
                               />
                             ) : (
@@ -4560,8 +4815,8 @@ function DetailDrawer({
                                 onCommit={(value) => updateBankApplication(bankApplication.id, { status_reason: value })}
                                 placeholder={reasonUi.placeholder}
                                 emptyText={tr('点击填写', 'Click to fill', "Klik untuk mengisi")}
-                                displayClassName="block min-h-16 rounded-lg bg-slate-50 px-3 py-2 text-left text-xs text-slate-700 transition-colors hover:bg-indigo-50 hover:text-indigo-600"
-                                inputClassName="rounded-lg border border-slate-100 bg-white px-3 py-2 text-xs text-slate-700 outline-none resize-none focus:ring-1 focus:ring-indigo-100"
+                                displayClassName="block min-h-16 rounded-control bg-slate-50 px-3 py-2 text-left text-footnote text-slate-700 transition-colors hover:bg-indigo-50 hover:text-indigo-600"
+                                inputClassName="rounded-control border border-slate-100 bg-white px-3 py-2 text-footnote text-slate-700 outline-none resize-none focus:ring-1 focus:ring-indigo-100"
                                 ariaLabel={`Update reason for ${bankApplication.id}`}
                               />
                             )}
@@ -4569,7 +4824,7 @@ function DetailDrawer({
                         )}
 
                         <label className="flex flex-col gap-1.5">
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{tr('下一步动作', 'Next Action', "Tindakan Seterusnya")}</span>
+                          <span className="text-micro uppercase text-slate-500">{tr('下一步动作', 'Next Action', "Tindakan Seterusnya")}</span>
                           {bankApplication.status === 'Rejected' ? (
                             <select
                               value={bankApplication.reject_next_step || ''}
@@ -4580,7 +4835,7 @@ function DetailDrawer({
                                   next_action: rejectNextStepStoredLabel(nextStep)
                                 });
                               }}
-                              className="min-h-16 rounded-lg border border-slate-100 bg-white px-3 py-2 text-xs font-semibold text-slate-700 outline-none focus:ring-1 focus:ring-indigo-100"
+                              className="min-h-16 rounded-control border border-slate-100 bg-white px-3 py-2 text-footnote text-slate-700 outline-none focus:ring-1 focus:ring-indigo-100"
                               aria-label={`Update reject next step for ${bankApplication.id}`}
                               required
                             >
@@ -4603,7 +4858,7 @@ function DetailDrawer({
 
                         {reasonUi.showBankNotes && (
                         <label className="flex flex-col gap-1.5 md:col-span-2">
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Bank Notes</span>
+                          <span className="text-micro uppercase text-slate-500">Bank Notes</span>
                           <DoubleClickEditField
                             mode="textarea"
                             rows={2}
@@ -4611,8 +4866,8 @@ function DetailDrawer({
                             onCommit={(value) => updateBankApplication(bankApplication.id, { notes: value })}
                             placeholder={tr('调整资料、客户决定、没有 accept offer 的原因...', 'Adjustments, customer decision, reason the offer was not accepted...', "Pelarasan, keputusan pelanggan, sebab tawaran tidak diterima...")}
                             emptyText={tr('点击填写', 'Click to fill', "Klik untuk mengisi")}
-                            displayClassName="block min-h-16 rounded-lg bg-slate-50 px-3 py-2 text-left text-xs text-slate-700 transition-colors hover:bg-indigo-50 hover:text-indigo-600"
-                            inputClassName="rounded-lg border border-slate-100 bg-white px-3 py-2 text-xs text-slate-700 outline-none resize-none focus:ring-1 focus:ring-indigo-100"
+                            displayClassName="block min-h-16 rounded-control bg-slate-50 px-3 py-2 text-left text-footnote text-slate-700 transition-colors hover:bg-indigo-50 hover:text-indigo-600"
+                            inputClassName="rounded-control border border-slate-100 bg-white px-3 py-2 text-footnote text-slate-700 outline-none resize-none focus:ring-1 focus:ring-indigo-100"
                             ariaLabel={`Update bank notes for ${bankApplication.id}`}
                           />
                         </label>
@@ -4625,7 +4880,7 @@ function DetailDrawer({
                   })}
 
                   {editedBankApplications.length === 0 && (
-                    <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/60 px-4 py-8 text-center text-xs text-slate-500">
+                    <div className="rounded-card border border-dashed border-slate-200 bg-slate-50/60 px-4 py-8 text-center text-footnote text-slate-500">
                       {tr('还没有 bank application record。点击 Add Bank 开始记录。', 'No bank application records yet. Click Add Bank to start.', "Tiada rekod permohonan bank lagi. Klik Tambah Bank untuk bermula.")}
                     </div>
                   )}
@@ -4633,200 +4888,24 @@ function DetailDrawer({
               </div>
               )}
 
-              {activeDetailTab === 'settlement' && (
-                <DealSettlementDetailPanel
-                  application={application}
-                  currentStaffName={currentStaffName}
-                  currentStaffRole={currentStaffRole}
-                  vehicleCatalog={vehicleCatalog}
-                  commissionRules={commissionRules}
-                  onSave={onSaveDealFinance}
-                />
-              )}
 
-              {/* Internal comment and activity thread */}
-              {activeDetailTab === 'activity' && (
-              <div id="detail-panel-activity" role="tabpanel" aria-labelledby="detail-tab-activity" data-testid="detail-panel-activity" ref={activityThreadRef} className="scroll-mt-6 space-y-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <h3 className="flex items-center gap-2 text-sm font-bold text-slate-900">
-                      <MessageSquareText className="h-4 w-4 text-indigo-500" />
-                      Internal Comment / Activity Thread
-                    </h3>
-                    <p className="mt-1 text-xs leading-relaxed text-slate-500">
-                      {tr('备注、@同事；状态变更自动写入。', 'Notes, @mentions; status changes auto-logged.', "Nota, @sebutan; perubahan status log automatik.")}
-                    </p>
-                  </div>
-                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-bold text-slate-500">
-                    {activityThread.length} item{activityThread.length === 1 ? '' : 's'}
-                  </span>
-                </div>
-
-                <div className="rounded-xl border border-slate-100 bg-slate-50/70 p-3">
-                  <div className="mb-2 flex flex-wrap items-center gap-2">
-                    <span className="inline-flex items-center gap-1 rounded-full bg-white px-2.5 py-1 text-[11px] font-bold text-slate-500 ring-1 ring-slate-100">
-                      <AtSign className="h-3 w-3" />
-                      {currentStaffName} · {currentStaffRole}
-                    </span>
-                    {canTagAssignedHandler && (
-                      <button
-                        type="button"
-                        onClick={() => setTagHandler((current) => !current)}
-                        aria-pressed={tagHandler}
-                        aria-label={`Tag assigned handler ${assignedHandlerAccount?.name || application?.handler_name || ''}`}
-                        className={`inline-flex h-7 items-center gap-2 rounded-full border py-1 pl-1 pr-2.5 text-[11px] font-bold transition-colors ${
-                          tagHandler
-                            ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                            : 'border-slate-100 bg-white text-slate-500 hover:border-emerald-100 hover:bg-emerald-50 hover:text-emerald-700'
-                        }`}
-                      >
-                        <span className={`flex h-4 w-7 items-center rounded-full p-0.5 transition-colors ${
-                          tagHandler ? 'bg-emerald-600' : 'bg-slate-200'
-                        }`}>
-                          <span className={`h-3 w-3 rounded-full bg-white shadow-sm transition-transform ${
-                            tagHandler ? 'translate-x-3' : 'translate-x-0'
-                          }`} />
-                        </span>
-                        <span>@Handler · {assignedHandlerAccount?.name}</span>
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => setTagAdmin((current) => !current)}
-                      aria-pressed={tagAdmin}
-                      className={`inline-flex h-7 items-center gap-2 rounded-full border py-1 pl-1 pr-2.5 text-[11px] font-bold transition-colors ${
-                        tagAdmin
-                          ? 'border-indigo-200 bg-indigo-50 text-indigo-700'
-                          : 'border-slate-100 bg-white text-slate-500 hover:border-indigo-100 hover:bg-indigo-50 hover:text-indigo-600'
-                      }`}
-                    >
-                      <span className={`flex h-4 w-7 items-center rounded-full p-0.5 transition-colors ${
-                        tagAdmin ? 'bg-indigo-600' : 'bg-slate-200'
-                      }`}>
-                        <span className={`h-3 w-3 rounded-full bg-white shadow-sm transition-transform ${
-                          tagAdmin ? 'translate-x-3' : 'translate-x-0'
-                        }`} />
-                      </span>
-                      <span>@Admin</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setTagSuperAdmin((current) => !current)}
-                      aria-pressed={tagSuperAdmin}
-                      className={`inline-flex h-7 items-center gap-2 rounded-full border py-1 pl-1 pr-2.5 text-[11px] font-bold transition-colors ${
-                        tagSuperAdmin
-                          ? 'border-slate-300 bg-red-800 text-white'
-                          : 'border-slate-100 bg-white text-slate-500 hover:border-slate-200 hover:bg-slate-100 hover:text-slate-900'
-                      }`}
-                    >
-                      <span className={`flex h-4 w-7 items-center rounded-full p-0.5 transition-colors ${
-                        tagSuperAdmin ? 'bg-white/25' : 'bg-slate-200'
-                      }`}>
-                        <span className={`h-3 w-3 rounded-full bg-white shadow-sm transition-transform ${
-                          tagSuperAdmin ? 'translate-x-3' : 'translate-x-0'
-                        }`} />
-                      </span>
-                      <span>@Super Admin</span>
-                    </button>
-                  </div>
-                  <textarea
-                    value={activityDraft}
-                    onChange={(event) => setActivityDraft(event.target.value)}
-                    onKeyDown={handleActivityDraftKeyDown}
-                    placeholder="Write internal note, customer decision, missing info, or tag admin for help..."
-                    className="min-h-20 w-full resize-none rounded-lg border border-slate-100 bg-white px-3 py-2.5 text-xs font-semibold text-slate-700 outline-none focus:ring-1 focus:ring-indigo-100"
-                  />
-                  <div className="mt-2 flex justify-end">
-                    <button
-                      type="button"
-                      onClick={handleSubmitActivityComment}
-                      disabled={!activityDraft.trim()}
-                      className="inline-flex items-center gap-2 rounded-lg bg-red-800 px-3 py-2 text-xs font-bold text-white transition-colors hover:bg-red-900 disabled:bg-slate-200 disabled:text-slate-500"
-                    >
-                      <Plus className="h-3.5 w-3.5" />
-                      Add comment
-                    </button>
-                  </div>
-                </div>
-
-                <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
-                  {activityThread.length === 0 ? (
-                    <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/60 px-4 py-6 text-center">
-                      <History className="mx-auto h-5 w-5 text-slate-300" />
-                      <p className="mt-2 text-xs font-bold text-slate-500">{tr('还没有内部动态', 'No internal activity yet', "Tiada aktiviti dalaman lagi")}</p>
-                      <p className="mt-1 text-[11px] text-slate-500">{tr('状态变更和评论会显示在这里。', 'Status changes and comments will appear here.', "Perubahan status dan ulasan akan dipaparkan di sini.")}</p>
-                    </div>
-                  ) : (
-                    activityThread.map((entry) => {
-                      const isStatusChange = entry.type === 'status_change';
-                      const statusFromConfig = entry.from_status ? STATUS_CONFIG[entry.from_status] : undefined;
-                      const statusFromLabel = entry.from_status ? trLoanStatus(entry.from_status) : '';
-                      const statusToLabel = entry.to_status ? trLoanStatus(entry.to_status) : '';
-                      const statusToConfig = entry.to_status ? STATUS_CONFIG[entry.to_status] : undefined;
-
-                      return (
-                        <div key={entry.id} className="rounded-xl border border-slate-100 bg-white p-3">
-                          <div className="flex items-start gap-3">
-                            <div className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
-                              isStatusChange ? 'bg-amber-50 text-amber-600' : 'bg-indigo-50 text-indigo-600'
-                            }`}>
-                              {isStatusChange ? <History className="h-4 w-4" /> : <MessageSquareText className="h-4 w-4" />}
-                            </div>
-                            <div className="min-w-0 flex-1">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <span className="text-xs font-bold text-slate-800">{entry.staff_name}</span>
-                                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-500">{entry.staff_role}</span>
-                                <span className="text-[11px] font-semibold text-slate-500">{formatActivityTime(entry.created_at)}</span>
-                              </div>
-                              {isStatusChange && entry.from_status && entry.to_status ? (
-                                <div className="mt-2 flex flex-wrap items-center gap-2">
-                                  <span className={`rounded-full border px-2 py-1 text-[11px] font-bold ${statusFromConfig?.bg || 'bg-slate-50'} ${statusFromConfig?.text || 'text-slate-500'} ${statusFromConfig?.border || 'border-slate-100'}`}>
-                                    {statusFromLabel}
-                                  </span>
-                                  <span className="text-[11px] font-bold text-slate-300">{tr('变为', 'to', "kepada")}</span>
-                                  <span className={`rounded-full border px-2 py-1 text-[11px] font-bold ${statusToConfig?.bg || 'bg-slate-50'} ${statusToConfig?.text || 'text-slate-500'} ${statusToConfig?.border || 'border-slate-100'}`}>
-                                    {statusToLabel}
-                                  </span>
-                                </div>
-                              ) : (
-                                <p className="mt-2 whitespace-pre-wrap text-xs leading-relaxed text-slate-600">{entry.body}</p>
-                              )}
-                              {(entry.tagged_roles.length > 0 || entry.tagged_staff_names.length > 0) && (
-                                <div className="mt-2 flex flex-wrap gap-1.5">
-                                  {entry.tagged_roles.map((role) => (
-                                    <span key={role} className="rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] font-bold text-indigo-600 ring-1 ring-indigo-100">@{role}</span>
-                                  ))}
-                                  {entry.tagged_staff_names.map((staffName) => (
-                                    <span key={staffName} className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-bold text-slate-600">@{staffName}</span>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-              </div>
-              )}
 
             </div>
 
             {/* Bottom Sticky Action buttons */}
             <div className="mt-auto grid grid-cols-2 gap-2 border-t border-slate-100/60 bg-slate-50 p-4 sm:grid-cols-4 sm:p-6">
-              {activeDetailTab !== 'settlement' && showUndoControl && (
+              {showUndoControl && (
                 <div className="col-span-2 w-full sm:col-span-4">
                   {showUndoPanel && undoAvailability.allowed ? (
-                    <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 p-3">
-                      <p className="text-xs font-bold text-amber-900">
+                    <div className="mb-3 rounded-card border border-amber-200 bg-amber-50 p-3">
+                      <p className="text-footnote font-semibold text-amber-900">
                         {tr(
                           `撤回 ${getLoanWorkflowActionLabel(undoCheckpoint!.action)}`,
                           `Undo ${getLoanWorkflowActionLabel(undoCheckpoint!.action)}`,
                           `Batalkan ${getLoanWorkflowActionLabel(undoCheckpoint!.action)}`
                         )}
                       </p>
-                      <p className="mt-1 text-xs text-amber-700">
+                      <p className="mt-1 text-footnote text-amber-700">
                         {tr('系统会恢复上一步负责人和任务，通知会自动同步。', 'The previous owner and task will be restored, and notifications will reconcile automatically.', "Pemilik dan tugas sebelumnya akan dipulihkan, dan notifikasi akan diselaraskan secara automatik.")}
                       </p>
                       <textarea
@@ -4836,7 +4915,7 @@ function DetailDrawer({
                         maxLength={500}
                         rows={2}
                         placeholder={tr('填写撤回原因（必填）', 'Undo reason (required)', "Sebab pembatalan (wajib)")}
-                        className="mt-3 w-full resize-none rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs text-slate-700 outline-none focus:ring-2 focus:ring-amber-100"
+                        className="mt-3 w-full resize-none rounded-control border border-amber-200 bg-white px-3 py-2 text-footnote text-slate-700 outline-none focus:ring-2 focus:ring-amber-100"
                       />
                       <div className="mt-2 flex justify-end gap-2">
                         <button
@@ -4845,7 +4924,7 @@ function DetailDrawer({
                             setShowUndoPanel(false);
                             setUndoReason('');
                           }}
-                          className="rounded-lg px-3 py-2 text-xs font-bold text-slate-500 hover:bg-white"
+                          className="rounded-control px-3 py-2 text-callout text-slate-500 hover:bg-white"
                         >
                           {tr('取消', 'Cancel', "Batal")}
                         </button>
@@ -4853,7 +4932,7 @@ function DetailDrawer({
                           type="button"
                           disabled={isSubmitting || undoReason.trim().length < 3}
                           onClick={() => handleSave('UNDO_LAST_ACTION', undoReason)}
-                          className="rounded-lg bg-amber-700 px-3 py-2 text-xs font-bold text-white hover:bg-amber-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+                          className="rounded-control bg-amber-700 px-3 py-2 text-callout text-white hover:bg-amber-800 disabled:cursor-not-allowed disabled:bg-slate-300"
                         >
                           {tr('确认撤回', 'Confirm Undo', "Sahkan Pembatalan")}
                         </button>
@@ -4865,7 +4944,7 @@ function DetailDrawer({
                       disabled={!undoAvailability.allowed || isSubmitting}
                       title={undoAvailability.allowed ? '' : undoBlockedMessage}
                       onClick={() => setShowUndoPanel(true)}
-                      className="mb-2 inline-flex items-center gap-2 rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs font-bold text-amber-700 hover:bg-amber-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-500"
+                      className="mb-2 inline-flex items-center gap-2 rounded-control border border-amber-200 bg-white px-3 py-2 text-callout text-amber-700 hover:bg-amber-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-500"
                     >
                       <RotateCcw className="h-3.5 w-3.5" />
                       {tr('撤回上一步', 'Undo Last Action', "Batalkan Tindakan Terakhir")}
@@ -4874,13 +4953,83 @@ function DetailDrawer({
                 </div>
               )}
 
+              {canShowCancelApplication && showCancelApplicationPanel && (
+                <div data-testid="cancel-application-panel" className="col-span-2 w-full rounded-card border border-rose-200 bg-rose-50 p-3 sm:col-span-4">
+                  <p className="text-footnote font-semibold text-rose-900">
+                    {application.purchase_method === 'Loan'
+                      ? tr('客户撤回这份贷款申请', 'Customer withdraws this loan application', "Pelanggan menarik balik permohonan pinjaman ini")
+                      : tr('取消这份现金申请', 'Cancel this cash application', "Batalkan permohonan tunai ini")}
+                  </p>
+                  {cancelBankApplicationsToWithdraw.length > 0 && (
+                    <p data-testid="cancel-application-bank-notice" className="mt-1 text-footnote text-rose-700">
+                      {tr(
+                        `${cancelBankApplicationsToWithdraw.length} 个银行申请会标记为客户撤回，请通知银行。`,
+                        `${cancelBankApplicationsToWithdraw.length} bank application(s) will be marked as withdrawn by the customer. Inform the bank.`,
+                        `${cancelBankApplicationsToWithdraw.length} permohonan bank akan ditanda sebagai ditarik balik oleh pelanggan. Maklumkan kepada bank.`
+                      )}
+                    </p>
+                  )}
+                  <p className="mt-1 text-footnote text-rose-700">
+                    {application.deal_finance
+                      ? tr('申请会结案为 CANCELLED。这单已有财务记录，佣金与库存要 Super Admin 在 Finance Center 冲销。', 'The application closes as CANCELLED. It already has a finance record, so Super Admin must reverse the commission and release the stock unit in Finance Center.', "Permohonan akan ditutup sebagai CANCELLED. Ia sudah mempunyai rekod kewangan, jadi Pentadbir Super perlu membalikkan komisen dan melepaskan unit stok di Pusat Kewangan.")
+                      : tr('申请会结案为 CANCELLED，之后不能再推进，也不能撤回。', 'The application closes as CANCELLED and cannot be moved forward or undone afterwards.', "Permohonan akan ditutup sebagai CANCELLED dan tidak boleh diteruskan atau dibatalkan selepas itu.")}
+                  </p>
+                  <textarea
+                    autoFocus
+                    value={cancelApplicationReason}
+                    onChange={(event) => setCancelApplicationReason(event.target.value)}
+                    maxLength={500}
+                    rows={2}
+                    aria-label="Cancellation reason"
+                    placeholder={tr('填写取消原因（必填）', 'Cancellation reason (required)', "Sebab pembatalan (wajib)")}
+                    className="mt-3 w-full resize-none rounded-control border border-rose-200 bg-white px-3 py-2 text-footnote text-slate-700 outline-none focus:ring-2 focus:ring-rose-100"
+                  />
+                  <div className="mt-2 flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowCancelApplicationPanel(false);
+                        setCancelApplicationReason('');
+                      }}
+                      className="rounded-control px-3 py-2 text-callout text-slate-500 hover:bg-white"
+                    >
+                      {tr('返回', 'Back', "Kembali")}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isSubmitting || cancelApplicationReason.trim().length < 3}
+                      onClick={() => handleSave('CANCEL_APPLICATION', cancelApplicationReason)}
+                      className="rounded-control bg-rose-700 px-3 py-2 text-callout text-white hover:bg-rose-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+                    >
+                      {tr('确认取消申请', 'Confirm Cancel Application', "Sahkan Pembatalan Permohonan")}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Withdrawal is its own visible button, not a More-menu item:
+                  staff could not find it, and "Cancel" next to it closed the drawer. */}
+              {canShowCancelApplication && !showCancelApplicationPanel && (
+                <button
+                  type="button"
+                  aria-label="Cancel Application"
+                  data-testid="drawer-withdraw-application"
+                  onClick={() => setShowCancelApplicationPanel(true)}
+                  className="min-h-12 rounded-card border border-rose-200 bg-white px-4 py-3 text-center text-callout font-semibold text-rose-600 transition-colors hover:border-rose-300 hover:bg-rose-50"
+                >
+                  {isCashPurchase
+                    ? tr('取消申请', 'Cancel application', 'Batalkan permohonan')
+                    : tr('客户撤回申请', 'Customer withdraws', 'Pelanggan tarik balik')}
+                </button>
+              )}
+
               <button
                 id="drawer-cancel-btn"
                 type="button"
                 onClick={onClose}
-                className="min-h-12 rounded-xl border border-slate-200 bg-white px-4 py-3 text-center text-sm font-semibold text-slate-600 transition-colors hover:border-slate-300 hover:bg-slate-100"
+                className="min-h-12 rounded-card border border-slate-200 bg-white px-4 py-3 text-center text-callout text-slate-600 transition-colors hover:border-slate-300 hover:bg-slate-100"
               >
-                {tr('取消', 'Cancel', "Batal")}
+                {tr('关闭', 'Close', "Tutup")}
               </button>
 
               {secondaryWorkflowActions.length > 0 && (
@@ -4890,13 +5039,13 @@ function DetailDrawer({
                     aria-label={tr('更多操作', 'More actions', "Tindakan lain")}
                     aria-expanded={showMoreActions}
                     onClick={() => setShowMoreActions((current) => !current)}
-                    className="flex min-h-12 w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-100"
+                    className="flex min-h-12 w-full items-center justify-center gap-2 rounded-card border border-slate-200 bg-white px-4 py-3 text-callout text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-100"
                   >
                     <MoreHorizontal className="h-4 w-4" />
                     <span>{tr('更多', 'More', "Lagi")}</span>
                   </button>
                   {showMoreActions && (
-                    <div className="absolute bottom-full left-0 z-30 mb-2 min-w-full overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl shadow-slate-900/10 sm:w-56">
+                    <div className="absolute bottom-full left-0 z-30 mb-2 min-w-full overflow-hidden rounded-card border border-slate-200 bg-white p-1.5 shadow-e3 shadow-slate-900/10 sm:w-56">
                       {secondaryWorkflowActions.map((action) => (
                         <button
                           key={action.key}
@@ -4908,7 +5057,7 @@ function DetailDrawer({
                             setShowMoreActions(false);
                             action.onClick();
                           }}
-                          className="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2.5 text-left text-xs font-bold text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-400"
+                          className="flex w-full items-center justify-between gap-3 rounded-control px-3 py-2.5 text-left text-callout text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-400"
                         >
                           <span>{action.label}</span>
                           <ArrowRight className="h-3.5 w-3.5 text-slate-400" />
@@ -4919,17 +5068,17 @@ function DetailDrawer({
                 </div>
               )}
 
-              {activeDetailTab !== 'settlement' && (canEditAllInformation || canManageBankApplications || canManageDocuments) && (
+              {(canEditAllInformation || canManageBankApplications || canManageDocuments) && (
                 <button
                   id="drawer-save-btn"
                   type="button"
                   onClick={() => handleSave()}
                   disabled={isSubmitting}
-                  className={`flex min-h-12 items-center justify-center gap-2 rounded-xl border px-4 py-3 text-sm font-semibold transition-colors ${
+                  className={`flex min-h-12 items-center justify-center gap-2 rounded-card border px-4 py-3 text-callout transition-colors ${
                     isSubmitting
                       ? 'cursor-wait border-slate-300 bg-slate-300 text-white'
                       : hasUnsavedChanges
-                        ? 'border-red-800 bg-red-800 text-white hover:bg-red-900'
+                        ? 'border-brand bg-brand text-white hover:bg-brand-deep'
                         : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-100'
                   }`}
                 >
@@ -4954,18 +5103,37 @@ function DetailDrawer({
                   title={primaryWorkflowAction.title}
                   onClick={primaryWorkflowAction.onClick}
                   disabled={isSubmitting || primaryWorkflowAction.disabled}
-                  className="col-span-2 flex min-h-12 items-center justify-center gap-2 rounded-xl bg-red-800 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-red-900 disabled:cursor-not-allowed disabled:bg-slate-300 sm:col-span-1"
+                  className="col-span-2 flex min-h-12 items-center justify-center gap-2 rounded-card bg-brand px-4 py-3 text-callout text-white transition-colors hover:bg-brand-deep disabled:cursor-not-allowed disabled:bg-slate-300 sm:col-span-1"
                 >
                   <span>{primaryWorkflowAction.label}</span>
                   <ArrowRight className="h-4 w-4" />
                 </button>
               )}
             </div>
-          </motion.div>
+          </div>
 
+          {application && (
+            <ApplicationActivityChat
+              isOpen={isActivityChatOpen}
+              onOpenChange={setIsActivityChatOpen}
+              entries={application.activity_thread || []}
+              auditLogs={auditLogs}
+              currentStaffName={currentStaffName}
+              composer={activityComposer}
+              formatTime={formatActivityTime}
+            />
+          )}
+
+          {imageViewerDocument && (
+            <DocumentImageViewer
+              src={imageViewerDocument.file_data_url}
+              fileName={imageViewerDocument.file_name}
+              onClose={() => setImageViewerDocument(null)}
+            />
+          )}
         </>
       )}
-    </AnimatePresence>
+    </>
   );
 }
 

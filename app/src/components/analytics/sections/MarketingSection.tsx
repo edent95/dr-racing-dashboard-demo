@@ -4,13 +4,10 @@
  */
 
 import React from 'react';
+import { BarChart3, Link2, MessageCircle, Target } from 'lucide-react';
 import SortableHeader, { type SortDirection, type SortState } from '../../SortableHeader';
 import { tr } from '../../../lib/i18n';
 import { AnalyticsSection, AssetIcon, MetaBar, StatTile, tra, type StatComparison } from './SectionShell';
-import allChannelsIcon from '../../../assets/icons/nav/allChannels.png';
-import analyticsIcon from '../../../assets/icons/nav/analytics.png';
-import missionTargetIcon from '../../../assets/icons/nav/missionTarget.png';
-import whatsappContactIcon from '../../../assets/icons/nav/whatsappContact.png';
 
 type MarketingBreakdown = 'campaign' | 'source' | 'medium' | 'sales' | 'link';
 type MarketingSortKey = 'label' | 'value' | 'percentage';
@@ -87,31 +84,32 @@ function MarketingSection({
     <AnalyticsSection
       id="marketing"
       title={tr('营销表现', 'Marketing', "Pemasaran")}
-      subtitle={tr('点击 / 来源 / 员工引流', 'Clicks / sources / staff', "Klik / sumber / kakitangan")}
-      icon={<AssetIcon src={whatsappContactIcon} />}
+      subtitle={tr('独立访客 / 来源 / 员工引流', 'Unique visitors / sources / staff', "Pelawat unik / sumber / kakitangan")}
+      icon={<AssetIcon icon={MessageCircle} />}
       isOpen={isOpen}
       onToggle={onToggle}
     >
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatTile primary title="WhatsApp Clicks" value={totalClicks} subtitle={tr(`${totalLinks} 条链接中 ${activeLinks} 条启用`, `${activeLinks} active links from ${totalLinks} total links`, `${activeLinks} pautan aktif daripada ${totalLinks} jumlah pautan`)} icon={<AssetIcon src={whatsappContactIcon} />} tone="bg-transparent" comparison={comparisons.totalClicks} />
-        <StatTile title="UTM Campaigns" value={campaignsCount} subtitle={tr(`追踪 ${sourcesCount} 个来源渠道`, `${sourcesCount} source channels tracked`, `${sourcesCount} saluran sumber dijejaki`)} icon={<AssetIcon src={missionTargetIcon} />} tone="bg-transparent" comparison={comparisons.campaignsCount} />
-        <StatTile title="Active Links" value={activeLinks} subtitle={tr(`共 ${totalLinks} 条 WhatsApp 追踪链接`, `${totalLinks} total WhatsApp tracking links`, `${totalLinks} jumlah pautan penjejakan WhatsApp`)} icon={<AssetIcon src={allChannelsIcon} />} tone="bg-transparent" comparison={comparisons.activeLinks} />
-        <StatTile title="Sales Sources" value={salesSourcesCount} subtitle="Sales staff with tracked clicks" icon={<AssetIcon src={analyticsIcon} />} tone="bg-transparent" comparison={comparisons.salesSourcesCount} />
+        <StatTile primary title={tr('WhatsApp 独立访客', 'WhatsApp unique visitors', 'Pelawat unik WhatsApp')} value={totalClicks} subtitle={tr(`${totalLinks} 条链接中 ${activeLinks} 条启用`, `${activeLinks} active links from ${totalLinks} total links`, `${activeLinks} pautan aktif daripada ${totalLinks} jumlah pautan`)} icon={<AssetIcon icon={MessageCircle} />} tone="bg-transparent" comparison={comparisons.totalClicks} />
+        <StatTile title="UTM Campaigns" value={campaignsCount} subtitle={tr(`追踪 ${sourcesCount} 个来源渠道`, `${sourcesCount} source channels tracked`, `${sourcesCount} saluran sumber dijejaki`)} icon={<AssetIcon icon={Target} />} tone="bg-transparent" comparison={comparisons.campaignsCount} />
+        <StatTile title="Active Links" value={activeLinks} subtitle={tr(`共 ${totalLinks} 条 WhatsApp 追踪链接`, `${totalLinks} total WhatsApp tracking links`, `${totalLinks} jumlah pautan penjejakan WhatsApp`)} icon={<AssetIcon icon={Link2} />} tone="bg-transparent" comparison={comparisons.activeLinks} />
+        <StatTile title="Sales Sources" value={salesSourcesCount} subtitle={tr('有访客记录的 Sales', 'Sales staff with tracked visitors', 'Kakitangan jualan dengan pelawat dijejaki')} icon={<AssetIcon icon={BarChart3} />} tone="bg-transparent" comparison={comparisons.salesSourcesCount} />
       </div>
 
-      <section className="rounded-xl border border-slate-100 bg-white shadow-sm">
+      <section className="rounded-card border border-slate-100 bg-white shadow-e1">
         <div className="flex flex-col gap-4 border-b border-slate-100 px-5 py-4 xl:flex-row xl:items-center xl:justify-between">
           <div>
-            <h3 className="text-sm font-bold text-slate-900">{tr('营销表现', 'Marketing Performance', "Prestasi Pemasaran")}</h3>
-            <p className="text-xs text-slate-400">{tr('一张图看活动 / 来源 / 媒介 / 销售 / 单条链接表现', 'One chart for campaign, source, medium, sales, or individual WhatsApp link performance', "Satu carta untuk kempen, sumber, sederhana, jualan atau prestasi pautan WhatsApp individu")}</p>
+            <h3 className="text-headline text-slate-900">{tr('营销表现', 'Marketing Performance', "Prestasi Pemasaran")}</h3>
+            <p className="text-footnote text-slate-400">{tr('一张图看活动 / 来源 / 媒介 / 销售 / 单条链接表现', 'One chart for campaign, source, medium, sales, or individual WhatsApp link performance', "Satu carta untuk kempen, sumber, sederhana, jualan atau prestasi pautan WhatsApp individu")}</p>
           </div>
-          <div className="flex flex-wrap gap-2 rounded-xl bg-slate-100 p-1">
+          <div className="flex flex-wrap gap-2 rounded-card bg-slate-100 p-1">
             {MARKETING_BREAKDOWN_OPTIONS.map((option) => (
               <button
+                aria-pressed={marketingBreakdown === option.value}
                 key={option.value}
                 type="button"
                 onClick={() => onMarketingBreakdownChange(option.value)}
-                className={`rounded-lg px-3 py-2 text-xs font-bold transition-colors ${marketingBreakdown === option.value ? 'bg-white text-indigo-600 shadow-xs' : 'text-slate-500 hover:text-slate-700'}`}
+                className={`rounded-control px-3 py-2 text-footnote font-bold transition-colors ${marketingBreakdown === option.value ? 'bg-white text-indigo-600 shadow-xs' : 'text-slate-500 hover:text-slate-700'}`}
               >
                 {tra(option.label)}
               </button>
@@ -133,17 +131,17 @@ function MarketingSection({
           {visual}
 
           <div className="mt-5 border-t border-slate-100 pt-4">
-            <button type="button" onClick={onToggleDetails} className="inline-flex items-center rounded-lg bg-slate-100 px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-200 hover:text-slate-900">
+            <button type="button" onClick={onToggleDetails} className="inline-flex items-center rounded-control bg-slate-100 px-3 py-2 text-footnote font-bold text-slate-600 transition-colors hover:bg-slate-200 hover:text-slate-900">
               {showDetails ? tr('收起明细', 'Hide Details', "Sembunyikan Butiran") : tr(`显示明细（${rows.length}）`, `Show Details (${rows.length})`, `Tunjukkan Butiran (${rows.length})`)}
             </button>
 
             {showDetails && (
               <div className="mt-4 overflow-x-auto">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-50/75 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                <table className="w-full text-left text-footnote">
+                  <thead className="bg-slate-50/75 text-micro uppercase text-slate-400">
                     <tr>
                       <th className="px-5 py-3"><SortableHeader sortKey="label" label={tra(selectedMarketingBreakdownLabel)} sortState={sortState} onSort={onSort} /></th>
-                      <th className="px-5 py-3"><SortableHeader sortKey="value" label={tra('Clicks')} sortState={sortState} onSort={onSort} defaultDirection="desc" /></th>
+                      <th className="px-5 py-3"><SortableHeader sortKey="value" label={tr('独立访客', 'Unique visitors', 'Pelawat unik')} sortState={sortState} onSort={onSort} defaultDirection="desc" /></th>
                       <th className="px-5 py-3"><SortableHeader sortKey="percentage" label={tra('Share')} sortState={sortState} onSort={onSort} defaultDirection="desc" /></th>
                       <th className="px-5 py-3">{tra('Details')}</th>
                     </tr>
@@ -161,7 +159,7 @@ function MarketingSection({
                       <tr key={row.key}>
                         <td className="px-5 py-4">
                           <p className="font-semibold text-slate-700">{row.label}</p>
-                          <p className="mt-0.5 text-[10px] font-semibold text-slate-400">{row.meta}</p>
+                          <p className="mt-0.5 text-caption text-slate-400">{row.meta}</p>
                         </td>
                         <td className="px-5 py-4 font-mono text-slate-600">{row.value}</td>
                         <td className="px-5 py-4 font-mono text-slate-500">{row.percentage}%</td>
@@ -169,8 +167,8 @@ function MarketingSection({
                           {marketingBreakdown === 'link' ? (
                             <div>
                               <p className="font-semibold text-slate-700">{row.salesName || '-'}</p>
-                              <p className="font-mono text-[10px] text-slate-400">{row.phoneNumber || '-'}</p>
-                              <p className="mt-1 font-mono text-[10px] text-slate-400">{row.latest || tr('还没有点击', 'No clicks yet', "Tiada klik lagi")}</p>
+                              <p className="font-mono text-micro tracking-normal text-slate-400">{row.phoneNumber || '-'}</p>
+                              <p className="mt-1 font-mono text-micro tracking-normal text-slate-400">{row.latest || tr('还没有访客', 'No visitors yet', "Tiada pelawat lagi")}</p>
                             </div>
                           ) : (
                             <span>{row.meta}</span>
@@ -180,7 +178,7 @@ function MarketingSection({
                     ))}
                     {rows.length === 0 && (
                       <tr>
-                        <td colSpan={4} className="px-5 py-10 text-center text-sm text-slate-400">{tr('还没有营销点击数据', 'No marketing click data yet', "Tiada data klik pemasaran lagi")}</td>
+                        <td colSpan={4} className="px-5 py-10 text-center text-body text-slate-400">{tr('还没有营销访客数据', 'No marketing visitor data yet', "Tiada data pelawat pemasaran lagi")}</td>
                       </tr>
                     )}
                   </tbody>

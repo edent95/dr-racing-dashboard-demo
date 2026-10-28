@@ -14,8 +14,9 @@ import {
   X
 } from 'lucide-react';
 import drRacingLogo from '../assets/dr-racing-logo-256.png';
-import { USP } from '../../shared/seoContent.mjs';
+import { HOME_TITLE_MS, USP, WHATSAPP_URL } from '../../shared/seoContent.mjs';
 import PublicStockSection from './PublicStockSection';
+import { PublicSeoFooter, readStoredSeoLanguage, storeSeoLanguage } from './publicSeoShared';
 
 type LandingLanguage = 'en' | 'zh' | 'ms';
 
@@ -172,23 +173,27 @@ const content = {
   }
 } as const;
 
-const applicationHref = '/customer-intake?utm_source=website&utm_medium=organic&utm_campaign=seo_home';
+const applicationHref = WHATSAPP_URL;
 
 export default function PublicSeoLandingPage() {
-  const [language, setLanguage] = useState<LandingLanguage>('en');
+  // Malay first: every keyword this site can win is Malay, and the crawler
+  // body served by server.mjs is Malay — the default render must match it.
+  // A visitor's own choice is shared with the stock pages.
+  const [language, setLanguage] = useState<LandingLanguage>(() => readStoredSeoLanguage());
   const [menuOpen, setMenuOpen] = useState(false);
   const [openFaq, setOpenFaq] = useState(0);
   const copy = content[language];
 
   useEffect(() => {
+    storeSeoLanguage(language);
     document.documentElement.lang = language === 'zh' ? 'zh-MY' : language === 'ms' ? 'ms-MY' : 'en-MY';
     document.documentElement.removeAttribute('data-theme');
     document.documentElement.style.colorScheme = 'light';
     document.title = language === 'zh'
-      ? 'DR Racing 摩托贷款申请 | 马来西亚摩托融资协助'
+      ? 'DR Racing 摩托贷款申请 | 槟城 Simpang Ampat 摩托分期'
       : language === 'ms'
-        ? 'Pembiayaan Motosikal DR Racing Malaysia | Mohon Dalam Talian'
-        : 'DR Racing Motorcycle Financing Malaysia | Apply Online';
+        ? HOME_TITLE_MS
+        : 'Motorcycle Loan Simpang Ampat, Penang | DR Racing';
   }, [language]);
 
   return (
@@ -207,7 +212,7 @@ export default function PublicSeoLandingPage() {
           <button className="seo-language" type="button" onClick={() => setLanguage(language === 'en' ? 'zh' : language === 'zh' ? 'ms' : 'en')} aria-label={language === 'zh' ? '切换语言' : language === 'ms' ? 'Tukar bahasa' : 'Change language'}>
             <Languages aria-hidden="true" /> {language === 'en' ? '中文' : language === 'zh' ? 'BM' : 'EN'}
           </button>
-          <a className="seo-button seo-button-small" href={applicationHref}>{copy.apply}</a>
+          <a className="seo-button seo-button-small" href={applicationHref} target="_blank" rel="noopener noreferrer">{copy.apply}</a>
           <button className="seo-menu" type="button" onClick={() => setMenuOpen(!menuOpen)} aria-label="Toggle menu">
             {menuOpen ? <X /> : <Menu />}
           </button>
@@ -223,7 +228,7 @@ export default function PublicSeoLandingPage() {
               <h1>{copy.titleLead}<span>{copy.titleAccent}</span></h1>
               <p className="seo-hero-text">{copy.hero}</p>
               <div className="seo-hero-actions">
-                <a className="seo-button" href={applicationHref}>{copy.heroPrimary}<ArrowRight aria-hidden="true" /></a>
+                <a className="seo-button" href={applicationHref} target="_blank" rel="noopener noreferrer">{copy.heroPrimary}<ArrowRight aria-hidden="true" /></a>
                 <a className="seo-text-link" href="#how-it-works">{copy.heroSecondary}<ChevronDown aria-hidden="true" /></a>
               </div>
               <ul className="seo-trust-row">
@@ -255,7 +260,7 @@ export default function PublicSeoLandingPage() {
                 <ol>
                   {copy.cardSteps.map((step, index) => <li key={step}><span>{index + 1}</span>{step}</li>)}
                 </ol>
-                <a className="seo-button seo-button-full" href={applicationHref}>{copy.cardCta}<ArrowRight aria-hidden="true" /></a>
+                <a className="seo-button seo-button-full" href={applicationHref} target="_blank" rel="noopener noreferrer">{copy.cardCta}<ArrowRight aria-hidden="true" /></a>
               </div>
             </div>
           </div>
@@ -311,7 +316,7 @@ export default function PublicSeoLandingPage() {
               <h2>{copy.whyTitle}</h2>
               <p>{copy.whyBody}</p>
               <ul>{copy.whyPoints.map((point) => <li key={point}><Check aria-hidden="true" />{point}</li>)}</ul>
-              <a className="seo-text-link seo-text-link-red" href={applicationHref}>{copy.heroPrimary}<ArrowRight aria-hidden="true" /></a>
+              <a className="seo-text-link seo-text-link-red" href={applicationHref} target="_blank" rel="noopener noreferrer">{copy.heroPrimary}<ArrowRight aria-hidden="true" /></a>
             </div>
           </div>
         </section>
@@ -338,18 +343,12 @@ export default function PublicSeoLandingPage() {
         <section className="seo-final">
           <div className="seo-shell seo-final-inner">
             <div><h2>{copy.finalTitle}</h2><p>{copy.finalBody}</p></div>
-            <a className="seo-button seo-button-white" href={applicationHref}>{copy.finalCta}<ArrowRight aria-hidden="true" /></a>
+            <a className="seo-button seo-button-white" href={applicationHref} target="_blank" rel="noopener noreferrer">{copy.finalCta}<ArrowRight aria-hidden="true" /></a>
           </div>
         </section>
       </main>
 
-      <footer className="seo-footer">
-        <div className="seo-shell seo-footer-main">
-          <div><img src={drRacingLogo} alt="DR Racing" width="256" height="201" /><p>{copy.footer}</p></div>
-          <div className="seo-footer-links"><a href="https://bo.dr-racing.com/">{copy.staff}</a></div>
-        </div>
-        <div className="seo-shell seo-footer-bottom"><p>© {new Date().getFullYear()} DR Racing. All rights reserved.</p><p>{copy.disclaimer}</p></div>
-      </footer>
+      <PublicSeoFooter language={language} disclaimer={copy.disclaimer} />
     </div>
   );
 }

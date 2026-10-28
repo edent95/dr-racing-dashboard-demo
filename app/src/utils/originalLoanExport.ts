@@ -10,6 +10,7 @@
 import type { BankApplication, BankApplicationStatus, LoanApplication } from '../types';
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 
+import { malaysiaDate } from '../../shared/malaysiaDate.mjs';
 const ORIGINAL_LOAN_TEMPLATE_URL = '/templates/dr-loan-application-original-format.xlsx';
 
 export const ORIGINAL_LOAN_EXPORT_HEADERS = [
@@ -51,9 +52,9 @@ const BANK_EXPORT_COLUMNS = [
 
 const BANK_STATUS_LABELS: Record<BankApplicationStatus, string> = {
   Draft: '',
-  Submitted: 'PENDING',
+  Submitted: 'IN PROCESS',
   'Pending Review': 'IN PROCESS',
-  'Need More Info': 'FOLLOW UP',
+  'Need More Info': 'PENDING DOC',
   Rejected: 'REJECT',
   Approved: 'APPROVE',
   Cancelled: 'CANCELLED'
@@ -206,7 +207,7 @@ export const downloadOriginalLoanFormat = async (applications: LoanApplication[]
 
   const templateBytes = await templateResponse.arrayBuffer();
   const workbookBytes = buildOriginalLoanExportWorkbook(applications, templateBytes);
-  const stamp = new Date().toISOString().slice(0, 10);
+  const stamp = malaysiaDate();
   const blob = new Blob(
     [workbookBytes],
     { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }

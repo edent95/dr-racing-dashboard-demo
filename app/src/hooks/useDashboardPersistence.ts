@@ -14,7 +14,6 @@ type DashboardPersistenceValues = Pick<
   | 'rawCustomerLeads'
   | 'errorCodeDefinitions'
   | 'roleAccounts'
-  | 'rolePermissions'
   | 'roleNavAccess'
   | 'defaultAvatarLibrary'
   | 'whatsAppTrackingLinks'
@@ -22,7 +21,6 @@ type DashboardPersistenceValues = Pick<
   | 'whatsAppDefaultMessage'
   | 'customerIntakeShortLinks'
   | 'customMissions'
-  | 'rewardTeams'
   | 'approvalRequests'
   | 'calendarNotes'
   | 'notifications'
@@ -53,7 +51,8 @@ const MAX_LOCAL_STORAGE_VALUE_LENGTH = 2_000_000;
 const LARGE_COLLECTION_CACHE_KEYS = new Set<DashboardLocalStorageKey>([
   'applications',
   'rawCustomerLeads',
-  'auditLogs'
+  'auditLogs',
+  'whatsAppTrackingClicks'
 ]);
 
 const DASHBOARD_LOCAL_STORAGE_KEYS: Record<DashboardLocalStorageKey, DashboardLocalStorageConfig> = {
@@ -61,7 +60,6 @@ const DASHBOARD_LOCAL_STORAGE_KEYS: Record<DashboardLocalStorageKey, DashboardLo
   rawCustomerLeads: { key: 'raw_customer_leads' },
   errorCodeDefinitions: { key: 'loan_error_code_definitions' },
   roleAccounts: { key: 'loan_role_accounts' },
-  rolePermissions: { key: 'role_permissions' },
   roleNavAccess: { key: 'role_nav_access' },
   defaultAvatarLibrary: { key: 'staff_default_avatars' },
   whatsAppTrackingLinks: { key: 'whatsapp_tracking_links' },
@@ -69,7 +67,6 @@ const DASHBOARD_LOCAL_STORAGE_KEYS: Record<DashboardLocalStorageKey, DashboardLo
   whatsAppDefaultMessage: { key: 'whatsapp_default_message', rawString: true },
   customerIntakeShortLinks: { key: 'customer_intake_short_links' },
   customMissions: { key: 'custom_missions' },
-  rewardTeams: { key: 'reward_teams' },
   approvalRequests: { key: 'approval_requests' },
   calendarNotes: { key: 'calendar_notes' },
   notifications: { key: 'dashboard_notifications' },
@@ -169,38 +166,45 @@ export function useDashboardPersistence({
   const pendingSaveOverridesRef = useRef<Partial<DashboardState>>({});
   const pendingSaveTimerRef = useRef<number | null>(null);
   const pendingSaveResolversRef = useRef<Array<(saved: boolean) => void>>([]);
+  // Fill non-overridden keys from the LATEST rendered values. A handler that
+  // awaits and then persists holds a persistDashboardState (and flush timer)
+  // from an older render; reading that render's `values` would write rows
+  // other staff changed meanwhile back over the newer server copy.
+  const latestValuesRef = useRef(values);
+  latestValuesRef.current = values;
 
-  const createDashboardState = useCallback((overrides: Partial<DashboardState> = {}): DashboardState => ({
-    applications: overrides.applications || values.applications,
-    rawCustomerLeads: overrides.rawCustomerLeads || values.rawCustomerLeads,
-    errorCodeDefinitions: overrides.errorCodeDefinitions || values.errorCodeDefinitions,
-    roleAccounts: overrides.roleAccounts || values.roleAccounts,
-    rolePermissions: overrides.rolePermissions || values.rolePermissions,
-    roleNavAccess: overrides.roleNavAccess || values.roleNavAccess,
-    defaultAvatarLibrary: overrides.defaultAvatarLibrary || values.defaultAvatarLibrary,
-    whatsAppTrackingLinks: overrides.whatsAppTrackingLinks || values.whatsAppTrackingLinks,
-    whatsAppTrackingClicks: overrides.whatsAppTrackingClicks || values.whatsAppTrackingClicks,
-    whatsAppDefaultMessage: overrides.whatsAppDefaultMessage ?? values.whatsAppDefaultMessage,
-    customerIntakeShortLinks: overrides.customerIntakeShortLinks || values.customerIntakeShortLinks,
-    customMissions: overrides.customMissions || values.customMissions,
-    rewardTeams: overrides.rewardTeams || values.rewardTeams,
-    approvalRequests: overrides.approvalRequests || values.approvalRequests,
-    calendarNotes: overrides.calendarNotes || values.calendarNotes,
-    notifications: overrides.notifications || values.notifications,
-    auditLogs: overrides.auditLogs || values.auditLogs,
-    vehicleTags: overrides.vehicleTags || values.vehicleTags,
-    vehicleBrandTags: overrides.vehicleBrandTags || values.vehicleBrandTags,
-    vehicleCatalog: overrides.vehicleCatalog || values.vehicleCatalog,
-    vehicleCategories: overrides.vehicleCategories || values.vehicleCategories,
-    vehicleBrandLogos: overrides.vehicleBrandLogos || values.vehicleBrandLogos,
-    financeProfiles: overrides.financeProfiles || values.financeProfiles,
-    commissionRules: overrides.commissionRules || values.commissionRules,
-    attendancePolicy: overrides.attendancePolicy || values.attendancePolicy,
-    channelMarketingSpend: overrides.channelMarketingSpend || values.channelMarketingSpend,
-    bankDefinitions: overrides.bankDefinitions || values.bankDefinitions,
-    marketingTagRelationships: overrides.marketingTagRelationships || values.marketingTagRelationships,
-    tagNormalizationRules: overrides.tagNormalizationRules || values.tagNormalizationRules
-  }), [values]);
+  const createDashboardState = useCallback((overrides: Partial<DashboardState> = {}): DashboardState => {
+    const values = latestValuesRef.current;
+    return {
+      applications: overrides.applications || values.applications,
+      rawCustomerLeads: overrides.rawCustomerLeads || values.rawCustomerLeads,
+      errorCodeDefinitions: overrides.errorCodeDefinitions || values.errorCodeDefinitions,
+      roleAccounts: overrides.roleAccounts || values.roleAccounts,
+      roleNavAccess: overrides.roleNavAccess || values.roleNavAccess,
+      defaultAvatarLibrary: overrides.defaultAvatarLibrary || values.defaultAvatarLibrary,
+      whatsAppTrackingLinks: overrides.whatsAppTrackingLinks || values.whatsAppTrackingLinks,
+      whatsAppTrackingClicks: overrides.whatsAppTrackingClicks || values.whatsAppTrackingClicks,
+      whatsAppDefaultMessage: overrides.whatsAppDefaultMessage ?? values.whatsAppDefaultMessage,
+      customerIntakeShortLinks: overrides.customerIntakeShortLinks || values.customerIntakeShortLinks,
+      customMissions: overrides.customMissions || values.customMissions,
+      approvalRequests: overrides.approvalRequests || values.approvalRequests,
+      calendarNotes: overrides.calendarNotes || values.calendarNotes,
+      notifications: overrides.notifications || values.notifications,
+      auditLogs: overrides.auditLogs || values.auditLogs,
+      vehicleTags: overrides.vehicleTags || values.vehicleTags,
+      vehicleBrandTags: overrides.vehicleBrandTags || values.vehicleBrandTags,
+      vehicleCatalog: overrides.vehicleCatalog || values.vehicleCatalog,
+      vehicleCategories: overrides.vehicleCategories || values.vehicleCategories,
+      vehicleBrandLogos: overrides.vehicleBrandLogos || values.vehicleBrandLogos,
+      financeProfiles: overrides.financeProfiles || values.financeProfiles,
+      commissionRules: overrides.commissionRules || values.commissionRules,
+      attendancePolicy: overrides.attendancePolicy || values.attendancePolicy,
+      channelMarketingSpend: overrides.channelMarketingSpend || values.channelMarketingSpend,
+      bankDefinitions: overrides.bankDefinitions || values.bankDefinitions,
+      marketingTagRelationships: overrides.marketingTagRelationships || values.marketingTagRelationships,
+      tagNormalizationRules: overrides.tagNormalizationRules || values.tagNormalizationRules
+    };
+  }, []);
 
   const queueDashboardStateSave = useCallback((dashboardState: DashboardState) => {
     firebaseSaveQueueRef.current = firebaseSaveQueueRef.current

@@ -4,7 +4,7 @@
  */
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { FileUp, LockKeyhole, MessageCircle, Plus, UserCheck, X } from 'lucide-react';
+import { Copy, Database, FileUp, LockKeyhole, MessageCircle, Phone, Plus, Search, UserCheck, UsersRound, X, type LucideIcon } from 'lucide-react';
 import { CustomerRawMatch, CustomerRiskField, RawCustomerChannel, RawCustomerLead, RoleAccount, STATUS_CONFIG } from '../types';
 import StaffNameBadge from './StaffNameBadge';
 import SortableHeader, { compareSortValues, getNextSortState, SortDirection, SortState } from './SortableHeader';
@@ -14,13 +14,7 @@ import { useDebouncedValue } from '../utils/tableUx';
 import { normalizeMalaysiaPhoneDigits as normalizePhoneDigits } from '../utils/malaysiaPhone';
 import { parseTikTokLeadCsv } from '../utils/rawLeadEntry';
 import { tr, trFollowUpStatus } from '../lib/i18n';
-import claimedLeadsIcon from '../assets/icons/nav/claimedLeads.png';
-import duplicatePhonesIcon from '../assets/icons/nav/duplicatePhones.png';
-import inCustomersIcon from '../assets/icons/nav/inCustomers.png';
-import publicLeadsIcon from '../assets/icons/nav/publicLeads.png';
-import searchIcon from '../assets/icons/nav/search.png';
-import totalLeadsIcon from '../assets/icons/nav/totalLeads.png';
-import uniquePhonesIcon from '../assets/icons/nav/uniquePhones.png';
+import { fieldLabel } from '../data/fieldLabels';
 
 interface RawCustomerDatabaseProps {
   rawCustomers: RawCustomerLead[];
@@ -29,6 +23,8 @@ interface RawCustomerDatabaseProps {
   currentStaffName: string;
   currentStaffRole: RoleAccount['role'];
   canImportLeads: boolean;
+  // Role Access → Lead Pool → Add a lead by hand.
+  canAddLead?: boolean;
   onImportLeads: (leads: RawCustomerLead[]) => void;
   onAddLead: (lead: RawCustomerLead) => void;
   onOpenWhatsApp: (lead: RawCustomerLead, target: 'api' | 'web') => void;
@@ -70,8 +66,8 @@ const formatCompactReceivedAt = (value: string) => {
   return `${day} / ${month} / ${year} · ${time}`;
 };
 
-function StatIcon({ src }: { src: string }) {
-  return <img src={src} alt="" aria-hidden="true" className="h-12 w-12 shrink-0 object-contain" />;
+function StatIcon({ icon: Icon, className = 'text-slate-500' }: { icon: LucideIcon; className?: string }) {
+  return <Icon aria-hidden="true" className={`h-7 w-7 shrink-0 ${className}`} strokeWidth={1.75} />;
 }
 
 export default function RawCustomerDatabase({
@@ -81,6 +77,7 @@ export default function RawCustomerDatabase({
   currentStaffName,
   currentStaffRole,
   canImportLeads,
+  canAddLead = true,
   onImportLeads,
   onAddLead,
   onOpenWhatsApp
@@ -364,7 +361,7 @@ export default function RawCustomerDatabase({
         />
 
         {isExpanded && (
-          <div className="toggle-pop absolute left-0 top-full z-30 mt-1 inline-flex w-max min-w-44 flex-col items-stretch gap-0.5 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg shadow-slate-200/60">
+          <div className="toggle-pop absolute left-0 top-full z-30 mt-1 inline-flex w-max min-w-44 flex-col items-stretch gap-0.5 rounded-card border border-slate-200 bg-white p-1.5 shadow-e2 shadow-slate-200/60">
             {options.map((option) => {
               const isActive = option.value === selectedValue;
 
@@ -383,7 +380,7 @@ export default function RawCustomerDatabase({
                       }));
                     }}
                     label={option.label}
-                    className={`w-full rounded-lg ${isActive ? 'bg-emerald-50/70' : 'hover:bg-slate-50'}`}
+                    className={`w-full rounded-control ${isActive ? 'bg-emerald-50/70' : 'hover:bg-slate-50'}`}
                   />
                 </React.Fragment>
               );
@@ -433,9 +430,7 @@ export default function RawCustomerDatabase({
     }
 
     const now = new Date().toISOString();
-    const uniquePart = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-      ? crypto.randomUUID().replace(/-/g, '').slice(0, 12).toUpperCase()
-      : `${Date.now()}${Math.random().toString(36).slice(2, 7)}`.toUpperCase();
+    const uniquePart = crypto.randomUUID().replace(/-/g, '').slice(0, 12).toUpperCase();
     const lead: RawCustomerLead = {
       id: `RAW-MANUAL-${uniquePart}`,
       channel: manualDraft.channel,
@@ -479,8 +474,8 @@ export default function RawCustomerDatabase({
     <div id="raw-customer-database-page" className="space-y-6">
       <section className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div className="space-y-1">
-          <h2 className="text-xl font-bold tracking-tight text-slate-900">{tr('潜在客户名单', 'Lead Pool', "Kumpulan Prospek")}</h2>
-          <p className="max-w-3xl text-xs font-light leading-relaxed text-slate-500">
+          <h2 className="text-title-2 text-slate-900">{tr('潜在客户名单', 'Lead Pool', "Kumpulan Prospek")}</h2>
+          <p className="max-w-3xl text-footnote font-normal leading-relaxed text-slate-500">
             {tr('双击电话号码就会打开 WhatsApp，并把客户交给你跟进。', 'Double-click a phone number to assign the lead to you and open WhatsApp.', "Klik dua kali nombor telefon untuk memberikan prospek kepada anda dan buka WhatsApp.")}
           </p>
         </div>
@@ -493,132 +488,135 @@ export default function RawCustomerDatabase({
             className="hidden"
             onChange={handleFileChange}
           />
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={!canImportLeads}
-            className="inline-flex items-center justify-center gap-2 rounded-lg bg-red-800 px-4 py-2 text-xs font-bold text-white transition-colors hover:bg-red-900 disabled:bg-slate-200 disabled:text-slate-400"
-          >
-            <FileUp className="h-4 w-4" />
-            {tr('导入 TikTok CSV', 'Import TikTok CSV', "Import TikTok CSV")}
-          </button>
-          <button
-            type="button"
-            onClick={() => setShowManualEntry(true)}
-            className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-xs font-bold text-white transition-colors hover:bg-slate-700"
-          >
-            <Plus className="h-4 w-4" />
-            {tr('手动新增', 'Add Lead', "Tambah prospek")}
-          </button>
+          {canImportLeads && (
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="inline-flex items-center justify-center gap-2 rounded-control bg-brand px-4 py-2 text-footnote font-bold text-white transition-colors hover:bg-brand-deep disabled:bg-slate-200 disabled:text-slate-400"
+            >
+              <FileUp className="h-4 w-4" />
+              {tr('导入 TikTok CSV', 'Import TikTok CSV', "Import TikTok CSV")}
+            </button>
+          )}
+          {canAddLead && (
+            <button
+              type="button"
+              onClick={() => setShowManualEntry(true)}
+              className="inline-flex items-center justify-center gap-2 rounded-control bg-slate-900 px-4 py-2 text-footnote font-bold text-white transition-colors hover:bg-slate-700"
+            >
+              <Plus className="h-4 w-4" />
+              {tr('手动新增', 'Add Lead', "Tambah prospek")}
+            </button>
+          )}
           <div className="relative self-start md:self-auto">
             <span className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400">
-              <img src={searchIcon} alt="" aria-hidden="true" className="h-5 w-5 object-contain" />
+              <Search aria-hidden="true" className="h-5 w-5" strokeWidth={1.75} />
             </span>
             <input
               type="text"
               value={searchTerm}
               onChange={(event) => setSearchTerm(event.target.value)}
               placeholder={tr('搜索客户名单、电话、客户...', 'Search lead, phone, customer...', "Cari prospek, telefon, pelanggan...")}
-              className="w-80 rounded-lg border border-slate-100 bg-white py-2 pl-9 pr-4 text-xs outline-none transition-all focus:bg-slate-50 focus:ring-1 focus:ring-indigo-100"
+              className="w-80 rounded-control border border-slate-100 bg-white py-2 pl-9 pr-4 text-footnote outline-none transition-all focus:bg-slate-50 focus:ring-1 focus:ring-indigo-100"
             />
           </div>
         </div>
       </section>
 
       {importMessage && (
-        <p className="rounded-lg bg-red-800 px-4 py-2 text-xs font-semibold text-white">{importMessage}</p>
+        <p className="rounded-control bg-brand px-4 py-2 text-footnote text-white">{importMessage}</p>
       )}
 
       {showManualEntry && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4" role="dialog" aria-modal="true" aria-label={tr('手动新增潜在客户', 'Add lead manually', "Tambah prospek secara manual")}>
-          <form onSubmit={handleManualSubmit} className="w-full max-w-2xl rounded-2xl bg-white p-5 shadow-2xl">
+          <form onSubmit={handleManualSubmit} className="w-full max-w-2xl rounded-panel bg-white p-5 shadow-e3">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <h3 className="text-base font-bold text-slate-900">{tr('手动新增潜在客户', 'Add Lead Manually', "Tambah prospek Secara Manual")}</h3>
-                <p className="mt-1 text-xs text-slate-500">
+                <h3 className="text-headline text-slate-900">{tr('手动新增潜在客户', 'Add Lead Manually', "Tambah prospek Secara Manual")}</h3>
+                <p className="mt-1 text-footnote text-slate-500">
                   {currentStaffRole === 'Sales'
                     ? tr('新增后只会出现在你的私人名单。', 'This lead will be added to your private list.', "Prospek ini akan ditambahkan ke senarai peribadi anda.")
                     : tr('新增后会进入未分配名单。', 'This lead will be added to the unassigned pool.', "Prospek ini akan ditambah ke senarai belum ditugaskan.")}
                 </p>
               </div>
-              <button type="button" onClick={() => setShowManualEntry(false)} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label={tr('关闭', 'Close', "Tutup")}><X className="h-4 w-4" /></button>
+              <button type="button" onClick={() => setShowManualEntry(false)} className="rounded-control p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label={tr('关闭', 'Close', "Tutup")}><X className="h-4 w-4" /></button>
             </div>
 
             <div className="mt-5 grid gap-3 md:grid-cols-2">
-              <label className="space-y-1 text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                {tr('姓名', 'Name', "Nama")} <span className="text-red-700">*</span>
-                <input value={manualDraft.name} onChange={(event) => setManualDraft((draft) => ({ ...draft, name: event.target.value }))} className="mt-1 h-10 w-full rounded-lg bg-slate-50 px-3 text-xs font-normal normal-case tracking-normal text-slate-800 outline-none ring-1 ring-slate-100 focus:ring-red-100" autoFocus />
+              <label className="space-y-1 text-micro uppercase text-slate-500">
+                {fieldLabel('customerName')} <span className="text-brand-ink">*</span>
+                <input value={manualDraft.name} onChange={(event) => setManualDraft((draft) => ({ ...draft, name: event.target.value }))} className="mt-1 h-10 w-full rounded-control bg-slate-50 px-3 text-footnote font-normal normal-case tracking-normal text-slate-800 outline-none ring-1 ring-slate-100 focus:ring-brand-100" autoFocus />
               </label>
-              <label className="space-y-1 text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                {tr('电话号码', 'Phone Number', "Nombor Telefon")} <span className="text-red-700">*</span>
-                <input value={manualDraft.phone_no} onChange={(event) => setManualDraft((draft) => ({ ...draft, phone_no: event.target.value }))} className="mt-1 h-10 w-full rounded-lg bg-slate-50 px-3 text-xs font-normal normal-case tracking-normal text-slate-800 outline-none ring-1 ring-slate-100 focus:ring-red-100" inputMode="tel" />
+              <label className="space-y-1 text-micro uppercase text-slate-500">
+                {fieldLabel('phoneNumber')} <span className="text-brand-ink">*</span>
+                <input value={manualDraft.phone_no} onChange={(event) => setManualDraft((draft) => ({ ...draft, phone_no: event.target.value }))} className="mt-1 h-10 w-full rounded-control bg-slate-50 px-3 text-footnote font-normal normal-case tracking-normal text-slate-800 outline-none ring-1 ring-slate-100 focus:ring-brand-100" inputMode="tel" />
               </label>
-              <label className="space-y-1 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+              <label className="space-y-1 text-micro uppercase text-slate-500">
                 {tr('渠道', 'Channel', "Saluran")}
-                <ToggleOptionGroup value={manualDraft.channel} onChange={(value) => setManualDraft((draft) => ({ ...draft, channel: value as RawCustomerChannel }))} ariaLabel={tr('渠道', 'Channel', "Saluran")} className="mt-1 h-10 w-full rounded-lg bg-slate-50 ring-1 ring-slate-100" options={(['TikTok', 'Facebook', 'Instagram', 'Google', 'Walk-in', 'Other'] as RawCustomerChannel[]).map((channel) => ({ value: channel, label: channel }))} />
+                <ToggleOptionGroup value={manualDraft.channel} onChange={(value) => setManualDraft((draft) => ({ ...draft, channel: value as RawCustomerChannel }))} ariaLabel={tr('渠道', 'Channel', "Saluran")} className="mt-1 h-10 w-full rounded-control bg-slate-50 ring-1 ring-slate-100" options={(['TikTok', 'Facebook', 'Instagram', 'Google', 'Walk-in', 'Other'] as RawCustomerChannel[]).map((channel) => ({ value: channel, label: channel }))} />
               </label>
-              <label className="space-y-1 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+              <label className="space-y-1 text-micro uppercase text-slate-500">
                 {tr('用户名', 'Username', "Nama pengguna")}
-                <input value={manualDraft.username} onChange={(event) => setManualDraft((draft) => ({ ...draft, username: event.target.value }))} className="mt-1 h-10 w-full rounded-lg bg-slate-50 px-3 text-xs font-normal normal-case tracking-normal text-slate-800 outline-none ring-1 ring-slate-100 focus:ring-red-100" />
+                <input value={manualDraft.username} onChange={(event) => setManualDraft((draft) => ({ ...draft, username: event.target.value }))} className="mt-1 h-10 w-full rounded-control bg-slate-50 px-3 text-footnote font-normal normal-case tracking-normal text-slate-800 outline-none ring-1 ring-slate-100 focus:ring-brand-100" />
               </label>
-              <label className="space-y-1 text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                IC
-                <input value={manualDraft.ic_no} onChange={(event) => setManualDraft((draft) => ({ ...draft, ic_no: event.target.value }))} className="mt-1 h-10 w-full rounded-lg bg-slate-50 px-3 text-xs font-normal normal-case tracking-normal text-slate-800 outline-none ring-1 ring-slate-100 focus:ring-red-100" />
+              <label className="space-y-1 text-micro uppercase text-slate-500">
+                {fieldLabel('icNumber')}
+                <input value={manualDraft.ic_no} onChange={(event) => setManualDraft((draft) => ({ ...draft, ic_no: event.target.value }))} className="mt-1 h-10 w-full rounded-control bg-slate-50 px-3 text-footnote font-normal normal-case tracking-normal text-slate-800 outline-none ring-1 ring-slate-100 focus:ring-brand-100" />
               </label>
-              <label className="space-y-1 text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                {tr('银行户口', 'Bank Account', "Akaun Bank")}
-                <input value={manualDraft.account_number} onChange={(event) => setManualDraft((draft) => ({ ...draft, account_number: event.target.value }))} className="mt-1 h-10 w-full rounded-lg bg-slate-50 px-3 text-xs font-normal normal-case tracking-normal text-slate-800 outline-none ring-1 ring-slate-100 focus:ring-red-100" />
+              <label className="space-y-1 text-micro uppercase text-slate-500">
+                {fieldLabel('bankAccountNumber')}
+                <input value={manualDraft.account_number} onChange={(event) => setManualDraft((draft) => ({ ...draft, account_number: event.target.value }))} className="mt-1 h-10 w-full rounded-control bg-slate-50 px-3 text-footnote font-normal normal-case tracking-normal text-slate-800 outline-none ring-1 ring-slate-100 focus:ring-brand-100" />
               </label>
-              <label className="space-y-1 text-[10px] font-bold uppercase tracking-wider text-slate-500 md:col-span-2">
+              <label className="space-y-1 text-micro uppercase text-slate-500 md:col-span-2">
                 {tr('电邮', 'Email', "E-mel")}
-                <input value={manualDraft.email} onChange={(event) => setManualDraft((draft) => ({ ...draft, email: event.target.value }))} className="mt-1 h-10 w-full rounded-lg bg-slate-50 px-3 text-xs font-normal normal-case tracking-normal text-slate-800 outline-none ring-1 ring-slate-100 focus:ring-red-100" inputMode="email" />
+                <input value={manualDraft.email} onChange={(event) => setManualDraft((draft) => ({ ...draft, email: event.target.value }))} className="mt-1 h-10 w-full rounded-control bg-slate-50 px-3 text-footnote font-normal normal-case tracking-normal text-slate-800 outline-none ring-1 ring-slate-100 focus:ring-brand-100" inputMode="email" />
               </label>
             </div>
 
             <div className="mt-5 flex justify-end gap-2">
-              <button type="button" onClick={() => setShowManualEntry(false)} className="rounded-lg bg-slate-100 px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-200">{tr('取消', 'Cancel', "Batal")}</button>
-              <button type="submit" className="rounded-lg bg-red-800 px-4 py-2.5 text-xs font-bold text-white hover:bg-red-900">{tr('新增名单', 'Add Lead', "Tambah prospek")}</button>
+              <button type="button" onClick={() => setShowManualEntry(false)} className="rounded-control bg-slate-100 px-4 py-2.5 text-footnote font-bold text-slate-600 hover:bg-slate-200">{tr('取消', 'Cancel', "Batal")}</button>
+              <button type="submit" className="rounded-control bg-brand px-4 py-2.5 text-footnote font-bold text-white hover:bg-brand-deep">{tr('新增名单', 'Add Lead', "Tambah prospek")}</button>
             </div>
           </form>
         </div>
       )}
 
       <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-8">
-        <div className="rounded-xl border border-slate-100 bg-white p-5 shadow-sm">
+        <div className="rounded-card border border-slate-100 bg-white p-5 shadow-e1">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{tr('名单总数', 'Total Leads', "Jumlah prospek")}</p>
-              <p className="mt-1 text-2xl font-bold text-slate-900">{visibleRawCustomers.length}</p>
+              <p className="text-micro uppercase text-slate-400">{tr('名单总数', 'Total Leads', "Jumlah prospek")}</p>
+              <p className="mt-1 text-title-2 text-slate-900">{visibleRawCustomers.length}</p>
             </div>
-            <StatIcon src={totalLeadsIcon} />
+            <StatIcon icon={Database} />
           </div>
         </div>
         <button
           type="button"
           onClick={() => setScopeFilter('public')}
-          className={`rounded-xl border border-slate-100 bg-white p-5 text-left shadow-sm transition-colors hover:bg-blue-50/40 ${
+          className={`rounded-card border border-slate-100 bg-white p-5 text-left shadow-e1 transition-colors hover:bg-blue-50/40 ${
             scopeFilter === 'public' ? 'ring-2 ring-blue-100' : ''
           }`}
         >
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{tr('未分配名单', 'Unassigned Leads', "Prospek yang tidak ditugaskan")}</p>
-              <p className="mt-1 text-2xl font-bold text-slate-900">{publicCount}</p>
+              <p className="text-micro uppercase text-slate-400">{tr('未分配名单', 'Unassigned Leads', "Prospek yang tidak ditugaskan")}</p>
+              <p className="mt-1 text-title-2 text-slate-900">{publicCount}</p>
             </div>
-            <StatIcon src={publicLeadsIcon} />
+            <StatIcon icon={UsersRound} />
           </div>
         </button>
         <button
           type="button"
           onClick={() => setScopeFilter('private')}
-          className={`rounded-xl border border-slate-100 bg-white p-5 text-left shadow-sm transition-colors hover:bg-violet-50/40 ${
+          className={`rounded-card border border-slate-100 bg-white p-5 text-left shadow-e1 transition-colors hover:bg-violet-50/40 ${
             scopeFilter === 'private' ? 'ring-2 ring-violet-100' : ''
           }`}
         >
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{tr('私人名单', 'Private Leads', "prospek peribadi")}</p>
-              <p className="mt-1 text-2xl font-bold text-slate-900">{privateCount}</p>
+              <p className="text-micro uppercase text-slate-400">{tr('私人名单', 'Private Leads', "prospek peribadi")}</p>
+              <p className="mt-1 text-title-2 text-slate-900">{privateCount}</p>
             </div>
             <LockKeyhole className="h-10 w-10 text-violet-500" />
           </div>
@@ -626,84 +624,84 @@ export default function RawCustomerDatabase({
         <button
           type="button"
           onClick={() => setScopeFilter('taken')}
-          className={`rounded-xl border border-slate-100 bg-white p-5 text-left shadow-sm transition-colors hover:bg-indigo-50/40 ${
+          className={`rounded-card border border-slate-100 bg-white p-5 text-left shadow-e1 transition-colors hover:bg-indigo-50/40 ${
             scopeFilter === 'taken' ? 'ring-2 ring-indigo-100' : ''
           }`}
         >
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{tr('已有人跟', 'Assigned Leads', "Prospek yang ditugaskan")}</p>
-              <p className="mt-1 text-2xl font-bold text-slate-900">{takenCount}</p>
+              <p className="text-micro uppercase text-slate-400">{tr('已有人跟', 'Assigned Leads', "Prospek yang ditugaskan")}</p>
+              <p className="mt-1 text-title-2 text-slate-900">{takenCount}</p>
             </div>
-            <StatIcon src={claimedLeadsIcon} />
+            <StatIcon icon={UserCheck} className="text-emerald-600" />
           </div>
         </button>
-        <div className="rounded-xl border border-slate-100 bg-white p-5 shadow-sm">
+        <div className="rounded-card border border-slate-100 bg-white p-5 shadow-e1">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{tr('不重复号码', 'Unique Phones', "Telefon Unik")}</p>
-              <p className="mt-1 text-2xl font-bold text-slate-900">{uniquePhoneCount}</p>
+              <p className="text-micro uppercase text-slate-400">{tr('不重复号码', 'Unique Phones', "Telefon Unik")}</p>
+              <p className="mt-1 text-title-2 text-slate-900">{uniquePhoneCount}</p>
             </div>
-            <StatIcon src={uniquePhonesIcon} />
+            <StatIcon icon={Phone} className="text-emerald-600" />
           </div>
         </div>
         <button
           type="button"
           onClick={() => setMatchFilter('duplicated')}
-          className={`rounded-xl border border-slate-100 bg-white p-5 text-left shadow-sm transition-colors hover:bg-rose-50/40 ${
+          className={`rounded-card border border-slate-100 bg-white p-5 text-left shadow-e1 transition-colors hover:bg-rose-50/40 ${
             matchFilter === 'duplicated' ? 'ring-2 ring-rose-100' : ''
           }`}
         >
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{tr('重复号码', 'Duplicated Phones', "Telefon Pendua")}</p>
-              <p className="mt-1 text-2xl font-bold text-slate-900">{duplicatedPhoneCount}</p>
+              <p className="text-micro uppercase text-slate-400">{tr('重复号码', 'Duplicated Phones', "Telefon Pendua")}</p>
+              <p className="mt-1 text-title-2 text-slate-900">{duplicatedPhoneCount}</p>
             </div>
-            <StatIcon src={duplicatePhonesIcon} />
+            <StatIcon icon={Copy} className="text-amber-600" />
           </div>
         </button>
         <button
           type="button"
           onClick={() => setMatchFilter((current) => (current === 'applied' ? 'all' : 'applied'))}
-          className={`rounded-xl border border-slate-100 bg-white p-5 text-left shadow-sm transition-colors hover:bg-emerald-50/40 ${
+          className={`rounded-card border border-slate-100 bg-white p-5 text-left shadow-e1 transition-colors hover:bg-emerald-50/40 ${
             matchFilter === 'applied' ? 'ring-2 ring-emerald-100' : ''
           }`}
         >
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{tr('有申请关系', 'Has App. Link', "Mempunyai Apl. Pautan")}</p>
-              <p className="mt-1 text-2xl font-bold text-slate-900">{matchedCount}</p>
+              <p className="text-micro uppercase text-slate-400">{tr('有申请关系', 'Has App. Link', "Mempunyai Apl. Pautan")}</p>
+              <p className="mt-1 text-title-2 text-slate-900">{matchedCount}</p>
             </div>
-            <StatIcon src={inCustomersIcon} />
+            <StatIcon icon={UserCheck} />
           </div>
         </button>
         <button
           type="button"
           onClick={() => setMatchFilter((current) => (current === 'potential' ? 'all' : 'potential'))}
-          className={`rounded-xl border border-slate-100 bg-white p-5 text-left shadow-sm transition-colors hover:bg-slate-50 ${
+          className={`rounded-card border border-slate-100 bg-white p-5 text-left shadow-e1 transition-colors hover:bg-slate-50 ${
             matchFilter === 'potential' ? 'ring-2 ring-slate-200' : ''
           }`}
         >
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{tr('无关系（纯线索）', 'Lead Only', "prospek Sahaja")}</p>
-              <p className="mt-1 text-2xl font-bold text-slate-900">{visibleRawCustomers.length - matchedCount}</p>
+              <p className="text-micro uppercase text-slate-400">{tr('无关系（纯线索）', 'Lead Only', "prospek Sahaja")}</p>
+              <p className="mt-1 text-title-2 text-slate-900">{visibleRawCustomers.length - matchedCount}</p>
             </div>
-            <StatIcon src={publicLeadsIcon} />
+            <StatIcon icon={UsersRound} />
           </div>
         </button>
       </section>
 
-      <section className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-xl border border-slate-100 bg-white p-3 shadow-sm">
+      <section className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-card border border-slate-100 bg-white p-3 shadow-e1">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-slate-400">{tr('渠道', 'Channel', "Saluran")}</span>
+          <span className="shrink-0 text-micro uppercase text-slate-400">{tr('渠道', 'Channel', "Saluran")}</span>
           <div className="flex flex-wrap gap-2">
             {renderFilterSwitches('channel', channelFilter, channelFilterOptions, setChannelFilter)}
           </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-slate-400">{tr('原始状态', 'Raw Status', "Status Mentah")}</span>
+          <span className="shrink-0 text-micro uppercase text-slate-400">{tr('原始状态', 'Raw Status', "Status Mentah")}</span>
           <div className="flex flex-wrap gap-2">
             {renderFilterSwitches('status', statusFilter, statusFilterOptions, setStatusFilter)}
             {statusFilter === 'all' && contactedRawStatusCount > 0 && (
@@ -719,28 +717,28 @@ export default function RawCustomerDatabase({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-slate-400">{tr('匹配', 'Match', "Perlawanan")}</span>
+          <span className="shrink-0 text-micro uppercase text-slate-400">{tr('匹配', 'Match', "Perlawanan")}</span>
           <div className="flex flex-wrap gap-2">
             {renderFilterSwitches('match', matchFilter, matchFilterOptions, (value) => setMatchFilter(value as MatchFilter))}
           </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-slate-400">{tr('归属', 'Scope', "Skop")}</span>
+          <span className="shrink-0 text-micro uppercase text-slate-400">{tr('归属', 'Scope', "Skop")}</span>
           <div className="flex flex-wrap gap-2">
             {renderFilterSwitches('scope', scopeFilter, scopeFilterOptions, (value) => setScopeFilter(value as ScopeFilter))}
           </div>
         </div>
       </section>
 
-      <section className="rounded-xl border border-slate-100 bg-white shadow-sm">
-        <p className="border-b border-slate-100/60 bg-slate-50/60 px-4 py-1.5 text-[10px] font-semibold text-slate-400">
+      <section className="rounded-card border border-slate-100 bg-white shadow-e1">
+        <p className="border-b border-slate-100/60 bg-slate-50/60 px-4 py-1.5 text-caption text-slate-400">
           {tr('双击电话号码 = 开 WhatsApp + 交给你跟进', 'Double-click a phone number = assign it to you and open WhatsApp', "Klik dua kali nombor telefon = berikannya kepada anda dan buka WhatsApp")}
         </p>
         <div className="overflow-x-auto">
           <div className="min-w-[1400px] text-left">
             <div
-              className="grid border-b border-slate-300 bg-slate-200/95 text-[10px] font-bold uppercase tracking-wider text-slate-700"
+              className="grid border-b border-slate-300 bg-slate-200/95 text-micro uppercase text-slate-700"
               style={{ gridTemplateColumns: RAW_LEAD_GRID_COLUMNS }}
             >
               <div className="px-4 py-2.5 whitespace-nowrap">
@@ -764,7 +762,7 @@ export default function RawCustomerDatabase({
             </div>
 
             {enrichedCustomers.length === 0 ? (
-              <div className="py-14 text-center text-sm text-slate-400">
+              <div className="py-14 text-center text-body text-slate-400">
                 {tr('没有找到符合条件的名单', 'No leads match the current filters', "Tiada prospek sepadan dengan penapis semasa")}
               </div>
             ) : (
@@ -784,7 +782,7 @@ export default function RawCustomerDatabase({
                     return (
                       <div
                         key={lead.id}
-                        className="absolute left-0 right-0 grid border-b border-slate-50 text-sm transition-colors hover:bg-indigo-50/30"
+                        className="absolute left-0 right-0 grid border-b border-slate-50 text-body transition-colors hover:bg-indigo-50/30"
                         style={{
                           gridTemplateColumns: RAW_LEAD_GRID_COLUMNS,
                           height: RAW_LEAD_ROW_HEIGHT,
@@ -795,47 +793,47 @@ export default function RawCustomerDatabase({
                           <p className="truncate font-bold text-slate-800" title={lead.name || lead.username}>
                             {lead.name || 'Unnamed lead'}
                           </p>
-                          <p className="mt-1 truncate text-[10px] font-semibold text-slate-400" title={`@${lead.username || 'no username'} · ${lead.lead_id || lead.id}`}>
+                          <p className="mt-1 truncate text-caption text-slate-400" title={`@${lead.username || 'no username'} · ${lead.lead_id || lead.id}`}>
                             @{lead.username || 'no username'} <span className="px-1 text-slate-300">·</span><span className="font-mono font-normal">{lead.lead_id || lead.id}</span>
                           </p>
                         </div>
                         <div
-                          className="flex min-w-0 items-center overflow-hidden px-4 py-2 align-top font-mono text-xs text-slate-600"
+                          className="flex min-w-0 items-center overflow-hidden px-4 py-2 align-top font-mono text-footnote text-slate-600"
                           onDoubleClick={() => onOpenWhatsApp(lead, 'api')}
                           title={lead.phone_no ? `${tr('双击打开 WhatsApp，并交给你跟进', 'Double-click to assign this lead to you and open WhatsApp', "Klik dua kali untuk memberikan prospek ini kepada anda dan buka WhatsApp")}\n${[lead.email, lead.ic_no && `IC ${lead.ic_no}`, lead.account_number && `Acct ${lead.account_number}`].filter(Boolean).join('\n')}` : undefined}
                         >
-                          <span className="inline-flex min-w-0 max-w-full items-center gap-1.5 truncate whitespace-nowrap rounded-md px-1 py-0.5 transition-colors hover:bg-emerald-50 hover:text-emerald-600">
+                          <span className="inline-flex min-w-0 max-w-full items-center gap-1.5 truncate whitespace-nowrap rounded-chip px-1 py-0.5 transition-colors hover:bg-emerald-50 hover:text-emerald-600">
                             {lead.phone_no && <MessageCircle className="h-3.5 w-3.5 shrink-0 text-emerald-500" />}
                             <span className="truncate">{lead.phone_no || '--'}</span>
                           </span>
-                          {duplicateCount > 1 && <span className="ml-1 shrink-0 rounded-full bg-rose-50 px-1.5 py-0.5 text-[9px] font-bold text-rose-600">×{duplicateCount}</span>}
+                          {duplicateCount > 1 && <span className="ml-1 shrink-0 rounded-full bg-rose-50 px-1.5 py-0.5 text-micro tracking-normal text-rose-600">×{duplicateCount}</span>}
                         </div>
                         <div className="flex min-w-0 items-center gap-2 overflow-hidden px-4 py-2 align-top" title={`${lead.channel} · ${[lead.source_traffic, lead.source_action, lead.source_scenario].filter(Boolean).join(' / ') || '--'}`}>
-                          <span className="inline-flex shrink-0 rounded-full bg-red-800 px-2 py-0.5 text-[10px] font-bold uppercase text-white">
+                          <span className="inline-flex shrink-0 rounded-full bg-brand px-2 py-0.5 text-micro uppercase text-white">
                             {lead.channel}
                           </span>
-                          <p className="truncate text-[10px] font-semibold text-slate-500">
+                          <p className="truncate text-caption text-slate-500">
                             {[lead.source_traffic, lead.source_action, lead.source_scenario].filter(Boolean).join(' / ') || '--'}
                           </p>
                         </div>
                         <div className="flex min-w-0 flex-col justify-center overflow-hidden px-4 py-2 align-top">
                           <div className="flex min-w-0 items-center gap-1.5">
-                            <span className="inline-flex shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold uppercase text-slate-600">
+                            <span className="inline-flex shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-micro uppercase text-slate-600">
                               {lead.raw_status || 'Raw'}
                             </span>
                           {lead.lead_visibility === 'Private' && (
-                            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-bold text-violet-700">
+                            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-micro tracking-normal text-violet-700">
                               <LockKeyhole className="h-3 w-3" />
                               {tr('私人', 'Private', "Persendirian")}
                             </span>
                           )}
                           {lead.lead_scope === 'Taken Lead' || lead.taken_by_staff_name ? (
-                              <span className="inline-flex min-w-0 items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-bold uppercase text-indigo-700">
+                              <span className="inline-flex min-w-0 items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 text-micro uppercase text-indigo-700">
                                 <UserCheck className="h-3 w-3" />
                                 {tr('已有人跟', 'Assigned', "Ditugaskan")}
                               </span>
                           ) : (
-                              <span className="inline-flex rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-bold text-blue-700">
+                              <span className="inline-flex rounded-full bg-blue-50 px-2 py-0.5 text-micro tracking-normal text-blue-700">
                                 {tr('未分配', 'Unassigned', "Belum Ditugaskan")}
                               </span>
                             )}
@@ -847,10 +845,10 @@ export default function RawCustomerDatabase({
                                   role={lead.taken_by_staff_role}
                                   roleAccounts={roleAccounts}
                                   avatarClassName="h-5 w-5"
-                                  nameClassName="truncate text-[10px] font-bold text-slate-500"
+                                  nameClassName="truncate text-micro tracking-normal text-slate-500"
                                   roleClassName="hidden"
                                 />
-                              <span className="shrink-0 text-[10px] font-semibold text-slate-400">· {trFollowUpStatus(lead.follow_up_status || 'New')}</span>
+                              <span className="shrink-0 text-caption text-slate-400">· {trFollowUpStatus(lead.follow_up_status || 'New')}</span>
                             </div>
                           ) : null}
                         </div>
@@ -858,40 +856,40 @@ export default function RawCustomerDatabase({
                           {primaryMatch ? (
                             <div className="min-w-0" title={`${primaryMatch.customer_name}\n${primaryMatch.customer_id}\n${primaryMatch.handler_name}\n${matchedFields.map((field) => MATCH_FIELD_LABELS[field]).join(', ')}`}>
                               <div className="flex min-w-0 items-center gap-1.5 overflow-hidden">
-                                <span className="inline-flex shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-bold uppercase text-emerald-600">
+                                <span className="inline-flex shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-micro uppercase text-emerald-600">
                                   {tr('已在客户资料', 'In Customers', "Dalam Pelanggan")}
                                 </span>
                                 {statusConfig && (
-                                  <span className={`inline-flex shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${statusConfig.bg} ${statusConfig.text}`}>
+                                  <span className={`inline-flex shrink-0 rounded-full px-2 py-0.5 text-micro tracking-normal ${statusConfig.bg} ${statusConfig.text}`}>
                                     {primaryMatch.customer_status}
                                   </span>
                                 )}
-                                <span className="min-w-0 truncate text-[11px] font-bold text-slate-700">{primaryMatch.customer_name}</span>
+                                <span className="min-w-0 truncate text-caption font-semibold text-slate-700">{primaryMatch.customer_name}</span>
                               </div>
                               <div className="mt-1 flex min-w-0 items-center gap-1.5 overflow-hidden">
-                                <span className="max-w-28 truncate font-mono text-[10px] text-slate-400">{primaryMatch.customer_id}</span>
+                                <span className="max-w-28 truncate font-mono text-micro tracking-normal text-slate-400">{primaryMatch.customer_id}</span>
                                 <StaffNameBadge
                                   name={primaryMatch.handler_name}
                                   roleAccounts={roleAccounts}
                                   avatarClassName="h-5 w-5"
-                                  nameClassName="truncate text-[10px] font-bold text-slate-500"
+                                  nameClassName="truncate text-micro tracking-normal text-slate-500"
                                   roleClassName="hidden"
                                 />
-                                {matchedFields.length > 0 && <span className="shrink-0 rounded-full bg-blue-50 px-1.5 py-0.5 text-[9px] font-bold uppercase text-blue-600">{matchedFields.map((field) => MATCH_FIELD_LABELS[field]).join(' · ')}</span>}
+                                {matchedFields.length > 0 && <span className="shrink-0 rounded-full bg-blue-50 px-1.5 py-0.5 text-micro uppercase text-blue-600">{matchedFields.map((field) => MATCH_FIELD_LABELS[field]).join(' · ')}</span>}
                                 {leadMatches.length > 1 && (
-                                  <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-bold uppercase text-slate-500">
+                                  <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-micro uppercase text-slate-500">
                                     +{leadMatches.length - 1}
                                   </span>
                                 )}
                               </div>
                             </div>
                           ) : (
-                            <span className="inline-flex self-start rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-bold uppercase text-amber-700">
+                            <span className="inline-flex self-start rounded-full bg-amber-50 px-2 py-0.5 text-micro uppercase text-amber-700">
                               {tr('未匹配', 'Not Matched', "Tidak Padan")}
                             </span>
                           )}
                         </div>
-                        <div className="flex items-center overflow-hidden px-4 py-2 align-top font-mono text-[10px] text-slate-400" title={new Date(lead.received_at).toLocaleString()}>
+                        <div className="flex items-center overflow-hidden px-4 py-2 align-top font-mono text-micro tracking-normal text-slate-400" title={new Date(lead.received_at).toLocaleString()}>
                           {formatCompactReceivedAt(lead.received_at)}
                         </div>
                       </div>

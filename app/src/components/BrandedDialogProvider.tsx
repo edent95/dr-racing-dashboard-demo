@@ -5,7 +5,6 @@
 
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { AnimatePresence, motion } from 'motion/react';
 import { AlertTriangle, CheckCircle2, CircleHelp, Info, X } from 'lucide-react';
 import { tr } from '../lib/i18n';
 
@@ -26,6 +25,7 @@ export interface BrandedDialogOptions {
 export interface BrandedPasswordPromptOptions extends BrandedDialogOptions {
   inputLabel: string;
   inputPlaceholder?: string;
+  inputType?: 'password' | 'totp';
 }
 
 type DialogResult = boolean | string | null;
@@ -35,6 +35,7 @@ interface DialogRequest extends BrandedDialogOptions {
   kind: 'alert' | 'confirm' | 'password';
   inputLabel?: string;
   inputPlaceholder?: string;
+  inputType?: 'password' | 'totp';
   resolve: (result: DialogResult) => void;
 }
 
@@ -56,8 +57,8 @@ const TONE_STYLES: Record<BrandedDialogTone, {
   info: {
     badge: 'text-slate-600',
     icon: 'bg-slate-100 text-slate-700 ring-slate-200',
-    button: 'bg-red-800 hover:bg-red-900',
-    focus: 'focus-visible:ring-red-200',
+    button: 'bg-brand hover:bg-brand-deep',
+    focus: 'focus-visible:ring-brand-100',
     iconNode: <Info className="h-5 w-5" aria-hidden="true" />
   },
   success: {
@@ -77,8 +78,8 @@ const TONE_STYLES: Record<BrandedDialogTone, {
   danger: {
     badge: 'text-rose-700',
     icon: 'bg-rose-50 text-rose-700 ring-rose-100',
-    button: 'bg-red-800 hover:bg-red-900',
-    focus: 'focus-visible:ring-red-200',
+    button: 'bg-brand hover:bg-brand-deep',
+    focus: 'focus-visible:ring-brand-100',
     iconNode: <AlertTriangle className="h-5 w-5" aria-hidden="true" />
   }
 };
@@ -160,41 +161,33 @@ export function BrandedDialogProvider({ children }: { children: ReactNode }) {
     <BrandedDialogContext.Provider value={{ showAlert, showConfirm, showPasswordPrompt }}>
       {children}
       {typeof document !== 'undefined' && createPortal(
-        <AnimatePresence>
+        <>
           {activeDialog && (
-            <motion.div
+            <div
               data-testid={activeDialog.testId || 'branded-dialog'}
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.16 }}
-              className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm"
+              className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm transition-opacity duration-150"
               onMouseDown={(event) => {
                 if (event.target === event.currentTarget) {
                   finishDialog(activeDialog.kind === 'alert' ? true : activeDialog.kind === 'password' ? null : false);
                 }
               }}
             >
-              <motion.section
+              <section
                 role="dialog"
                 aria-modal="true"
                 aria-labelledby={dialogTitleId}
-                initial={{ opacity: 0, y: 10, scale: 0.98 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: 6, scale: 0.98 }}
-                transition={{ duration: 0.18, ease: 'easeOut' }}
-                className="w-full max-w-md rounded-2xl bg-white p-5 shadow-2xl shadow-slate-950/20 ring-1 ring-slate-200 sm:p-6"
+                className="w-full max-w-md rounded-panel bg-white p-5 shadow-e3 transition duration-200 ease-out sm:p-6"
                 onMouseDown={(event) => event.stopPropagation()}
               >
                 <div className="flex items-start gap-3">
-                  <span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ring-1 ${toneStyle.icon}`}>
+                  <span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-card ring-1 ${toneStyle.icon}`}>
                     {toneStyle.iconNode}
                   </span>
                   <div className="min-w-0 flex-1">
-                    <p className={`text-[10px] font-bold uppercase tracking-wider ${toneStyle.badge}`}>
+                    <p className={`text-micro uppercase ${toneStyle.badge}`}>
                       {activeDialog.eyebrow || defaultEyebrow}
                     </p>
-                    <h2 id={dialogTitleId} className="mt-1 text-base font-bold text-slate-900">
+                    <h2 id={dialogTitleId} className="mt-1 text-title-3 text-slate-900">
                       {activeDialog.title}
                     </h2>
                   </div>
@@ -202,36 +195,38 @@ export function BrandedDialogProvider({ children }: { children: ReactNode }) {
                     type="button"
                     aria-label={activeDialog.closeLabel || tr('关闭弹窗', 'Close dialog', 'Tutup dialog')}
                     onClick={() => finishDialog(activeDialog.kind === 'alert' ? true : activeDialog.kind === 'password' ? null : false)}
-                    className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700"
+                    className="inline-flex h-10 w-10 items-center justify-center rounded-control text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700"
                   >
                     <X className="h-4 w-4" aria-hidden="true" />
                   </button>
                 </div>
 
-                <p className="mt-4 whitespace-pre-line text-sm leading-6 text-slate-600">
+                <p className="mt-4 whitespace-pre-line text-body leading-6 text-slate-600">
                   {activeDialog.message}
                 </p>
 
                 {activeDialog.kind === 'password' && (
                   <label className="mt-4 block">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                    <span className="text-micro uppercase text-slate-500">
                       {activeDialog.inputLabel}
                     </span>
                     <input
-                      type="password"
-                      autoComplete="current-password"
+                      type={activeDialog.inputType === 'totp' ? 'text' : 'password'}
+                      inputMode={activeDialog.inputType === 'totp' ? 'numeric' : undefined}
+                      maxLength={activeDialog.inputType === 'totp' ? 6 : undefined}
+                      autoComplete={activeDialog.inputType === 'totp' ? 'one-time-code' : 'current-password'}
                       autoFocus
                       value={passwordValue}
                       onChange={(event) => setPasswordValue(event.target.value)}
                       placeholder={activeDialog.inputPlaceholder}
-                      className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-800 outline-none transition-colors focus:border-red-200 focus:bg-white focus:ring-2 focus:ring-red-50"
+                      className="mt-2 w-full rounded-control border border-slate-200 bg-slate-50 px-4 py-3 text-callout text-slate-800 outline-none transition-colors focus:border-brand-100 focus:bg-white focus:ring-2 focus:ring-brand-50"
                       data-testid="branded-password-input"
                     />
                   </label>
                 )}
 
                 {activeDialog.detail && (
-                  <div className="mt-4 rounded-xl bg-slate-50 px-3 py-3 ring-1 ring-slate-100">
+                  <div className="mt-4 rounded-card bg-slate-50 px-3 py-3 ring-1 ring-slate-100">
                     {activeDialog.detail}
                   </div>
                 )}
@@ -242,7 +237,7 @@ export function BrandedDialogProvider({ children }: { children: ReactNode }) {
                       type="button"
                       autoFocus={activeDialog.kind !== 'password' && dialogTone === 'danger'}
                       onClick={() => finishDialog(activeDialog.kind === 'password' ? null : false)}
-                      className="min-h-11 rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 ring-1 ring-slate-200 transition-colors hover:bg-slate-50 hover:text-slate-800"
+                      className="min-h-11 rounded-control bg-white px-4 py-2.5 text-callout text-slate-600 ring-1 ring-slate-200 transition-colors hover:bg-slate-50 hover:text-slate-800"
                     >
                       {activeDialog.cancelLabel || tr('取消', 'Cancel', 'Batal')}
                     </button>
@@ -250,19 +245,19 @@ export function BrandedDialogProvider({ children }: { children: ReactNode }) {
                   <button
                     type="button"
                     autoFocus={activeDialog.kind !== 'password' && (activeDialog.kind === 'alert' || dialogTone !== 'danger')}
-                    disabled={activeDialog.kind === 'password' && passwordValue.length === 0}
+                    disabled={activeDialog.kind === 'password' && (activeDialog.inputType === 'totp' ? !/^\d{6}$/.test(passwordValue) : passwordValue.length === 0)}
                     onClick={() => finishDialog(activeDialog.kind === 'password' ? passwordValue : true)}
-                    className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${toneStyle.button} ${toneStyle.focus}`}
+                    className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-control px-4 py-2.5 text-callout text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${toneStyle.button} ${toneStyle.focus}`}
                   >
                     {activeDialog.confirmLabel || (activeDialog.kind === 'alert'
                       ? tr('知道了', 'Got It', 'Faham')
                       : tr('确认', 'Confirm', 'Sahkan'))}
                   </button>
                 </div>
-              </motion.section>
-            </motion.div>
+              </section>
+            </div>
           )}
-        </AnimatePresence>,
+        </>,
         document.body
       )}
     </BrandedDialogContext.Provider>

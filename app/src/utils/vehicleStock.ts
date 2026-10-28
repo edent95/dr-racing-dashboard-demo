@@ -6,6 +6,7 @@ import {
   type VehicleCatalogItem,
   type VehicleStockUnit
 } from '../types';
+import { isReadyForStock } from './deliveryChecklist';
 
 export function normalizeVehicleNumberPlate(value: unknown): string {
   return String(value || '')
@@ -31,12 +32,16 @@ const isActiveVehicleStockDemand = (application: LoanApplication) => {
     && getLoanPendingAction(application) === 'Complete Application'
   );
 
+  // Owner 2026-10-18: Operations looks for the bike only once the loan (or the
+  // cash purchase) is approved, so nobody sources a bike for a file the bank turns down.
+  // Owner meeting: and only after Sales collected the payment with the hire
+  // purchase agreement signed (isReadyForStock).
   return Boolean(
     application.purchase_method
     && getStockModelKey(application.vehicle_model)
     && salesSubmissionComplete
-    && application.status !== LoanStatus.REJECT
-    && application.status !== LoanStatus.CANCELLED
+    && application.status === LoanStatus.APPROVE
+    && isReadyForStock(application)
     && finance?.sale_status !== 'Bike Delivered'
     && finance?.sale_status !== 'Cancelled'
   );

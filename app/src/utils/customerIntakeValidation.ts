@@ -4,6 +4,7 @@
  */
 
 import type { PurchaseMethod, VehicleCondition } from '../types';
+import { hasChildrenQuestion } from './customerApplicationForm';
 import { isBasicMalaysiaIcNumber } from './malaysiaIc';
 import { isBasicMalaysiaPhoneNumber } from './malaysiaPhone';
 
@@ -24,6 +25,7 @@ export type CustomerIntakeValidationDraft = {
   gender: string;
   race: string;
   marital_status: string;
+  number_of_children: string;
   housing_status: string;
   years_at_residence: string;
   emergency_contact_1_full_name: string;
@@ -61,6 +63,7 @@ export type CustomerIntakeValidationIssue =
   | 'gender'
   | 'race'
   | 'marital_status'
+  | 'number_of_children'
   | 'years_at_residence'
   | 'housing_status'
   | 'full_address'
@@ -136,6 +139,8 @@ export function getCustomerIntakeValidationIssues(
   requireValue('gender', draft.gender);
   requireValue('race', draft.race);
   requireValue('marital_status', draft.marital_status);
+  // Owner 2026-10-19: the customer answers it (0 included) instead of a blank read as 0.
+  if (hasChildrenQuestion(draft.marital_status)) requireValue('number_of_children', draft.number_of_children);
   requireValue('years_at_residence', draft.years_at_residence);
   requireValue('housing_status', draft.housing_status);
 
@@ -170,10 +175,9 @@ export function getCustomerIntakeValidationIssues(
   requireValue('company_address', draft.company_address);
   requireValue('available_to_receive_calls', draft.available_to_receive_calls);
   requireValue('salary_payment_method', draft.salary_payment_method);
-  if (draft.salary_payment_method === 'Bank') {
-    requireValue('bank_name', draft.bank_name);
-    requireValue('account_number', draft.account_number);
-  }
+  // Every loan needs a bank account, cash salary too (owner 2026-10-20).
+  requireValue('bank_name', draft.bank_name);
+  requireValue('account_number', draft.account_number);
   requireValue('loan_tenure', draft.loan_tenure);
 
   return issues;

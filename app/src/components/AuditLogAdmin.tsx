@@ -105,8 +105,8 @@ export default function AuditLogAdmin({ logs }: AuditLogAdminProps) {
     <div id="audit-log-page" className="space-y-6">
       <section className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div className="space-y-1">
-          <h2 className="text-xl font-bold tracking-tight text-slate-900">{tr('审计记录', 'Audit Log', "Log Audit")}</h2>
-          <p className="max-w-2xl text-xs font-light leading-relaxed text-slate-500">
+          <h2 className="text-title-2 text-slate-900">{tr('审计记录', 'Audit Log', "Log Audit")}</h2>
+          <p className="max-w-2xl text-footnote font-normal leading-relaxed text-slate-500">
             {tr('谁在什么时候改了什么。', 'Who changed what, and when.', "Siapa yang mengubah apa, dan bila.")}
           </p>
         </div>
@@ -121,31 +121,31 @@ export default function AuditLogAdmin({ logs }: AuditLogAdminProps) {
             value={searchTerm}
             onChange={(event) => setSearchTerm(event.target.value)}
             placeholder={tr('搜索员工、操作、IP、对象...', 'Search staff, action, IP, target...', "Kakitangan carian, tindakan, IP, sasaran...")}
-            className="w-80 rounded-lg border border-slate-100 bg-white py-2 pl-9 pr-4 text-xs outline-none transition-all focus:bg-slate-50 focus:ring-1 focus:ring-indigo-100"
+            className="w-80 rounded-control border border-slate-100 bg-white py-2 pl-9 pr-4 text-footnote outline-none transition-all focus:bg-slate-50 focus:ring-1 focus:ring-indigo-100"
           />
         </div>
       </section>
 
       <section className="grid grid-cols-1 gap-4 md:grid-cols-3">
-        <div className="rounded-xl border border-transparent bg-white p-5 shadow-none">
-          <p className="inline-flex rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-600">{tr('记录总数', 'Total Logs', "Jumlah Log")}</p>
-          <p className="mt-1 text-2xl font-bold text-slate-900">{logs.length}</p>
+        <div className="rounded-card border border-transparent bg-white p-5 shadow-none">
+          <p className="inline-flex rounded-chip bg-slate-100 px-1.5 py-0.5 text-micro uppercase text-slate-600">{tr('记录总数', 'Total Logs', "Jumlah Log")}</p>
+          <p className="mt-1 text-title-2 text-slate-900">{logs.length}</p>
         </div>
-        <div className="rounded-xl border border-transparent bg-white p-5 shadow-none">
-          <p className="inline-flex rounded-md bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-emerald-700">{tr('涉及员工', 'Staff Tracked', "Kakitangan Dijejaki")}</p>
-          <p className="mt-1 text-2xl font-bold text-slate-900">{new Set(logs.map((log) => log.staff_name)).size}</p>
+        <div className="rounded-card border border-transparent bg-white p-5 shadow-none">
+          <p className="inline-flex rounded-chip bg-emerald-50 px-1.5 py-0.5 text-micro uppercase text-emerald-700">{tr('涉及员工', 'Staff Tracked', "Kakitangan Dijejaki")}</p>
+          <p className="mt-1 text-title-2 text-slate-900">{new Set(logs.map((log) => log.staff_name)).size}</p>
         </div>
-        <div className="rounded-xl border border-transparent bg-white p-5 shadow-none">
-          <p className="inline-flex rounded-md bg-amber-50 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-700">{tr('最近 IP', 'Latest IP', "IP terkini")}</p>
-          <p className="mt-1 truncate font-mono text-sm font-bold text-slate-900">{logs[0]?.ip_address || '--'}</p>
+        <div className="rounded-card border border-transparent bg-white p-5 shadow-none">
+          <p className="inline-flex rounded-chip bg-amber-50 px-1.5 py-0.5 text-micro uppercase text-amber-700">{tr('最近 IP', 'Latest IP', "IP terkini")}</p>
+          <p className="mt-1 truncate font-mono text-headline text-slate-900">{logs[0]?.ip_address || '--'}</p>
         </div>
       </section>
 
-      <section className="overflow-hidden rounded-xl border border-slate-100 bg-white shadow-sm">
+      <section className="overflow-hidden rounded-card border border-slate-100 bg-white shadow-e1">
         <div className="overflow-x-auto">
           <div className="min-w-[1440px]">
             <div
-              className="grid border-b border-slate-300 bg-slate-200/95 text-[10px] font-bold uppercase tracking-wider text-slate-700"
+              className="grid border-b border-slate-300 bg-slate-200/95 text-micro uppercase text-slate-700"
               style={{ gridTemplateColumns: AUDIT_GRID_COLUMNS }}
             >
               <div className="px-4 py-2.5">
@@ -172,7 +172,7 @@ export default function AuditLogAdmin({ logs }: AuditLogAdminProps) {
               <div className="flex py-14 text-center">
                 <div className="mx-auto flex flex-col items-center gap-3 text-slate-400">
                   <FileClock className="h-8 w-8" />
-                  <p className="text-sm">{tr('还没有审计记录', 'No audit logs yet', "Tiada log audit lagi")}</p>
+                  <p className="text-body">{tr('还没有审计记录', 'No audit logs yet', "Tiada log audit lagi")}</p>
                 </div>
               </div>
             ) : (
@@ -187,28 +187,28 @@ export default function AuditLogAdmin({ logs }: AuditLogAdminProps) {
                     <div
                       key={log.id}
                       id={`audit-row-${log.id}`}
-                      className="absolute left-0 right-0 grid border-b border-slate-50 text-sm hover:bg-indigo-50/20"
+                      className="absolute left-0 right-0 grid border-b border-slate-50 text-body hover:bg-indigo-50/20"
                       style={{
                         gridTemplateColumns: AUDIT_GRID_COLUMNS,
                         height: AUDIT_ROW_HEIGHT,
                         transform: `translateY(${(virtualWindow.startIndex + index) * AUDIT_ROW_HEIGHT}px)`
                       }}
                     >
-                      <div className="flex items-center overflow-hidden px-4 py-2 font-mono text-[10px] text-slate-500" title={new Date(log.created_at).toLocaleString()}>
+                      <div className="flex items-center overflow-hidden px-4 py-2 font-mono text-micro tracking-normal text-slate-500" title={new Date(log.created_at).toLocaleString()}>
                         {formatCompactAuditTime(log.created_at)}
                       </div>
                       <div className="flex min-w-0 flex-col justify-center overflow-hidden px-4 py-2">
-                        <p className="truncate text-xs font-bold text-slate-800" title={log.staff_name}>{log.staff_name}</p>
-                        <p className="mt-0.5 truncate text-[9px] font-bold uppercase text-slate-400">{log.staff_role}</p>
+                        <p className="truncate text-footnote font-bold text-slate-800" title={log.staff_name}>{log.staff_name}</p>
+                        <p className="mt-0.5 truncate text-micro uppercase text-slate-400">{log.staff_role}</p>
                       </div>
                       <div className="flex min-w-0 items-center overflow-hidden px-4 py-2">
-                        <span className="inline-flex max-w-full rounded-lg bg-indigo-50 px-2 py-0.5 text-[10px] font-bold text-indigo-600">
+                        <span className="inline-flex max-w-full rounded-control bg-indigo-50 px-2 py-0.5 text-micro tracking-normal text-indigo-600">
                           <span className="truncate" title={log.action}>{log.action}</span>
                         </span>
                       </div>
                       <div className="flex min-w-0 flex-col justify-center overflow-hidden px-4 py-2">
-                        <p className="truncate text-xs font-bold text-slate-700" title={log.target_label}>{log.target_label}</p>
-                        <p className="mt-0.5 truncate font-mono text-[9px] text-slate-400" title={`${log.target_type} · ${log.target_id}`}>
+                        <p className="truncate text-footnote font-bold text-slate-700" title={log.target_label}>{log.target_label}</p>
+                        <p className="mt-0.5 truncate font-mono text-micro tracking-normal text-slate-400" title={`${log.target_type} · ${log.target_id}`}>
                           {log.target_type} · {log.target_id}
                         </p>
                       </div>
@@ -217,22 +217,22 @@ export default function AuditLogAdmin({ logs }: AuditLogAdminProps) {
                         title={log.changes.map((change) => `${change.field}: ${change.old_value} → ${change.new_value}`).join('\n')}
                       >
                         {log.changes[0] ? (
-                          <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden rounded-lg bg-slate-50 px-2.5 py-1.5">
-                            <span className="max-w-28 shrink-0 truncate text-[9px] font-bold uppercase text-slate-400">{log.changes[0].field}</span>
-                            <span className="min-w-0 truncate text-[10px] text-slate-600">
+                          <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden rounded-control bg-slate-50 px-2.5 py-1.5">
+                            <span className="max-w-28 shrink-0 truncate text-micro uppercase text-slate-400">{log.changes[0].field}</span>
+                            <span className="min-w-0 truncate text-micro tracking-normal text-slate-600">
                               <span className="text-rose-500">{log.changes[0].old_value}</span>
                               <span className="px-1.5 text-slate-300">→</span>
                               <span className="text-emerald-600">{log.changes[0].new_value}</span>
                             </span>
                           </div>
-                        ) : <span className="text-[10px] text-slate-400">--</span>}
+                        ) : <span className="text-micro tracking-normal text-slate-400">--</span>}
                         {log.changes.length > 1 && (
-                          <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[9px] font-bold text-slate-500">+{log.changes.length - 1}</span>
+                          <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-micro tracking-normal text-slate-500">+{log.changes.length - 1}</span>
                         )}
                       </div>
                       <div className="flex min-w-0 flex-col justify-center overflow-hidden px-4 py-2" title={`${log.ip_address}\n${log.user_agent || '--'}`}>
-                        <p className="truncate font-mono text-[10px] text-slate-600">{log.ip_address}</p>
-                        <p className="mt-0.5 truncate text-[9px] text-slate-400">
+                        <p className="truncate font-mono text-micro tracking-normal text-slate-600">{log.ip_address}</p>
+                        <p className="mt-0.5 truncate text-micro tracking-normal text-slate-400">
                           {log.user_agent || '--'}
                         </p>
                       </div>

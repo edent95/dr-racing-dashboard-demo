@@ -4,12 +4,13 @@
  */
 
 import React, { useDeferredValue, useEffect, useMemo, useState } from 'react';
-import { Activity, BarChart3, CalendarDays, Download, PieChart, Search, X } from 'lucide-react';
+import { Activity, BarChart3, Bike, CalendarDays, Database, Download, FileClock, PieChart, Search, UsersRound, X, type LucideIcon } from 'lucide-react';
 import { AuditLogEntry, CalendarNote, ErrorCodeDefinition, LoanApplication, LoanStatus, NotificationItem, RawCustomerLead, RoleAccount, TagNormalizationRule, WhatsAppTrackingClick, WhatsAppTrackingLink } from '../types';
 import SortableHeader, { compareSortValues, getNextSortState, SortDirection, SortState } from './SortableHeader';
 import { getAppLocale, tr, trAnalyticsLabel, trLoanStatus } from '../lib/i18n';
+import { fieldLabel } from '../data/fieldLabels';
 import { getApplicationRejectCodes, getPrimaryRejectCode } from '../utils/rejectCodes';
-import { AnalyticsChartPreferenceProvider, AssetIcon, EmptyChartRow, type AnalyticsChartMode } from './analytics/sections/SectionShell';
+import { AnalyticsChartPreferenceProvider, EmptyChartRow, type AnalyticsChartMode } from './analytics/sections/SectionShell';
 import VehicleDemandSection from './analytics/sections/VehicleDemandSection';
 import VehicleStatusRelationshipCard, { type VehicleStatusRelationshipData } from './analytics/VehicleStatusRelationshipCard';
 import RawCustomerSection from './analytics/sections/RawCustomerSection';
@@ -24,16 +25,8 @@ import {
   type CompletedTaskCategory,
   type CompletedTaskEvent
 } from '../utils/taskCompletionAnalytics';
-import approvalOverviewIcon from '../assets/icons/nav/approvalOverview.png';
-import approvedIcon from '../assets/icons/nav/approved.png';
-import totalLeadsIcon from '../assets/icons/nav/totalLeads.png';
-import whatsappContactIcon from '../assets/icons/nav/whatsappContact.png';
-import analyticsIcon from '../assets/icons/nav/analytics.png';
-import vehicleInfoIcon from '../assets/icons/nav/vehicleInfo.png';
-import customersIcon from '../assets/icons/nav/customers.png';
-import auditIcon from '../assets/icons/nav/audit.png';
-import rawCustomersIcon from '../assets/icons/nav/rawCustomers.png';
 
+import { malaysiaDate } from '../../shared/malaysiaDate.mjs';
 // 中文模式下的显示词典：key 保持英文（数据/排序键不变），只翻显示。
 const ANALYTICS_ZH: Record<string, string> = {
   'Top Sale': '本月热销', 'Top Model': '库存最多车型', 'Approval Rate': '批核率', 'Approved Units': '批核台数',
@@ -217,15 +210,6 @@ type ComparisonRanges = {
   primary: AnalyticsDateRange;
   secondary: AnalyticsDateRange;
   label: string;
-};
-
-type ComparisonSnapshot = {
-  applications: number;
-  approved: number;
-  approvalRate: number;
-  vehicleUnits: number;
-  rawLeads: number;
-  clicks: number;
 };
 
 type StatComparison = {
@@ -918,28 +902,6 @@ function buildVehicleStockRows(applications: LoanApplication[]): VehicleStockRow
     .sort((a, b) => b.value - a.value || b.approvedUnits - a.approvedUnits);
 }
 
-function buildComparisonSnapshot(
-  applications: LoanApplication[],
-  rawCustomerLeads: RawCustomerLead[],
-  whatsAppTrackingClicks: WhatsAppTrackingClick[],
-  range: AnalyticsDateRange
-): ComparisonSnapshot {
-  const filteredApplications = applications.filter((application) => isWithinAnalyticsDateRange(application.submitted_at, range));
-  const filteredRawLeads = rawCustomerLeads.filter((lead) => isWithinAnalyticsDateRange(lead.received_at, range));
-  const filteredClicks = whatsAppTrackingClicks.filter((click) => isWithinAnalyticsDateRange(click.clicked_at, range));
-  const approved = filteredApplications.filter((application) => application.status === LoanStatus.APPROVE).length;
-  const vehicleUnits = buildVehicleStockRows(filteredApplications).reduce((sum, row) => sum + row.value, 0);
-
-  return {
-    applications: filteredApplications.length,
-    approved,
-    approvalRate: filteredApplications.length > 0 ? Math.round((approved / filteredApplications.length) * 100) : 0,
-    vehicleUnits,
-    rawLeads: filteredRawLeads.length,
-    clicks: filteredClicks.length
-  };
-}
-
 function getVehicleDemandGroup(application: LoanApplication, breakdown: VehicleDemandBreakdown) {
   if (breakdown === 'brand') {
     return {
@@ -1514,95 +1476,6 @@ function latestClickTime(clicks: WhatsAppTrackingClick[]) {
   });
 }
 
-function formatCompareValue(value: string | number, suffix = '') {
-  return typeof value === 'number' ? `${value}${suffix}` : value;
-}
-
-function CompareDeltaBadge({
-  delta,
-  suffix = '',
-  inverse = false
-}: {
-  delta?: number;
-  suffix?: string;
-  inverse?: boolean;
-}) {
-  if (typeof delta !== 'number') {
-    return null;
-  }
-
-  const isFlat = delta === 0;
-  const isPositive = inverse ? delta < 0 : delta > 0;
-  const deltaLabel = `${delta > 0 ? '+' : ''}${delta}${suffix}`;
-
-  return (
-    <span className={`shrink-0 rounded-full px-2 py-1 font-mono text-[11px] font-bold ${
-      isFlat
-        ? 'bg-slate-100 text-slate-500'
-        : isPositive
-          ? 'bg-emerald-50 text-emerald-700'
-          : 'bg-rose-50 text-rose-700'
-    }`}>
-      Delta {deltaLabel}
-    </span>
-  );
-}
-
-function HeroStatTile({
-  title,
-  value,
-  suffix = '',
-  icon,
-  tone,
-  comparison,
-  primary = false,
-  caption,
-  badge,
-  onClick
-}: {
-  title: string;
-  value: string | number;
-  suffix?: string;
-  icon: React.ReactNode;
-  tone: string;
-  comparison?: StatComparison;
-  // 帕累托层级:primary 为板块主指标(数字更大、卡更重),其余为支撑卡。
-  primary?: boolean;
-  caption?: React.ReactNode;
-  badge?: React.ReactNode;
-  onClick?: () => void;
-}) {
-  const Tag = onClick ? 'button' : 'div';
-  return (
-    <Tag
-      {...(onClick ? { type: 'button' as const, onClick } : {})}
-      className={`flex w-full flex-col rounded-2xl border bg-white p-5 text-left shadow-sm transition-colors ${
-        primary ? 'border-indigo-200 ring-1 ring-indigo-100' : 'border-slate-100'
-      } ${onClick ? 'hover:border-indigo-200 hover:bg-indigo-50/40' : ''}`}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <p className={`font-bold uppercase tracking-wider text-slate-500 ${primary ? 'text-xs' : 'text-[11px]'}`}>{tra(title)}</p>
-        <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-xl ${tone}`}>
-          {icon}
-        </div>
-      </div>
-      <div className="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-1">
-        <p className={`font-mono font-bold tracking-tight text-slate-900 tabular-nums ${primary ? 'text-5xl' : 'text-3xl'}`}>{value}{suffix}</p>
-        {badge}
-      </div>
-      {caption && <p className="mt-1 text-xs font-semibold text-slate-500">{caption}</p>}
-      {comparison && (
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          <CompareDeltaBadge delta={comparison.delta} suffix={comparison.suffix} inverse={comparison.inverse} />
-          <span className="text-[11px] font-semibold text-slate-500">
-            {comparison.secondaryLabel}: {formatCompareValue(comparison.secondaryValue, comparison.suffix)}
-          </span>
-        </div>
-      )}
-    </Tag>
-  );
-}
-
 // Reference-dashboard executive overview: KPIs, status comparison/share, table, and stacked trend.
 function AnalyticsExecutiveOverview({
   activeTimeframeLabel,
@@ -1676,9 +1549,9 @@ function AnalyticsExecutiveOverview({
       tone: 'text-amber-600'
     },
     {
-      label: tr('WhatsApp 点击', 'WhatsApp clicks', 'Klik WhatsApp'),
+      label: tr('WhatsApp 独立访客', 'WhatsApp unique visitors', 'Pelawat unik WhatsApp'),
       value: totalClicks.toLocaleString(),
-      detail: tr('追踪链接互动', 'Tracked link interactions', 'Interaksi pautan dijejaki'),
+      detail: tr('每条链接按浏览器去重', 'Counted once per browser per link', 'Dikira sekali bagi setiap pelayar setiap pautan'),
       tone: 'text-cyan-600'
     },
     {
@@ -1820,7 +1693,7 @@ function AnalyticsExecutiveOverview({
       application.vehicle_brand,
       application.id
     ]);
-    downloadCsvFromRows(header, rows, `analytics-applications-${new Date().toISOString().slice(0, 10)}.csv`);
+    downloadCsvFromRows(header, rows, `analytics-applications-${malaysiaDate()}.csv`);
   };
   const applicationTableColumns: Array<{ key: ApplicationTableSortKey; label: string; align?: 'right' }> = [
     { key: 'submitted_at', label: tr('提交日期', 'Submitted', 'Dihantar') },
@@ -1833,21 +1706,21 @@ function AnalyticsExecutiveOverview({
   return (
     <div id="analytics-section-timeframe" className="space-y-4 scroll-mt-28">
       <section className="grid grid-cols-1 gap-3 xl:grid-cols-[1.618fr_1fr]">
-        <div className="relative overflow-hidden rounded-2xl bg-indigo-600 p-6 text-white shadow-sm">
+        <div className="relative overflow-hidden rounded-panel bg-indigo-600 p-6 text-white shadow-e1">
           <div className="absolute -right-16 -top-20 h-48 w-48 rounded-full bg-white/10 blur-2xl" aria-hidden="true" />
-          <p className="relative text-[11px] font-bold uppercase tracking-[0.18em] text-indigo-100">{tr('主要指标', 'Primary metric', 'Metrik utama')}</p>
+          <p className="relative text-micro uppercase tracking-[0.18em] text-indigo-100">{tr('主要指标', 'Primary metric', 'Metrik utama')}</p>
           <p className="relative mt-5 font-mono text-6xl font-bold tracking-tight tabular-nums">{approvalRate}%</p>
-          <p className="relative mt-3 text-sm font-bold">{tr('批核率', 'Approval rate', 'Kadar kelulusan')}</p>
-          <p className="relative mt-1 text-xs text-indigo-100">{tr(`${approvedLoans} / ${applicationsCount} 份申请已批核`, `${approvedLoans} of ${applicationsCount} applications approved`, `${approvedLoans} daripada ${applicationsCount} permohonan diluluskan`)}</p>
-          <span className="relative mt-6 inline-flex rounded-lg bg-white/10 px-3 py-1.5 text-[11px] font-bold text-indigo-50">{activeTimeframeLabel}</span>
+          <p className="relative mt-3 text-headline">{tr('批核率', 'Approval rate', 'Kadar kelulusan')}</p>
+          <p className="relative mt-1 text-footnote text-indigo-100">{tr(`${approvedLoans} / ${applicationsCount} 份申请已批核`, `${approvedLoans} of ${applicationsCount} applications approved`, `${approvedLoans} daripada ${applicationsCount} permohonan diluluskan`)}</p>
+          <span className="relative mt-6 inline-flex rounded-control bg-white/10 px-3 py-1.5 text-caption font-semibold text-indigo-50">{activeTimeframeLabel}</span>
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 xl:grid-cols-1">
           {secondaryMetrics.map((metric) => (
-            <div key={metric.label} className="rounded-2xl bg-white/90 px-5 py-4 shadow-sm backdrop-blur">
-              <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">{metric.label}</p>
+            <div key={metric.label} className="rounded-panel bg-white/90 px-5 py-4 shadow-e1 backdrop-blur">
+              <p className="text-micro uppercase text-slate-500">{metric.label}</p>
               <div className="mt-2 flex items-end justify-between gap-3">
-                <p className={`truncate font-mono text-2xl font-bold tracking-tight ${metric.tone}`} title={metric.value}>{metric.value}</p>
-                <p className="shrink-0 text-[11px] font-semibold text-slate-500">{metric.detail}</p>
+                <p className={`truncate font-mono text-title-2 ${metric.tone}`} title={metric.value}>{metric.value}</p>
+                <p className="shrink-0 text-caption text-slate-500">{metric.detail}</p>
               </div>
             </div>
           ))}
@@ -1856,19 +1729,19 @@ function AnalyticsExecutiveOverview({
 
       <section className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         {supportingMetrics.map((metric) => (
-          <div key={metric.label} className="rounded-2xl bg-white/70 px-5 py-4 shadow-sm backdrop-blur">
-            <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">{metric.label}</p>
-            <p className={`mt-3 truncate font-mono text-xl font-bold tracking-tight ${metric.tone}`} title={metric.value}>{metric.value}</p>
-            <p className="mt-1.5 text-[11px] font-semibold text-slate-500">{metric.detail}</p>
+          <div key={metric.label} className="rounded-panel bg-white/70 px-5 py-4 shadow-e1 backdrop-blur">
+            <p className="text-micro uppercase text-slate-500">{metric.label}</p>
+            <p className={`mt-3 truncate font-mono text-title-2 ${metric.tone}`} title={metric.value}>{metric.value}</p>
+            <p className="mt-1.5 text-caption text-slate-500">{metric.detail}</p>
           </div>
         ))}
       </section>
 
-      <section className="overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm">
+      <section className="overflow-hidden rounded-panel border border-slate-100 bg-white shadow-e1">
         <div className="flex flex-col gap-3 border-b border-slate-100 px-5 py-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <h3 className="text-sm font-bold text-slate-900">{tr('申请状态', 'Application Status', 'Status Permohonan')}</h3>
-            <p className="mt-1 text-[11px] font-semibold text-slate-500">
+            <h3 className="text-headline text-slate-900">{tr('申请状态', 'Application Status', 'Status Permohonan')}</h3>
+            <p className="mt-1 text-caption text-slate-500">
               {statusView === 'comparison'
                 ? tr('按申请数量比较各贷款状态。', 'Compare loan statuses by application volume.', 'Bandingkan status pinjaman mengikut jumlah permohonan.')
                 : statusView === 'share'
@@ -1876,7 +1749,7 @@ function AnalyticsExecutiveOverview({
                   : tr('查看各贷款状态的申请数量、占比和分布。', 'Review application volume, share, and distribution for every loan status.', 'Semak jumlah, bahagian dan pengagihan bagi setiap status pinjaman.')}
             </p>
           </div>
-          <div className="flex shrink-0 items-center gap-1 rounded-xl bg-slate-100 p-1" aria-label={tr('申请状态视图', 'Application status view', 'Paparan status permohonan')}>
+          <div className="flex shrink-0 items-center gap-1 rounded-card bg-slate-100 p-1" aria-label={tr('申请状态视图', 'Application status view', 'Paparan status permohonan')}>
             {([
               { key: 'comparison' as const, zh: '对比', en: 'Comparison', ms: 'Perbandingan' },
               { key: 'share' as const, zh: '占比', en: 'Share', ms: 'Bahagian' },
@@ -1887,9 +1760,9 @@ function AnalyticsExecutiveOverview({
                 type="button"
                 onClick={() => setStatusView(view.key)}
                 aria-pressed={statusView === view.key}
-                className={`rounded-lg px-3 py-2 text-[11px] font-bold transition-colors ${
+                className={`rounded-control px-3 py-2 text-caption font-semibold transition-colors ${
                   statusView === view.key
-                    ? 'bg-indigo-600 text-white shadow-sm'
+                    ? 'bg-indigo-600 text-white shadow-e1'
                     : 'text-slate-500 hover:bg-white hover:text-slate-900'
                 }`}
               >
@@ -1927,7 +1800,7 @@ function AnalyticsExecutiveOverview({
           <>
             <div>
               <table className="w-full table-fixed text-left">
-                <thead className="border-b border-slate-200 bg-slate-100/80 text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                <thead className="border-b border-slate-200 bg-slate-100/80 text-micro uppercase text-slate-500">
                   <tr>
                     <th className="w-[30%] px-5 py-3">{tr('状态', 'Status', 'Status')}</th>
                     <th className="w-[18%] px-4 py-3 text-right">{tr('申请', 'Applications', 'Permohonan')}</th>
@@ -1939,13 +1812,13 @@ function AnalyticsExecutiveOverview({
                   {statusRows.map((row, index) => (
                     <tr key={row.key} className="hover:bg-slate-50/80">
                       <td className="px-5 py-3.5">
-                        <span className="inline-flex items-center gap-2 text-xs font-bold text-slate-800">
+                        <span className="inline-flex items-center gap-2 text-footnote font-bold text-slate-800">
                           <span className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: palette[index % palette.length] }} />
                           {row.label}
                         </span>
                       </td>
-                      <td className="px-4 py-3.5 text-right font-mono text-xs font-bold text-slate-800">{row.value.toLocaleString()}</td>
-                      <td className="px-4 py-3.5 text-right font-mono text-xs font-semibold text-slate-600">{row.percentage}%</td>
+                      <td className="px-4 py-3.5 text-right font-mono text-footnote font-bold text-slate-800">{row.value.toLocaleString()}</td>
+                      <td className="px-4 py-3.5 text-right font-mono text-footnote text-slate-600">{row.percentage}%</td>
                       <td className="px-5 py-3.5">
                         <span className="block h-1.5 w-full max-w-64 overflow-hidden rounded-full bg-slate-100">
                           <span className="block h-full rounded-full" style={{ width: `${row.percentage}%`, backgroundColor: palette[index % palette.length] }} />
@@ -1956,16 +1829,16 @@ function AnalyticsExecutiveOverview({
                 </tbody>
               </table>
             </div>
-            {statusRows.length === 0 && <div className="p-8 text-center text-xs font-semibold text-slate-500">{tr('本期暂无申请', 'No applications this period', 'Tiada permohonan tempoh ini')}</div>}
+            {statusRows.length === 0 && <div className="p-8 text-center text-footnote text-slate-500">{tr('本期暂无申请', 'No applications this period', 'Tiada permohonan tempoh ini')}</div>}
           </>
         )}
       </section>
 
-      <section className="rounded-2xl border border-slate-100 bg-white p-5 shadow-sm">
+      <section className="rounded-panel border border-slate-100 bg-white p-5 shadow-e1">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <h3 className="text-sm font-bold text-slate-900">{tr('申请提交趋势', 'Application Submission Trend', 'Trend Penghantaran Permohonan')}</h3>
-            <p className="mt-1 text-[11px] font-semibold text-slate-500">
+            <h3 className="text-headline text-slate-900">{tr('申请提交趋势', 'Application Submission Trend', 'Trend Penghantaran Permohonan')}</h3>
+            <p className="mt-1 text-caption text-slate-500">
               {activeTimeframeLabel} · {trendGranularity === 'month'
                 ? tr('按月及贷款状态堆叠。', 'Grouped monthly and stacked by loan status.', 'Dikumpulkan mengikut bulan dan ditindan mengikut status pinjaman.')
                 : tr('按日及贷款状态堆叠。', 'Grouped daily and stacked by loan status.', 'Dikumpulkan mengikut hari dan ditindan mengikut status pinjaman.')}
@@ -1973,7 +1846,7 @@ function AnalyticsExecutiveOverview({
           </div>
           <div className="flex flex-wrap gap-3">
             {statusRows.map((row, index) => (
-              <span key={row.key} className="inline-flex items-center gap-1.5 text-[10px] font-bold text-slate-500">
+              <span key={row.key} className="inline-flex items-center gap-1.5 text-micro tracking-normal text-slate-500">
                 <span className="h-2 w-2 rounded-sm" style={{ backgroundColor: palette[index % palette.length] }} />
                 {row.label}
               </span>
@@ -1981,11 +1854,11 @@ function AnalyticsExecutiveOverview({
           </div>
         </div>
         {applicationsCount === 0 ? (
-          <div className="mt-5 rounded-xl bg-slate-50 px-4 py-5 text-center text-xs font-semibold text-slate-500">
+          <div className="mt-5 rounded-card bg-slate-50 px-4 py-5 text-center text-footnote text-slate-500">
             {tr('本期暂无申请趋势', 'No application trend this period', 'Tiada trend permohonan tempoh ini')}
           </div>
         ) : (
-          <div className="mt-5 overflow-x-auto rounded-xl bg-slate-50 px-4 pb-4 pt-5">
+          <div className="mt-5 overflow-x-auto rounded-card bg-slate-50 px-4 pb-4 pt-5">
             <div className="flex h-72 items-end justify-center gap-2 border-b border-slate-200" style={{ minWidth: `${Math.max(760, trendData.length * 54)}px` }}>
               {trendData.map((bucket) => (
                 <div
@@ -1995,15 +1868,15 @@ function AnalyticsExecutiveOverview({
                   tabIndex={0}
                   aria-label={`${bucket.key}: ${bucket.total.toLocaleString()}`}
                 >
-                  <div className="pointer-events-none absolute left-1/2 top-2 z-20 hidden min-w-36 -translate-x-1/2 rounded-lg bg-slate-900 px-3 py-2 text-white shadow-xl group-hover:block group-focus:block">
-                    <p className="font-mono text-[11px] font-bold">{bucket.label}</p>
+                  <div className="pointer-events-none absolute left-1/2 top-2 z-20 hidden min-w-36 -translate-x-1/2 rounded-control bg-slate-900 px-3 py-2 text-white shadow-e3 group-hover:block group-focus:block">
+                    <p className="font-mono text-caption font-semibold">{bucket.label}</p>
                     <div className="mt-1.5 space-y-1 border-t border-white/15 pt-1.5">
-                      <div className="flex items-center justify-between gap-5 text-[10px] font-bold">
+                      <div className="flex items-center justify-between gap-5 text-micro tracking-normal">
                         <span>{tr('总数', 'Total', 'Jumlah')}</span>
                         <span className="font-mono">{bucket.total.toLocaleString()}</span>
                       </div>
                       {statusRows.map((row) => (
-                        <div key={row.key} className="flex items-center justify-between gap-5 text-[10px]">
+                        <div key={row.key} className="flex items-center justify-between gap-5 text-micro tracking-normal">
                           <span className="inline-flex min-w-0 items-center gap-1.5">
                             <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: statusColor.get(row.key) }} />
                             <span className="truncate">{row.label}</span>
@@ -2013,7 +1886,7 @@ function AnalyticsExecutiveOverview({
                       ))}
                     </div>
                   </div>
-                  <span className="mb-1 text-center text-[9px] font-bold text-slate-500">{bucket.total || ''}</span>
+                  <span className="mb-1 text-center text-micro tracking-normal text-slate-500">{bucket.total || ''}</span>
                   <div className="flex w-full flex-col-reverse overflow-hidden rounded-t-sm" style={{ height: `${bucket.total ? Math.max((bucket.total / trendMaximum) * 100, 4) : 1}%` }}>
                     {statusRows.map((row) => {
                       const count = bucket.counts.get(row.key) || 0;
@@ -2021,7 +1894,7 @@ function AnalyticsExecutiveOverview({
                     })}
                     {bucket.total === 0 && <span className="h-full bg-slate-200" />}
                   </div>
-                  <span className="mt-2 text-center text-[9px] font-semibold text-slate-500">{bucket.label}</span>
+                  <span className="mt-2 text-center text-caption text-slate-500">{bucket.label}</span>
                 </div>
               ))}
             </div>
@@ -2029,11 +1902,11 @@ function AnalyticsExecutiveOverview({
         )}
       </section>
 
-      <section className="overflow-hidden rounded-2xl bg-white/90 shadow-sm backdrop-blur">
+      <section className="overflow-hidden rounded-panel bg-white/90 shadow-e1 backdrop-blur">
         <div className="flex flex-col gap-4 border-b border-slate-100 px-5 py-4 xl:flex-row xl:items-end xl:justify-between">
           <div>
-            <h3 className="text-sm font-bold text-slate-900">{tr('申请明细', 'Application Records', 'Rekod Permohonan')}</h3>
-            <p className="mt-1 text-[11px] font-semibold text-slate-500">{tr(`当前筛选共 ${filteredTableRows.length} 条；单击查看摘要，双击打开详情。`, `${filteredTableRows.length} filtered records; click for a summary or double-click for details.`, `${filteredTableRows.length} rekod ditapis; klik untuk ringkasan atau klik dua kali untuk butiran.`)}</p>
+            <h3 className="text-headline text-slate-900">{tr('申请明细', 'Application Records', 'Rekod Permohonan')}</h3>
+            <p className="mt-1 text-caption text-slate-500">{tr(`当前筛选共 ${filteredTableRows.length} 条；单击查看摘要，双击打开详情。`, `${filteredTableRows.length} filtered records; click for a summary or double-click for details.`, `${filteredTableRows.length} rekod ditapis; klik untuk ringkasan atau klik dua kali untuk butiran.`)}</p>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
             <label className="relative block min-w-64">
@@ -2044,11 +1917,11 @@ function AnalyticsExecutiveOverview({
                 value={tableSearch}
                 onChange={(event) => setTableSearch(event.target.value)}
                 placeholder={tr('搜索申请人、负责人、状态或车型...', 'Search applicant, handler, status, or model...', 'Cari pemohon, pengendali, status atau model...')}
-                className="w-full rounded-xl bg-slate-100 py-2.5 pl-9 pr-3 text-xs font-semibold text-slate-700 outline-none ring-indigo-100 transition focus:bg-white focus:ring-2"
+                className="w-full rounded-card bg-slate-100 py-2.5 pl-9 pr-3 text-footnote text-slate-700 outline-none ring-indigo-100 transition focus:bg-white focus:ring-2"
               />
             </label>
             {canExportData && (
-              <button type="button" onClick={exportFilteredApplications} disabled={filteredTableRows.length === 0} className="inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-xs font-bold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-40">
+              <button type="button" onClick={exportFilteredApplications} disabled={filteredTableRows.length === 0} className="inline-flex items-center justify-center gap-2 rounded-card bg-indigo-600 px-4 py-2.5 text-footnote font-bold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-40">
                 <Download className="h-3.5 w-3.5" />
                 {tr('导出当前结果', 'Export results', 'Eksport hasil')}
               </button>
@@ -2058,7 +1931,7 @@ function AnalyticsExecutiveOverview({
 
         <div className="max-h-[520px] overflow-auto">
           <table className="w-full min-w-[900px] text-left">
-            <thead className="sticky top-0 z-10 bg-slate-100/95 text-[11px] font-bold uppercase tracking-wider text-slate-500 backdrop-blur">
+            <thead className="sticky top-0 z-10 bg-slate-100/95 text-micro uppercase text-slate-500 backdrop-blur">
               <tr>
                 {applicationTableColumns.map((column) => (
                   <th key={column.key} className="px-5 py-3">
@@ -2090,12 +1963,12 @@ function AnalyticsExecutiveOverview({
                       selected ? 'bg-indigo-50' : index % 2 === 1 ? 'bg-slate-50/50 hover:bg-indigo-50/60' : 'hover:bg-indigo-50/60'
                     }`}
                   >
-                    <td className="px-5 py-3 font-mono text-xs text-slate-500">{new Intl.DateTimeFormat(getAppLocale(), { year: 'numeric', month: 'short', day: '2-digit' }).format(new Date(application.submitted_at))}</td>
-                    <td className="px-5 py-3 text-xs font-bold text-slate-800">{application.applicant_name || '--'}</td>
-                    <td className="px-5 py-3 text-xs font-semibold text-slate-600">{application.handler_name || '--'}</td>
-                    <td className="px-5 py-3"><span className="rounded-lg bg-slate-100 px-2 py-1 text-[11px] font-bold text-slate-600">{trLoanStatus(application.status)}</span></td>
-                    <td className="px-5 py-3 text-xs font-semibold text-slate-600">{application.vehicle_model || '--'}</td>
-                    <td className="px-5 py-3 font-mono text-[11px] text-slate-500">{application.id}</td>
+                    <td className="px-5 py-3 font-mono text-footnote text-slate-500">{new Intl.DateTimeFormat(getAppLocale(), { year: 'numeric', month: 'short', day: '2-digit' }).format(new Date(application.submitted_at))}</td>
+                    <td className="px-5 py-3 text-footnote font-bold text-slate-800">{application.applicant_name || '--'}</td>
+                    <td className="px-5 py-3 text-footnote text-slate-600">{application.handler_name || '--'}</td>
+                    <td className="px-5 py-3"><span className="rounded-control bg-slate-100 px-2 py-1 text-caption font-semibold text-slate-600">{trLoanStatus(application.status)}</span></td>
+                    <td className="px-5 py-3 text-footnote text-slate-600">{application.vehicle_model || '--'}</td>
+                    <td className="px-5 py-3 font-mono text-caption text-slate-500">{application.id}</td>
                   </tr>
                 );
               })}
@@ -2103,44 +1976,44 @@ function AnalyticsExecutiveOverview({
           </table>
           {pageRows.length === 0 && (
             <div className="px-5 py-12 text-center">
-              <p className="text-xs font-bold text-slate-500">{applications.length === 0 ? tr('所选日期范围没有申请。', 'No applications in the selected date range.', 'Tiada permohonan dalam julat tarikh dipilih.') : tr('搜索条件没有匹配结果。', 'No records match the search.', 'Tiada rekod sepadan dengan carian.')}</p>
-              {tableSearch && <button type="button" onClick={() => setTableSearch('')} className="mt-3 rounded-lg bg-indigo-50 px-3 py-2 text-[11px] font-bold text-indigo-700">{tr('清除搜索', 'Clear search', 'Kosongkan carian')}</button>}
+              <p className="text-footnote font-bold text-slate-500">{applications.length === 0 ? tr('所选日期范围没有申请。', 'No applications in the selected date range.', 'Tiada permohonan dalam julat tarikh dipilih.') : tr('搜索条件没有匹配结果。', 'No records match the search.', 'Tiada rekod sepadan dengan carian.')}</p>
+              {tableSearch && <button type="button" onClick={() => setTableSearch('')} className="mt-3 rounded-control bg-indigo-50 px-3 py-2 text-caption font-semibold text-indigo-700">{tr('清除搜索', 'Clear search', 'Kosongkan carian')}</button>}
             </div>
           )}
         </div>
 
         {selectedApplication && (
-          <div className="grid gap-3 border-t border-indigo-100 bg-indigo-50/60 px-5 py-4 text-xs sm:grid-cols-2 xl:grid-cols-4">
-            <div><p className="text-[10px] font-bold uppercase tracking-wider text-indigo-400">{tr('已选申请', 'Selected record', 'Rekod dipilih')}</p><p className="mt-1 font-bold text-indigo-900">{selectedApplication.applicant_name}</p></div>
-            <div><p className="text-[10px] font-bold uppercase tracking-wider text-indigo-400">{tr('车辆', 'Vehicle', 'Kenderaan')}</p><p className="mt-1 font-semibold text-indigo-900">{selectedApplication.vehicle_brand} {selectedApplication.vehicle_model}</p></div>
-            <div><p className="text-[10px] font-bold uppercase tracking-wider text-indigo-400">{tr('负责人', 'Handler', 'Pengendali')}</p><p className="mt-1 font-semibold text-indigo-900">{selectedApplication.handler_name || '--'}</p></div>
-            <button type="button" onClick={() => setDetailApplication(selectedApplication)} className="justify-self-start rounded-lg bg-indigo-600 px-4 py-2 text-[11px] font-bold text-white sm:justify-self-end">{tr('打开详情', 'Open details', 'Buka butiran')}</button>
+          <div className="grid gap-3 border-t border-indigo-100 bg-indigo-50/60 px-5 py-4 text-footnote sm:grid-cols-2 xl:grid-cols-4">
+            <div><p className="text-micro uppercase text-indigo-400">{tr('已选申请', 'Selected record', 'Rekod dipilih')}</p><p className="mt-1 font-bold text-indigo-900">{selectedApplication.applicant_name}</p></div>
+            <div><p className="text-micro uppercase text-indigo-400">{tr('车辆', 'Vehicle', 'Kenderaan')}</p><p className="mt-1 font-semibold text-indigo-900">{selectedApplication.vehicle_brand} {selectedApplication.vehicle_model}</p></div>
+            <div><p className="text-micro uppercase text-indigo-400">{tr('负责人', 'Handler', 'Pengendali')}</p><p className="mt-1 font-semibold text-indigo-900">{selectedApplication.handler_name || '--'}</p></div>
+            <button type="button" onClick={() => setDetailApplication(selectedApplication)} className="justify-self-start rounded-control bg-indigo-600 px-4 py-2 text-caption font-semibold text-white sm:justify-self-end">{tr('打开详情', 'Open details', 'Buka butiran')}</button>
           </div>
         )}
 
         <div className="flex flex-col gap-3 border-t border-slate-100 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold text-slate-500">
+          <div className="flex flex-wrap items-center gap-2 text-caption text-slate-500">
             <span>{tr('每页', 'Rows per page', 'Baris setiap halaman')}</span>
-            {[10, 25, 50].map((size) => <button key={size} type="button" onClick={() => setTablePageSize(size)} aria-pressed={tablePageSize === size} className={`rounded-lg px-2.5 py-1.5 font-bold ${tablePageSize === size ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500 hover:text-slate-900'}`}>{size}</button>)}
+            {[10, 25, 50].map((size) => <button key={size} type="button" onClick={() => setTablePageSize(size)} aria-pressed={tablePageSize === size} className={`rounded-control px-2.5 py-1.5 font-bold ${tablePageSize === size ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500 hover:text-slate-900'}`}>{size}</button>)}
           </div>
           <div className="flex items-center gap-2">
-            <button type="button" onClick={() => setTablePage((page) => Math.max(1, page - 1))} disabled={safeTablePage <= 1} className="rounded-lg bg-slate-100 px-3 py-2 text-[11px] font-bold text-slate-600 disabled:opacity-40">{tr('上一页', 'Previous', 'Sebelumnya')}</button>
-            <span className="min-w-24 text-center font-mono text-[11px] font-bold text-slate-500">{safeTablePage} / {tablePageCount}</span>
-            <button type="button" onClick={() => setTablePage((page) => Math.min(tablePageCount, page + 1))} disabled={safeTablePage >= tablePageCount} className="rounded-lg bg-slate-100 px-3 py-2 text-[11px] font-bold text-slate-600 disabled:opacity-40">{tr('下一页', 'Next', 'Seterusnya')}</button>
+            <button type="button" onClick={() => setTablePage((page) => Math.max(1, page - 1))} disabled={safeTablePage <= 1} className="rounded-control bg-slate-100 px-3 py-2 text-caption font-semibold text-slate-600 disabled:opacity-40">{tr('上一页', 'Previous', 'Sebelumnya')}</button>
+            <span className="min-w-24 text-center font-mono text-caption font-semibold text-slate-500">{safeTablePage} / {tablePageCount}</span>
+            <button type="button" onClick={() => setTablePage((page) => Math.min(tablePageCount, page + 1))} disabled={safeTablePage >= tablePageCount} className="rounded-control bg-slate-100 px-3 py-2 text-caption font-semibold text-slate-600 disabled:opacity-40">{tr('下一页', 'Next', 'Seterusnya')}</button>
           </div>
         </div>
       </section>
 
       {detailApplication && (
         <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="analytics-record-detail-title" onMouseDown={(event) => { if (event.target === event.currentTarget) setDetailApplication(undefined); }}>
-          <div className="w-full max-w-4xl rounded-2xl bg-white p-6 shadow-2xl">
+          <div className="w-full max-w-4xl rounded-panel bg-white p-6 shadow-e3">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <p className="text-[11px] font-bold uppercase tracking-wider text-indigo-500">{detailApplication.id}</p>
-                <h3 id="analytics-record-detail-title" className="mt-1 text-xl font-bold text-slate-900">{detailApplication.applicant_name}</h3>
-                <p className="mt-1 text-xs text-slate-500">{tr('当前筛选结果中的申请详情。', 'Application detail from the current filtered result set.', 'Butiran permohonan daripada set hasil ditapis semasa.')}</p>
+                <p className="text-micro uppercase text-indigo-500">{detailApplication.id}</p>
+                <h3 id="analytics-record-detail-title" className="mt-1 text-title-3 text-slate-900">{detailApplication.applicant_name}</h3>
+                <p className="mt-1 text-footnote text-slate-500">{tr('当前筛选结果中的申请详情。', 'Application detail from the current filtered result set.', 'Butiran permohonan daripada set hasil ditapis semasa.')}</p>
               </div>
-              <button type="button" onClick={() => setDetailApplication(undefined)} aria-label={tr('关闭详情', 'Close details', 'Tutup butiran')} className="rounded-xl bg-slate-100 p-2 text-slate-500 hover:text-slate-900"><X className="h-4 w-4" /></button>
+              <button type="button" onClick={() => setDetailApplication(undefined)} aria-label={tr('关闭详情', 'Close details', 'Tutup butiran')} className="rounded-card bg-slate-100 p-2 text-slate-500 hover:text-slate-900"><X className="h-4 w-4" /></button>
             </div>
             <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {[
@@ -2149,8 +2022,8 @@ function AnalyticsExecutiveOverview({
                 [tr('提交日期', 'Submitted', 'Dihantar'), new Intl.DateTimeFormat(getAppLocale(), { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(detailApplication.submitted_at))],
                 [tr('车型', 'Vehicle model', 'Model kenderaan'), detailApplication.vehicle_model || '--'],
                 [tr('品牌', 'Brand', 'Jenama'), detailApplication.vehicle_brand || '--'],
-                [tr('车牌', 'Vehicle plate', 'Nombor plat'), detailApplication.vehicle_plate || '--']
-              ].map(([label, value]) => <div key={label} className="rounded-xl bg-slate-50 p-4"><p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{label}</p><p className="mt-2 text-sm font-bold text-slate-800">{value}</p></div>)}
+                [fieldLabel('plateNumber'), detailApplication.vehicle_plate || '--']
+              ].map(([label, value]) => <div key={label} className="rounded-card bg-slate-50 p-4"><p className="text-micro uppercase text-slate-500">{label}</p><p className="mt-2 text-headline text-slate-800">{value}</p></div>)}
             </div>
           </div>
         </div>
@@ -2231,23 +2104,23 @@ function MonthlyBreakdownMatrix({
   }
 
   return (
-    <section className="overflow-hidden rounded-xl bg-slate-50" aria-label={`${ariaLabel} monthly breakdown`}>
+    <section className="overflow-hidden rounded-card bg-slate-50" aria-label={`${ariaLabel} monthly breakdown`}>
       <div className="flex flex-col gap-2 border-b border-slate-100 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <p className="text-xs font-bold uppercase tracking-wider text-slate-500">{tr('每月明细', 'Monthly breakdown', 'Pecahan bulanan')}</p>
-          <p className="mt-0.5 text-[11px] font-semibold text-slate-500">
+          <p className="text-footnote font-bold uppercase tracking-wider text-slate-500">{tr('每月明细', 'Monthly breakdown', 'Pecahan bulanan')}</p>
+          <p className="mt-0.5 text-caption text-slate-500">
             {tr('每一行显示一个分组在各月份的实际数量。', 'Each row shows the actual count for one group in every month.', 'Setiap baris menunjukkan kiraan sebenar satu kumpulan bagi setiap bulan.')}
           </p>
         </div>
-        <div className="flex flex-wrap gap-2 text-[11px] font-bold text-slate-500">
+        <div className="flex flex-wrap gap-2 text-caption font-semibold text-slate-500">
           <span className="rounded-full bg-white px-2.5 py-1">{primaryLabel || tr('当前范围', 'Current range', 'Julat semasa')}</span>
           {hasComparison && <span className="rounded-full bg-white px-2.5 py-1 text-slate-500">vs {comparisonLabel || tr('对比范围', 'Comparison range', 'Julat perbandingan')}</span>}
         </div>
       </div>
 
       <div className="overflow-x-auto">
-        <table className="min-w-max table-fixed text-left text-xs">
-          <thead className="bg-white/70 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+        <table className="min-w-max table-fixed text-left text-footnote">
+          <thead className="bg-white/70 text-micro uppercase text-slate-500">
             <tr>
               <th className="sticky left-0 z-10 w-48 bg-slate-50 px-4 py-2.5">{tr('分组', 'Group', 'Kumpulan')}</th>
               {periods.map((period) => <th key={period.key} className="w-20 px-2 py-2.5 text-right">{period.label}</th>)}
@@ -2278,13 +2151,13 @@ function MonthlyBreakdownMatrix({
                         title={`${point.label} · ${item.label}: ${point.value} ${valueLabel}${hasComparison ? ` / ${comparisonValue}` : ''}`}
                       >
                         {point.value.toLocaleString()}
-                        {hasComparison && <span className="ml-1 text-[10px] font-semibold text-slate-500">/{comparisonValue.toLocaleString()}</span>}
+                        {hasComparison && <span className="ml-1 text-caption text-slate-500">/{comparisonValue.toLocaleString()}</span>}
                       </td>
                     );
                   })}
                   <td className="px-4 py-2.5 text-right font-mono font-bold text-indigo-600">
                     {total.toLocaleString()}
-                    {hasComparison && <span className="ml-1 text-[10px] font-semibold text-slate-500">/{comparisonTotal.toLocaleString()}</span>}
+                    {hasComparison && <span className="ml-1 text-caption text-slate-500">/{comparisonTotal.toLocaleString()}</span>}
                   </td>
                 </tr>
               );
@@ -2294,15 +2167,15 @@ function MonthlyBreakdownMatrix({
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 bg-white/50 px-4 py-2.5">
-        <span className="font-mono text-[11px] font-bold text-slate-500">
+        <span className="font-mono text-caption font-semibold text-slate-500">
           {pageStart + 1}–{Math.min(pageStart + MONTHLY_MATRIX_PAGE_SIZE, series.length)} / {series.length}
         </span>
         <div className="flex items-center gap-2" aria-label={tr('月度明细分页', 'Monthly breakdown pagination', 'Penomboran pecahan bulanan')}>
-          <button type="button" onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={safePage <= 1} className="rounded-lg bg-white px-3 py-1.5 text-[11px] font-bold text-slate-600 shadow-xs disabled:cursor-not-allowed disabled:opacity-40">
+          <button type="button" onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={safePage <= 1} className="rounded-control bg-white px-3 py-1.5 text-caption font-semibold text-slate-600 shadow-xs disabled:cursor-not-allowed disabled:opacity-40">
             {tr('上一页', 'Previous', 'Sebelumnya')}
           </button>
-          <span className="min-w-12 text-center font-mono text-[11px] font-bold text-slate-500">{safePage} / {pageCount}</span>
-          <button type="button" onClick={() => setPage((current) => Math.min(pageCount, current + 1))} disabled={safePage >= pageCount} className="rounded-lg bg-white px-3 py-1.5 text-[11px] font-bold text-slate-600 shadow-xs disabled:cursor-not-allowed disabled:opacity-40">
+          <span className="min-w-12 text-center font-mono text-caption font-semibold text-slate-500">{safePage} / {pageCount}</span>
+          <button type="button" onClick={() => setPage((current) => Math.min(pageCount, current + 1))} disabled={safePage >= pageCount} className="rounded-control bg-white px-3 py-1.5 text-caption font-semibold text-slate-600 shadow-xs disabled:cursor-not-allowed disabled:opacity-40">
             {tr('下一页', 'Next', 'Seterusnya')}
           </button>
         </div>
@@ -2391,7 +2264,7 @@ function SharedAggregateVisual({
     let accumulatedLength = 0;
 
     return (
-      <div className={`grid grid-cols-1 gap-5 rounded-xl bg-slate-50 p-5 lg:grid-cols-[260px_1fr] ${expandToContent ? 'min-h-[360px]' : 'h-[360px] overflow-hidden'}`}>
+      <div className={`grid grid-cols-1 gap-5 rounded-card bg-slate-50 p-5 lg:grid-cols-[260px_1fr] ${expandToContent ? 'min-h-[360px]' : 'h-[360px] overflow-hidden'}`}>
         <div className="relative mx-auto flex h-[240px] w-[240px] items-center justify-center self-center">
           <svg className="h-full w-full -rotate-90" viewBox="0 0 140 140" role="img" aria-label={`${ariaLabel} donut`}>
             <circle cx="70" cy="70" r={radius} fill="none" stroke="#e2e8f0" strokeWidth={strokeWidth} />
@@ -2417,22 +2290,24 @@ function SharedAggregateVisual({
             })}
           </svg>
           <div className="absolute inset-0 flex flex-col items-center justify-center">
-            <p className="font-mono text-3xl font-bold text-slate-900">{compactNumber(totalValue)}</p>
-            <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">{valueLabel}</p>
+            {/* Constrained by the donut it sits inside, so this takes the drawer
+                title size rather than the free-standing KPI `text-metric`. */}
+            <p className="font-mono text-title-1 text-slate-900">{compactNumber(totalValue)}</p>
+            <p className="text-micro uppercase text-slate-500">{valueLabel}</p>
           </div>
         </div>
 
         <div className={`space-y-2 pr-1 ${expandToContent ? '' : 'overflow-y-auto'}`}>
           {rows.map((row, index) => (
-            <div key={row.key} className="rounded-lg bg-white px-3 py-2 text-xs">
+            <div key={row.key} className="rounded-control bg-white px-3 py-2 text-footnote">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex min-w-0 items-center gap-2">
                   <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: rowColor(row, index) }} />
                   <span className="truncate font-semibold text-slate-700">{row.label}</span>
                 </div>
-                <span className="shrink-0 rounded-md bg-slate-50 px-1.5 py-0.5 font-mono text-[11px] font-bold text-slate-600">{row.percentage}%</span>
+                <span className="shrink-0 rounded-chip bg-slate-50 px-1.5 py-0.5 font-mono text-caption font-semibold text-slate-600">{row.percentage}%</span>
               </div>
-              <p className="mt-1 truncate text-[11px] font-semibold text-slate-500">
+              <p className="mt-1 truncate text-caption text-slate-500">
                 {row.value} {valueLabel}{row.meta ? ` · ${row.meta}` : ''}
               </p>
             </div>
@@ -2476,26 +2351,26 @@ function SharedAggregateVisual({
     const barGap = hasComparison ? 4 : 0;
 
     return (
-      <div className="h-[360px] overflow-hidden rounded-xl bg-slate-50 p-5">
+      <div className="h-[360px] overflow-hidden rounded-card bg-slate-50 p-5">
         <div className="mb-3 flex items-center justify-between gap-3">
           <div>
-            <p className="text-xs font-bold uppercase tracking-wider text-slate-500">{tr('数量 + 占比', 'Count + Share', "Kira + Kongsi")}</p>
-            <p className="mt-0.5 text-[11px] font-semibold text-slate-500">{ariaLabel}</p>
+            <p className="text-footnote font-bold uppercase tracking-wider text-slate-500">{tr('数量 + 占比', 'Count + Share', "Kira + Kongsi")}</p>
+            <p className="mt-0.5 text-caption text-slate-500">{ariaLabel}</p>
           </div>
           <div className="flex flex-wrap justify-end gap-2">
             {hasComparison && (
               <>
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-2 py-1 text-[11px] font-bold text-slate-500">
-                  <span className="h-1.5 w-5 rounded-full bg-red-800" />
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-2 py-1 text-caption font-semibold text-slate-500">
+                  <span className="h-1.5 w-5 rounded-full bg-brand" />
                   {primaryLabel || tra('Primary')}
                 </span>
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-2 py-1 text-[11px] font-bold text-slate-500">
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-2 py-1 text-caption font-semibold text-slate-500">
                   <span className="h-0 w-5 border-t-2 border-dashed border-slate-400" />
                   {comparisonLabel || tra('Compare')}
                 </span>
               </>
             )}
-            <span className="font-mono text-xs font-bold text-slate-500">{tr(`前 ${topRows.length}`, `Top ${topRows.length}`, `${topRows.length} teratas`)}</span>
+            <span className="font-mono text-footnote font-bold text-slate-500">{tr(`前 ${topRows.length}`, `Top ${topRows.length}`, `${topRows.length} teratas`)}</span>
           </div>
         </div>
         <div className="h-[294px] overflow-hidden">
@@ -2507,10 +2382,10 @@ function SharedAggregateVisual({
               return (
                 <g key={ratio}>
                   <line x1={margin.left} x2={chartWidth - margin.right} y1={y} y2={y} stroke="#e2e8f0" strokeWidth="1" />
-                  <text x={margin.left - 10} y={y + 4} textAnchor="end" className="fill-slate-400 text-[11px] font-semibold">
+                  <text x={margin.left - 10} y={y + 4} textAnchor="end" className="fill-slate-400 text-caption">
                     {compactNumber(countValue)}
                   </text>
-                  <text x={chartWidth - margin.right + 12} y={y + 4} className="fill-slate-400 text-[11px] font-semibold">
+                  <text x={chartWidth - margin.right + 12} y={y + 4} className="fill-slate-400 text-caption">
                     {Math.round(ratio * 100)}%
                   </text>
                 </g>
@@ -2551,11 +2426,11 @@ function SharedAggregateVisual({
                     fill={rowColor(row, index)}
                     opacity="0.88"
                   />
-                  <text x={hasComparison ? primaryX + barWidth / 2 : point.x} y={Math.max(barY - 8, 12)} textAnchor="middle" className="fill-slate-700 text-[11px] font-bold">
+                  <text x={hasComparison ? primaryX + barWidth / 2 : point.x} y={Math.max(barY - 8, 12)} textAnchor="middle" className="fill-slate-700 text-caption font-semibold">
                     {compactNumber(row.value)}
                   </text>
                   {hasComparison && comparisonValue > 0 && (
-                    <text x={comparisonX + barWidth / 2} y={Math.max(comparisonBarY - 8, 12)} textAnchor="middle" className="fill-slate-500 text-[11px] font-bold">
+                    <text x={comparisonX + barWidth / 2} y={Math.max(comparisonBarY - 8, 12)} textAnchor="middle" className="fill-slate-500 text-caption font-semibold">
                       {compactNumber(comparisonValue)}
                     </text>
                   )}
@@ -2570,10 +2445,10 @@ function SharedAggregateVisual({
                 {hasComparison && (
                   <circle cx={point.x} cy={comparisonPoints.find((comparisonPoint) => comparisonPoint.row.key === point.row.key)?.y || getShareY(0)} r="4" fill="white" stroke="#64748b" strokeDasharray="2 2" strokeWidth="2.5" />
                 )}
-                <text x={point.x} y={Math.max(point.y - 10, 12)} textAnchor="middle" className="fill-slate-900 text-[11px] font-bold">
+                <text x={point.x} y={Math.max(point.y - 10, 12)} textAnchor="middle" className="fill-slate-900 text-caption font-semibold">
                   {point.row.percentage}%
                 </text>
-                <text x={point.x} y={margin.top + innerHeight + 24} textAnchor="middle" className="fill-slate-500 text-[11px] font-bold">
+                <text x={point.x} y={margin.top + innerHeight + 24} textAnchor="middle" className="fill-slate-500 text-caption font-semibold">
                   {point.row.label.length > 12 ? `${point.row.label.slice(0, 12)}...` : point.row.label}
                 </text>
               </g>
@@ -2609,27 +2484,27 @@ function SharedAggregateVisual({
     const trendTickIndexes = getTrendTickIndexes(periods.length);
 
     return (
-      <div className="h-[360px] overflow-hidden rounded-xl bg-slate-50 p-5">
+      <div className="h-[360px] overflow-hidden rounded-card bg-slate-50 p-5">
         <div className="mb-3 flex items-center justify-between gap-3">
           <div>
-            <p className="text-xs font-bold uppercase tracking-wider text-slate-500">{tr('趋势', 'Trend', "Trend")}</p>
-            <p className="mt-0.5 text-[11px] font-semibold text-slate-500">{ariaLabel} · {tr(`前 ${series.length}`, `top ${series.length}`, `atas ${series.length}`)}</p>
+            <p className="text-footnote font-bold uppercase tracking-wider text-slate-500">{tr('趋势', 'Trend', "Trend")}</p>
+            <p className="mt-0.5 text-caption text-slate-500">{ariaLabel} · {tr(`前 ${series.length}`, `top ${series.length}`, `atas ${series.length}`)}</p>
           </div>
           <div className="flex flex-wrap justify-end gap-2">
             {hasComparison && (
               <>
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-2 py-1 text-[11px] font-bold text-slate-500">
-                  <span className="h-1.5 w-5 rounded-full bg-red-800" />
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-2 py-1 text-caption font-semibold text-slate-500">
+                  <span className="h-1.5 w-5 rounded-full bg-brand" />
                   {primaryLabel || tra('Primary')}
                 </span>
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-2 py-1 text-[11px] font-bold text-slate-500">
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-2 py-1 text-caption font-semibold text-slate-500">
                   <span className="h-0 w-5 border-t-2 border-dashed border-slate-400" />
                   {comparisonLabel || tra('Compare')}
                 </span>
               </>
             )}
             {series.map((item, index) => (
-              <span key={item.key} className="inline-flex items-center gap-1.5 rounded-full bg-white px-2 py-1 text-[11px] font-bold text-slate-500">
+              <span key={item.key} className="inline-flex items-center gap-1.5 rounded-full bg-white px-2 py-1 text-caption font-semibold text-slate-500">
                 <span className="h-2 w-2 rounded-full" style={{ backgroundColor: chartPalette[index % chartPalette.length] }} />
                 {item.label.length > 16 ? `${item.label.slice(0, 16)}...` : item.label}
               </span>
@@ -2638,7 +2513,7 @@ function SharedAggregateVisual({
         </div>
         <div className="h-[294px] overflow-hidden">
           {series.length === 0 || periods.length === 0 ? (
-            <div className="flex h-full items-center justify-center text-sm font-semibold text-slate-500">
+            <div className="flex h-full items-center justify-center text-callout text-slate-500">
               {tr('当前时间段没有足够的趋势数据', 'Not enough trend data in this timeframe', "Data aliran tidak mencukupi dalam jangka masa ini")}
             </div>
           ) : (
@@ -2650,7 +2525,7 @@ function SharedAggregateVisual({
                 return (
                   <g key={ratio}>
                     <line x1={margin.left} x2={chartWidth - margin.right} y1={y} y2={y} stroke="#e2e8f0" strokeWidth="1" />
-                    <text x={margin.left - 10} y={y + 4} textAnchor="end" className="fill-slate-400 text-[11px] font-semibold">
+                    <text x={margin.left - 10} y={y + 4} textAnchor="end" className="fill-slate-400 text-caption">
                       {compactNumber(value)}
                     </text>
                   </g>
@@ -2714,7 +2589,7 @@ function SharedAggregateVisual({
                 );
               })}
               {periods.map((period, index) => trendTickIndexes.has(index) && (
-                <text key={period.key} x={getX(index)} y={margin.top + innerHeight + 24} textAnchor="middle" className="fill-slate-500 text-[11px] font-bold">
+                <text key={period.key} x={getX(index)} y={margin.top + innerHeight + 24} textAnchor="middle" className="fill-slate-500 text-caption font-semibold">
                   {period.label}
                 </text>
               ))}
@@ -2726,8 +2601,8 @@ function SharedAggregateVisual({
                   <g pointerEvents="none">
                     <rect x={x} y={y} width={width} height="46" rx="9" fill="#0f172a" opacity="0.96" />
                     <circle cx={x + 13} cy={y + 15} r="4" fill={trendHover.color} />
-                    <text x={x + 23} y={y + 18} className="fill-slate-300 text-[11px] font-semibold">{trendHover.period}</text>
-                    <text x={x + 12} y={y + 35} className="fill-white text-xs font-bold">{`${trendHover.series}: ${trendHover.value} ${valueLabel}`}</text>
+                    <text x={x + 23} y={y + 18} className="fill-slate-300 text-caption">{trendHover.period}</text>
+                    <text x={x + 12} y={y + 35} className="fill-white text-footnote font-bold">{`${trendHover.series}: ${trendHover.value} ${valueLabel}`}</text>
                   </g>
                 );
               })()}
@@ -2739,14 +2614,14 @@ function SharedAggregateVisual({
   }
 
   return (
-    <div className={`rounded-xl bg-slate-50 p-5 ${expandToContent ? 'min-h-[360px]' : 'h-[360px] overflow-y-auto'}`}>
+    <div className={`rounded-card bg-slate-50 p-5 ${expandToContent ? 'min-h-[360px]' : 'h-[360px] overflow-y-auto'}`}>
       {hasComparison && (
         <div className="mb-3 flex flex-wrap justify-end gap-2">
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-2 py-1 text-[11px] font-bold text-slate-500">
-            <span className="h-2 w-5 rounded-full bg-red-800" />
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-2 py-1 text-caption font-semibold text-slate-500">
+            <span className="h-2 w-5 rounded-full bg-brand" />
             {primaryLabel || 'Primary'}
           </span>
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-2 py-1 text-[11px] font-bold text-slate-500">
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-2 py-1 text-caption font-semibold text-slate-500">
             <span className="h-2 w-5 rounded-full border border-dashed border-slate-400 bg-white" />
             {comparisonLabel || 'Compare'}
           </span>
@@ -2762,11 +2637,11 @@ function SharedAggregateVisual({
           return (
           <div
             key={row.key}
-            className="group rounded-lg bg-white px-3 py-2 outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/50"
+            className="group rounded-control bg-white px-3 py-2 outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/50"
             tabIndex={showBarValueOnHoverOnly ? 0 : undefined}
             aria-label={showBarValueOnHoverOnly ? `${row.label}: ${row.value.toLocaleString()}` : undefined}
           >
-            <div className={`mb-1.5 flex items-center gap-2 text-xs ${showBarValueOnHoverOnly ? 'justify-end' : 'justify-between'}`}>
+            <div className={`mb-1.5 flex items-center gap-2 text-footnote ${showBarValueOnHoverOnly ? 'justify-end' : 'justify-between'}`}>
               {!showBarValueOnHoverOnly && (
                 <div className="flex min-w-0 items-center gap-2">
                   <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: rowColor(row, index) }} />
@@ -2777,26 +2652,26 @@ function SharedAggregateVisual({
                 {showBarValueOnHoverOnly && (
                   <span
                     role="tooltip"
-                    className="rounded-md bg-slate-800 px-1.5 py-0.5 font-mono text-[11px] font-bold text-white opacity-0 transition-opacity group-hover:opacity-100 group-focus:opacity-100"
+                    className="rounded-chip bg-slate-800 px-1.5 py-0.5 font-mono text-caption font-semibold text-white opacity-0 transition-opacity group-hover:opacity-100 group-focus:opacity-100"
                   >
                     {row.value.toLocaleString()}{hasComparison ? ` / ${comparisonValue.toLocaleString()}` : ''}
                   </span>
                 )}
                 {hasComparison && (
-                  <span className="rounded-md bg-slate-50 px-1.5 py-0.5 font-mono text-[11px] font-bold text-slate-500">{comparisonRow?.percentage || 0}%</span>
+                  <span className="rounded-chip bg-slate-50 px-1.5 py-0.5 font-mono text-caption font-semibold text-slate-500">{comparisonRow?.percentage || 0}%</span>
                 )}
-                <span className="rounded-md bg-slate-50 px-1.5 py-0.5 font-mono text-[11px] font-bold text-slate-600">{row.percentage}%</span>
+                <span className="rounded-chip bg-slate-50 px-1.5 py-0.5 font-mono text-caption font-semibold text-slate-600">{row.percentage}%</span>
               </div>
             </div>
             <div className="flex items-center gap-2">
               {showBarValueOnHoverOnly && (
-                <div className="flex w-24 shrink-0 items-center gap-2 text-xs">
+                <div className="flex w-24 shrink-0 items-center gap-2 text-footnote">
                   <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: rowColor(row, index) }} />
                   <span className="truncate font-semibold text-slate-700">{row.label}</span>
                 </div>
               )}
               {!showBarValueOnHoverOnly && (
-                <span className="w-20 shrink-0 font-mono text-[11px] text-slate-500">
+                <span className="w-20 shrink-0 font-mono text-caption text-slate-500">
                   {row.value}{hasComparison ? ` / ${comparisonValue}` : ''} {valueLabel}
                 </span>
               )}
@@ -2820,7 +2695,7 @@ function SharedAggregateVisual({
               </div>
             </div>
             {row.meta && (
-              <p className="mt-1 truncate text-[11px] font-semibold text-slate-500">{row.meta}</p>
+              <p className="mt-1 truncate text-caption text-slate-500">{row.meta}</p>
             )}
           </div>
           );
@@ -2876,11 +2751,11 @@ function HorizontalBars({
 
   if (monthlyView || visualMode === 'combo' || visualMode === 'trend') {
     return (
-      <section className="rounded-xl border border-slate-100 bg-white p-5 shadow-sm">
+      <section className="rounded-card border border-slate-100 bg-white p-5 shadow-e1">
         <div className="mb-4 flex min-h-[46px] items-start justify-between gap-4">
           <div>
-            <h3 className="text-sm font-bold text-slate-900">{title}</h3>
-            <p className="text-xs text-slate-500">{subtitle}</p>
+            <h3 className="text-headline text-slate-900">{title}</h3>
+            <p className="text-footnote text-slate-500">{subtitle}</p>
           </div>
           {visualMode === 'trend' ? (
             <Activity className="h-4 w-4 text-slate-300" />
@@ -2909,11 +2784,11 @@ function HorizontalBars({
   }
 
   return (
-    <section className="h-[380px] overflow-hidden rounded-xl border border-slate-100 bg-white p-5 shadow-sm">
+    <section className="h-[380px] overflow-hidden rounded-card border border-slate-100 bg-white p-5 shadow-e1">
       <div className="mb-4 flex min-h-[46px] items-start justify-between gap-4">
         <div>
-          <h3 className="text-sm font-bold text-slate-900">{title}</h3>
-          <p className="text-xs text-slate-500">{subtitle}</p>
+          <h3 className="text-headline text-slate-900">{title}</h3>
+          <p className="text-footnote text-slate-500">{subtitle}</p>
         </div>
         {visualMode === 'donut' ? (
           <PieChart className="h-4 w-4 text-slate-300" />
@@ -2959,23 +2834,23 @@ function HorizontalBars({
               })}
             </svg>
             <div className="absolute inset-0 flex flex-col items-center justify-center">
-              <p className="font-mono text-xl font-bold text-slate-900">{totalValue}</p>
-              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{valueLabel}</p>
+              <p className="font-mono text-title-3 text-slate-900">{totalValue}</p>
+              <p className="text-micro uppercase text-slate-500">{valueLabel}</p>
             </div>
           </div>
 
           <div className="space-y-2 overflow-y-auto pr-1">
             {rows.slice(0, 6).map((row, index) => (
-              <div key={row.key} className="rounded-lg bg-slate-50 px-3 py-2 text-xs">
+              <div key={row.key} className="rounded-control bg-slate-50 px-3 py-2 text-footnote">
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex min-w-0 items-center gap-2">
                     <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: getRowHexColor(row, index) }} />
                     <span className="truncate font-semibold text-slate-700">{row.label}</span>
                   </div>
-                  <span className="shrink-0 rounded-md bg-white px-1.5 py-0.5 font-mono text-[11px] font-bold text-slate-600 shadow-xs">{row.percentage}%</span>
+                  <span className="shrink-0 rounded-chip bg-white px-1.5 py-0.5 font-mono text-caption font-semibold text-slate-600 shadow-xs">{row.percentage}%</span>
                 </div>
                 <div className="mt-1 flex items-center gap-2">
-                  <span className="w-14 shrink-0 font-mono text-[11px] text-slate-500">{row.value} {valueLabel}</span>
+                  <span className="w-14 shrink-0 font-mono text-caption text-slate-500">{row.value} {valueLabel}</span>
                   <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-white">
                     <div
                       className="h-full rounded-full"
@@ -2989,7 +2864,7 @@ function HorizontalBars({
               </div>
             ))}
             {rows.length > 6 && (
-              <p className="px-1 text-[11px] font-semibold text-slate-500">+{rows.length - 6} more rows in this group</p>
+              <p className="px-1 text-caption text-slate-500">+{rows.length - 6} more rows in this group</p>
             )}
           </div>
         </div>
@@ -2997,11 +2872,11 @@ function HorizontalBars({
         <div className="h-[290px] space-y-2 overflow-y-auto pr-1">
           {hasComparison && (
             <div className="flex flex-wrap justify-end gap-2">
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-50 px-2 py-1 text-[11px] font-bold text-slate-500">
-                <span className="h-2 w-5 rounded-full bg-red-800" />
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-50 px-2 py-1 text-caption font-semibold text-slate-500">
+                <span className="h-2 w-5 rounded-full bg-brand" />
                 {primaryLabel || 'Primary'}
               </span>
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-50 px-2 py-1 text-[11px] font-bold text-slate-500">
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-50 px-2 py-1 text-caption font-semibold text-slate-500">
                 <span className="h-2 w-5 rounded-full border border-dashed border-slate-400 bg-white" />
                 {comparisonLabel || 'Compare'}
               </span>
@@ -3013,8 +2888,8 @@ function HorizontalBars({
             const rowHexColor = colorMode === 'staff' ? getStaffColor(row.label, staffColorMap) : chartPalette[index % chartPalette.length];
 
             return (
-              <div key={row.key} className="rounded-lg bg-slate-50 px-3 py-2">
-                <div className="mb-1.5 flex items-center justify-between gap-2 text-xs">
+              <div key={row.key} className="rounded-control bg-slate-50 px-3 py-2">
+                <div className="mb-1.5 flex items-center justify-between gap-2 text-footnote">
                   <div className="flex min-w-0 items-center gap-2">
                     <span
                       className={`h-2 w-2 shrink-0 rounded-full ${colorMode === 'staff' ? '' : palette[index % palette.length]}`}
@@ -3023,12 +2898,12 @@ function HorizontalBars({
                     <span className="truncate font-semibold text-slate-700">{row.label}</span>
                   </div>
                   <div className="flex shrink-0 items-center gap-1.5">
-                    {hasComparison && <span className="rounded-md bg-white px-1.5 py-0.5 font-mono text-[11px] font-bold text-slate-500 shadow-xs">{comparisonRow?.percentage || 0}%</span>}
-                    <span className="rounded-md bg-white px-1.5 py-0.5 font-mono text-[11px] font-bold text-slate-600 shadow-xs">{row.percentage}%</span>
+                    {hasComparison && <span className="rounded-chip bg-white px-1.5 py-0.5 font-mono text-caption font-semibold text-slate-500 shadow-xs">{comparisonRow?.percentage || 0}%</span>}
+                    <span className="rounded-chip bg-white px-1.5 py-0.5 font-mono text-caption font-semibold text-slate-600 shadow-xs">{row.percentage}%</span>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="w-16 shrink-0 font-mono text-[11px] text-slate-500">{row.value}{hasComparison ? ` / ${comparisonValue}` : ''} {valueLabel}</span>
+                  <span className="w-16 shrink-0 font-mono text-caption text-slate-500">{row.value}{hasComparison ? ` / ${comparisonValue}` : ''} {valueLabel}</span>
                   <div className="relative h-2.5 min-w-0 flex-1 overflow-hidden rounded-full bg-white">
                     {hasComparison && (
                       <div
@@ -3091,7 +2966,7 @@ function MarketingPerformanceVisual({
       rows={rows}
       visualMode={visualMode}
       valueLabel="clicks"
-      emptyText={tr('还没有营销点击数据', 'No marketing click data yet', "Tiada data klik pemasaran lagi")}
+      emptyText={tr('还没有营销访客数据', 'No marketing visitor data yet', "Tiada data pelawat pemasaran lagi")}
       ariaLabel="Marketing Performance"
       trendSeries={trendSeries}
       comparisonRows={comparisonRows}
@@ -3202,7 +3077,7 @@ function VehicleDemandVisual({
   const getColor = (rowLabel: string, index: number) => (
     rowLabel === 'Not set' || rowLabel === 'Unknown model' ? '#94a3b8' : chartPalette[index % chartPalette.length]
   );
-  const cardClassName = 'h-[380px] overflow-hidden rounded-xl bg-slate-50 p-4';
+  const cardClassName = 'h-[380px] overflow-hidden rounded-card bg-slate-50 p-4';
   const visualLabel = VEHICLE_DEMAND_VISUAL_OPTIONS.find((option) => option.value === mode)?.label || 'Bar';
 
   if (monthlyView) {
@@ -3233,10 +3108,10 @@ function VehicleDemandVisual({
       <div className={cardClassName}>
         <div className="mb-3 flex items-center justify-between gap-3">
           <div>
-            <p className="text-xs font-bold uppercase tracking-wider text-slate-500">{valueLabel} Composition</p>
-            <p className="mt-0.5 text-[11px] font-semibold text-slate-500">{timeframeLabel}</p>
+            <p className="text-footnote font-bold uppercase tracking-wider text-slate-500">{valueLabel} Composition</p>
+            <p className="mt-0.5 text-caption text-slate-500">{timeframeLabel}</p>
           </div>
-          <span className="font-mono text-xs font-bold text-slate-500">{compactNumber(totalValue)} units</span>
+          <span className="font-mono text-footnote font-bold text-slate-500">{compactNumber(totalValue)} units</span>
         </div>
         <div className="grid h-[304px] grid-cols-1 items-center gap-5 lg:grid-cols-[320px_1fr]">
           <div className="flex items-center justify-center">
@@ -3265,19 +3140,19 @@ function VehicleDemandVisual({
                 })}
               </svg>
               <div className="absolute inset-0 flex flex-col items-center justify-center">
-                <p className="font-mono text-2xl font-bold text-slate-900">{compactNumber(totalValue)}</p>
-                <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">{tra('units')}</p>
+                <p className="font-mono text-title-2 text-slate-900">{compactNumber(totalValue)}</p>
+                <p className="text-micro uppercase text-slate-500">{tra('units')}</p>
               </div>
             </div>
           </div>
           <div className="grid gap-2 sm:grid-cols-2">
             {chartRows.slice(0, 6).map((row, index) => (
-              <div key={row.key} className="flex min-w-0 items-center justify-between gap-3 rounded-lg bg-white px-3 py-2">
+              <div key={row.key} className="flex min-w-0 items-center justify-between gap-3 rounded-control bg-white px-3 py-2">
                 <div className="flex min-w-0 items-center gap-2">
                   <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: getColor(row.label, index) }} />
-                  <span className="truncate text-xs font-bold text-slate-700">{row.label}</span>
+                  <span className="truncate text-footnote font-bold text-slate-700">{row.label}</span>
                 </div>
-                <span className="shrink-0 font-mono text-xs font-bold text-slate-500">{row.percentage}%</span>
+                <span className="shrink-0 font-mono text-footnote font-bold text-slate-500">{row.percentage}%</span>
               </div>
             ))}
           </div>
@@ -3317,23 +3192,23 @@ function VehicleDemandVisual({
       <div className={cardClassName}>
         <div className="mb-3 flex items-center justify-between gap-3">
           <div>
-            <p className="text-xs font-bold uppercase tracking-wider text-slate-500">{valueLabel} Units + Approval</p>
-            <p className="mt-0.5 text-[11px] font-semibold text-slate-500">{timeframeLabel}</p>
+            <p className="text-footnote font-bold uppercase tracking-wider text-slate-500">{valueLabel} Units + Approval</p>
+            <p className="mt-0.5 text-caption text-slate-500">{timeframeLabel}</p>
           </div>
           <div className="flex flex-wrap justify-end gap-2">
             {hasComparison && (
               <>
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-2 py-1 text-[11px] font-bold text-slate-500">
-                  <span className="h-1.5 w-5 rounded-full bg-red-800" />
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-2 py-1 text-caption font-semibold text-slate-500">
+                  <span className="h-1.5 w-5 rounded-full bg-brand" />
                   {primaryLabel || 'Primary'}
                 </span>
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-2 py-1 text-[11px] font-bold text-slate-500">
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-2 py-1 text-caption font-semibold text-slate-500">
                   <span className="h-0 w-5 border-t-2 border-dashed border-slate-400" />
                   {comparisonLabel || 'Compare'}
                 </span>
               </>
             )}
-            <span className="font-mono text-xs font-bold text-slate-500">Top {chartRows.length}</span>
+            <span className="font-mono text-footnote font-bold text-slate-500">Top {chartRows.length}</span>
           </div>
         </div>
         <div className="h-[304px] overflow-hidden">
@@ -3345,10 +3220,10 @@ function VehicleDemandVisual({
               return (
                 <g key={ratio}>
                   <line x1={margin.left} x2={chartWidth - margin.right} y1={y} y2={y} stroke="#e2e8f0" strokeWidth="1" />
-                  <text x={margin.left - 10} y={y + 4} textAnchor="end" className="fill-slate-400 text-[11px] font-semibold">
+                  <text x={margin.left - 10} y={y + 4} textAnchor="end" className="fill-slate-400 text-caption">
                     {compactNumber(value)}
                   </text>
-                  <text x={chartWidth - margin.right + 12} y={y + 4} className="fill-slate-400 text-[11px] font-semibold">
+                  <text x={chartWidth - margin.right + 12} y={y + 4} className="fill-slate-400 text-caption">
                     {Math.round(ratio * 100)}%
                   </text>
                 </g>
@@ -3389,11 +3264,11 @@ function VehicleDemandVisual({
                     fill={getColor(row.label, index)}
                     opacity="0.88"
                   />
-                  <text x={hasComparison ? primaryX + barWidth / 2 : point.x} y={Math.max(barY - 8, 12)} textAnchor="middle" className="fill-slate-700 text-[11px] font-bold">
+                  <text x={hasComparison ? primaryX + barWidth / 2 : point.x} y={Math.max(barY - 8, 12)} textAnchor="middle" className="fill-slate-700 text-caption font-semibold">
                     {compactNumber(row.value)}
                   </text>
                   {hasComparison && comparisonValue > 0 && (
-                    <text x={comparisonX + barWidth / 2} y={Math.max(comparisonBarY - 8, 12)} textAnchor="middle" className="fill-slate-500 text-[11px] font-bold">
+                    <text x={comparisonX + barWidth / 2} y={Math.max(comparisonBarY - 8, 12)} textAnchor="middle" className="fill-slate-500 text-caption font-semibold">
                       {compactNumber(comparisonValue)}
                     </text>
                   )}
@@ -3410,10 +3285,10 @@ function VehicleDemandVisual({
             ))}
             {points.map((point) => (
               <g key={`${point.row.key}-label`}>
-                <text x={point.x} y={margin.top + innerHeight + 24} textAnchor="middle" className="fill-slate-500 text-[11px] font-bold">
+                <text x={point.x} y={margin.top + innerHeight + 24} textAnchor="middle" className="fill-slate-500 text-caption font-semibold">
                   {point.row.label.length > 12 ? `${point.row.label.slice(0, 12)}...` : point.row.label}
                 </text>
-                <text x={point.x} y={Math.max(point.y - 10, 12)} textAnchor="middle" className="fill-slate-900 text-[11px] font-bold">
+                <text x={point.x} y={Math.max(point.y - 10, 12)} textAnchor="middle" className="fill-slate-900 text-caption font-semibold">
                   {point.row.approvalRate}%
                 </text>
               </g>
@@ -3444,24 +3319,24 @@ function VehicleDemandVisual({
       <div className={cardClassName}>
         <div className="mb-3 flex items-center justify-between gap-3">
           <div>
-            <p className="text-xs font-bold uppercase tracking-wider text-slate-500">{valueLabel} Trend</p>
-            <p className="mt-0.5 text-[11px] font-semibold text-slate-500">{timeframeLabel} · top {trendSeries.length}</p>
+            <p className="text-footnote font-bold uppercase tracking-wider text-slate-500">{valueLabel} Trend</p>
+            <p className="mt-0.5 text-caption text-slate-500">{timeframeLabel} · top {trendSeries.length}</p>
           </div>
           <div className="flex flex-wrap justify-end gap-2">
             {hasComparison && (
               <>
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-2 py-1 text-[11px] font-bold text-slate-500">
-                  <span className="h-1.5 w-5 rounded-full bg-red-800" />
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-2 py-1 text-caption font-semibold text-slate-500">
+                  <span className="h-1.5 w-5 rounded-full bg-brand" />
                   {primaryLabel || 'Primary'}
                 </span>
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-2 py-1 text-[11px] font-bold text-slate-500">
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-2 py-1 text-caption font-semibold text-slate-500">
                   <span className="h-0 w-5 border-t-2 border-dashed border-slate-400" />
                   {comparisonLabel || 'Compare'}
                 </span>
               </>
             )}
             {trendSeries.map((series, index) => (
-              <span key={series.key} className="inline-flex items-center gap-1.5 rounded-full bg-white px-2 py-1 text-[11px] font-bold text-slate-500">
+              <span key={series.key} className="inline-flex items-center gap-1.5 rounded-full bg-white px-2 py-1 text-caption font-semibold text-slate-500">
                 <span className="h-2 w-2 rounded-full" style={{ backgroundColor: getColor(series.label, index) }} />
                 {series.label.length > 16 ? `${series.label.slice(0, 16)}...` : series.label}
               </span>
@@ -3470,7 +3345,7 @@ function VehicleDemandVisual({
         </div>
         <div className="h-[304px] overflow-hidden">
           {trendSeries.length === 0 || periods.length === 0 ? (
-            <div className="flex h-full items-center justify-center text-sm font-semibold text-slate-500">
+            <div className="flex h-full items-center justify-center text-callout text-slate-500">
               {tr('当前时间段没有足够的趋势数据', 'Not enough trend data in this timeframe', "Data aliran tidak mencukupi dalam jangka masa ini")}
             </div>
           ) : (
@@ -3482,7 +3357,7 @@ function VehicleDemandVisual({
                 return (
                   <g key={ratio}>
                     <line x1={trendMargin.left} x2={chartWidth - trendMargin.right} y1={y} y2={y} stroke="#e2e8f0" strokeWidth="1" />
-                    <text x={trendMargin.left - 10} y={y + 4} textAnchor="end" className="fill-slate-400 text-[11px] font-semibold">
+                    <text x={trendMargin.left - 10} y={y + 4} textAnchor="end" className="fill-slate-400 text-caption">
                       {compactNumber(value)}
                     </text>
                   </g>
@@ -3546,7 +3421,7 @@ function VehicleDemandVisual({
                 );
               })}
               {periods.map((period, index) => trendTickIndexes.has(index) && (
-                <text key={period.key} x={getTrendX(index)} y={trendMargin.top + trendInnerHeight + 24} textAnchor="middle" className="fill-slate-500 text-[11px] font-bold">
+                <text key={period.key} x={getTrendX(index)} y={trendMargin.top + trendInnerHeight + 24} textAnchor="middle" className="fill-slate-500 text-caption font-semibold">
                   {period.label}
                 </text>
               ))}
@@ -3558,8 +3433,8 @@ function VehicleDemandVisual({
                   <g pointerEvents="none">
                     <rect x={x} y={y} width={width} height="46" rx="9" fill="#0f172a" opacity="0.96" />
                     <circle cx={x + 13} cy={y + 15} r="4" fill={trendHover.color} />
-                    <text x={x + 23} y={y + 18} className="fill-slate-300 text-[11px] font-semibold">{trendHover.period}</text>
-                    <text x={x + 12} y={y + 35} className="fill-white text-xs font-bold">{`${trendHover.series}: ${trendHover.value} ${valueLabel}`}</text>
+                    <text x={x + 23} y={y + 18} className="fill-slate-300 text-caption">{trendHover.period}</text>
+                    <text x={x + 12} y={y + 35} className="fill-white text-footnote font-bold">{`${trendHover.series}: ${trendHover.value} ${valueLabel}`}</text>
                   </g>
                 );
               })()}
@@ -3576,23 +3451,23 @@ function VehicleDemandVisual({
       <div className={cardClassName}>
         <div className="mb-3 flex items-center justify-between gap-3">
           <div>
-            <p className="text-xs font-bold uppercase tracking-wider text-slate-500">{valueLabel} Ranking</p>
-            <p className="mt-0.5 text-[11px] font-semibold text-slate-500">{timeframeLabel}</p>
+            <p className="text-footnote font-bold uppercase tracking-wider text-slate-500">{valueLabel} Ranking</p>
+            <p className="mt-0.5 text-caption text-slate-500">{timeframeLabel}</p>
           </div>
           <div className="flex flex-wrap justify-end gap-2">
             {hasComparison && (
               <>
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-2 py-1 text-[11px] font-bold text-slate-500">
-                  <span className="h-2 w-5 rounded-full bg-red-800" />
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-2 py-1 text-caption font-semibold text-slate-500">
+                  <span className="h-2 w-5 rounded-full bg-brand" />
                   {primaryLabel || 'Primary'}
                 </span>
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-2 py-1 text-[11px] font-bold text-slate-500">
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-2 py-1 text-caption font-semibold text-slate-500">
                   <span className="h-2 w-5 rounded-full border border-dashed border-slate-400 bg-white" />
                   {comparisonLabel || 'Compare'}
                 </span>
               </>
             )}
-            <span className="font-mono text-xs font-bold text-slate-500">Top {chartRows.length}</span>
+            <span className="font-mono text-footnote font-bold text-slate-500">Top {chartRows.length}</span>
           </div>
       </div>
       <div className="h-[304px] overflow-hidden">
@@ -3604,7 +3479,7 @@ function VehicleDemandVisual({
             return (
               <g key={ratio}>
                 <line className="model-ranking-grid-line" x1={x} x2={x} y1={margin.top} y2={margin.top + innerHeight} stroke="#e2e8f0" strokeWidth="1" />
-                <text x={x} y={margin.top + innerHeight + 34} textAnchor="middle" className="model-ranking-axis-label fill-slate-400 text-[11px] font-semibold">
+                <text x={x} y={margin.top + innerHeight + 34} textAnchor="middle" className="model-ranking-axis-label fill-slate-400 text-caption">
                   {compactNumber(value)}
                 </text>
               </g>
@@ -3627,7 +3502,7 @@ function VehicleDemandVisual({
 
             return (
               <g key={row.key}>
-                <text x={margin.left} y={y + barHeight / 2 + 4} className="model-ranking-row-label fill-slate-800 text-[11px] font-bold">
+                <text x={margin.left} y={y + barHeight / 2 + 4} className="model-ranking-row-label fill-slate-800 text-caption font-semibold">
                   {labelText}
                 </text>
                 <rect className="model-ranking-track" x={barStartX} y={y} width={barWidth} height={barHeight} rx="9" fill="#e2e8f0" opacity="0.65" />
@@ -3647,16 +3522,16 @@ function VehicleDemandVisual({
                 )}
                 <rect x={barStartX} y={y} width={Math.max(width, row.value > 0 ? 8 : 0)} height={barHeight} rx="9" fill={rowColor} />
                 <rect className="model-ranking-value-pill" x={valueX} y={y + 2} width="46" height="18" rx="9" fill="#0f172a" />
-                <text x={valueX + 23} y={y + 14} textAnchor="middle" className="model-ranking-value-text fill-white text-[11px] font-bold">
+                <text x={valueX + 23} y={y + 14} textAnchor="middle" className="model-ranking-value-text fill-white text-caption font-semibold">
                   {`${compactNumber(row.value)} units`}
                 </text>
                 {hasComparison && comparisonValue > 0 && (
-                  <text x={Math.min(barStartX + Math.max(comparisonWidth, 18) + 10, chartWidth - margin.right - 18)} y={y - 3} textAnchor="middle" className="fill-slate-500 text-[11px] font-bold">
+                  <text x={Math.min(barStartX + Math.max(comparisonWidth, 18) + 10, chartWidth - margin.right - 18)} y={y - 3} textAnchor="middle" className="fill-slate-500 text-caption font-semibold">
                     {compactNumber(comparisonValue)}
                   </text>
                 )}
                 <rect className="model-ranking-share-pill" x={shareX} y={y + 2} width="52" height="18" rx="9" fill="white" stroke={rowColor} strokeWidth="1.5" />
-                <text x={shareX + 26} y={y + 14} textAnchor="middle" className="model-ranking-share-text fill-slate-900 text-[11px] font-bold">
+                <text x={shareX + 26} y={y + 14} textAnchor="middle" className="model-ranking-share-text fill-slate-900 text-caption font-semibold">
                   {`${row.percentage}%`}
                 </text>
               </g>
@@ -3668,161 +3543,17 @@ function VehicleDemandVisual({
   );
 }
 
-function DemographicMotorVisual({
-  title,
-  subtitle,
-  rows,
-  icon,
-  emptyText,
-  visualMode
-}: {
-  title: string;
-  subtitle: string;
-  rows: DemographicMotorRow[];
-  icon: React.ReactNode;
-  emptyText: string;
-  visualMode: AnalyticsVisualMode;
-}) {
-  const maxApplications = Math.max(...rows.map((row) => row.applications), 1);
-  const totalApplications = rows.reduce((sum, row) => sum + row.applications, 0);
-  const chartRows = rows.filter((row) => row.applications > 0);
-  const radius = 42;
-  const strokeWidth = 12;
-  const circumference = 2 * Math.PI * radius;
-  let accumulatedLength = 0;
 
-  return (
-    <section className="h-[380px] overflow-hidden rounded-xl border border-slate-100 bg-white p-5 shadow-sm">
-      <div className="mb-4 flex min-h-[46px] items-start justify-between gap-4">
-        <div>
-          <h3 className="text-sm font-bold text-slate-900">{title}</h3>
-          <p className="text-xs text-slate-500">{subtitle}</p>
-        </div>
-        <div className="text-slate-300">{icon}</div>
-      </div>
-
-      {rows.length === 0 ? (
-        <EmptyChartRow text={emptyText} />
-      ) : visualMode === 'donut' ? (
-        <div className="grid h-[290px] grid-rows-[136px_1fr] gap-3 overflow-hidden">
-          <div className="relative mx-auto h-[132px] w-[132px]">
-            <svg className="h-full w-full -rotate-90" viewBox="0 0 120 120" role="img" aria-label={`${title} chart`}>
-              <circle
-                cx="60"
-                cy="60"
-                r={radius}
-                fill="none"
-                stroke="#f1f5f9"
-                strokeWidth={strokeWidth}
-              />
-              {chartRows.map((row, index) => {
-                const segmentLength = totalApplications > 0 ? (row.applications / totalApplications) * circumference : 0;
-                const dashOffset = -accumulatedLength;
-                accumulatedLength += segmentLength;
-
-                return (
-                  <circle
-                    key={row.key}
-                    cx="60"
-                    cy="60"
-                    r={radius}
-                    fill="none"
-                    stroke={chartPalette[index % chartPalette.length]}
-                    strokeLinecap="round"
-                    strokeWidth={strokeWidth}
-                    strokeDasharray={`${Math.max(segmentLength - 2, 0)} ${circumference}`}
-                    strokeDashoffset={dashOffset}
-                  />
-                );
-              })}
-            </svg>
-            <div className="absolute inset-0 flex flex-col items-center justify-center">
-              <p className="font-mono text-xl font-bold text-slate-900">{totalApplications}</p>
-              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{tra('records')}</p>
-            </div>
-          </div>
-
-          <div className="space-y-2 overflow-y-auto pr-1">
-            {rows.slice(0, 6).map((row, index) => (
-              <div key={row.key} className="rounded-lg bg-slate-50 px-3 py-2 text-xs">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: chartPalette[index % chartPalette.length] }} />
-                    <span className="truncate font-semibold text-slate-700">{row.label}</span>
-                  </div>
-                  <span className="shrink-0 rounded-md bg-white px-1.5 py-0.5 font-mono text-[11px] font-bold text-slate-600 shadow-xs">
-                    {totalApplications > 0 ? Math.round((row.applications / totalApplications) * 100) : 0}%
-                  </span>
-                </div>
-                <p className="mt-1 truncate text-[11px] font-semibold text-slate-500">{row.topModel} · {row.topModelCount} records</p>
-                <div className="mt-1 flex items-center gap-2">
-                  <span className="w-14 shrink-0 font-mono text-[11px] text-slate-500">{row.applications} rec</span>
-                  <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-white">
-                    <div
-                      className="h-full rounded-full"
-                      style={{
-                        width: `${Math.max((row.applications / maxApplications) * 100, 5)}%`,
-                        backgroundColor: chartPalette[index % chartPalette.length]
-                      }}
-                    />
-                  </div>
-                </div>
-              </div>
-            ))}
-            {rows.length > 6 && (
-              <p className="px-1 text-[11px] font-semibold text-slate-500">+{rows.length - 6} more rows in this group</p>
-            )}
-          </div>
-        </div>
-      ) : (
-        <div className="h-[290px] space-y-2 overflow-y-auto pr-1">
-          {rows.map((row, index) => (
-            <div key={row.key} className="rounded-lg bg-slate-50 px-3 py-2">
-              <div className="mb-1.5 flex items-start justify-between gap-3 text-xs">
-                <div className="flex min-w-0 gap-2">
-                  <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${palette[index % palette.length]}`} />
-                  <div className="min-w-0">
-                    <p className="truncate font-semibold text-slate-700">{row.label}</p>
-                    <p className="mt-0.5 truncate text-[11px] font-semibold text-slate-500">{row.topModel}</p>
-                  </div>
-                </div>
-                <span className="shrink-0 rounded-md bg-white px-1.5 py-0.5 font-mono text-[11px] font-bold text-slate-600 shadow-xs">
-                  {totalApplications > 0 ? Math.round((row.applications / totalApplications) * 100) : 0}%
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="w-14 shrink-0 font-mono text-[11px] text-slate-500">{row.applications} rec</span>
-                <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-white">
-                  <div
-                    className={`h-full rounded-full ${palette[index % palette.length]}`}
-                    style={{ width: `${Math.max((row.applications / maxApplications) * 100, 5)}%` }}
-                  />
-                </div>
-              </div>
-              <div className="mt-1 flex items-center justify-between gap-2 font-mono text-[11px] text-slate-500">
-                <span>{row.approved} approved · {row.topModelCount} model records</span>
-                <span>{row.averageAge ? `${row.averageAge} yrs avg` : '-'}</span>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
-
-const SHOW_MARKETING_WHATSAPP_TRACKING = false;
-
-const ALL_ANALYTICS_DETAIL_TABS: Array<{ id: AnalyticsDetailTab; zh: string; en: string; ms: string; icon: string }> = [
-  { id: 'marketing', zh: '营销表现', en: 'Marketing', ms: 'Pemasaran', icon: analyticsIcon },
-  { id: 'vehicle', zh: '车辆需求', en: 'Vehicle Demand', ms: 'Permintaan Kenderaan', icon: vehicleInfoIcon },
-  { id: 'customer', zh: '客户画像', en: 'Customer Profile', ms: 'Profil Pelanggan', icon: customersIcon },
-  { id: 'operations', zh: '运营表现', en: 'Operations', ms: 'Operasi', icon: auditIcon },
-  { id: 'rawCustomer', zh: '潜在客户名单', en: 'Lead Pool', ms: 'Kumpulan Prospek', icon: rawCustomersIcon }
+const ALL_ANALYTICS_DETAIL_TABS: Array<{ id: AnalyticsDetailTab; zh: string; en: string; ms: string; icon: LucideIcon }> = [
+  { id: 'marketing', zh: '营销表现', en: 'Marketing', ms: 'Pemasaran', icon: BarChart3 },
+  { id: 'vehicle', zh: '车辆需求', en: 'Vehicle Demand', ms: 'Permintaan Kenderaan', icon: Bike },
+  { id: 'customer', zh: '客户画像', en: 'Customer Profile', ms: 'Profil Pelanggan', icon: UsersRound },
+  { id: 'operations', zh: '运营表现', en: 'Operations', ms: 'Operasi', icon: FileClock },
+  { id: 'rawCustomer', zh: '潜在客户名单', en: 'Lead Pool', ms: 'Kumpulan Prospek', icon: Database }
 ];
 
 const ANALYTICS_DETAIL_TABS = ALL_ANALYTICS_DETAIL_TABS
-  .filter((tab) => SHOW_MARKETING_WHATSAPP_TRACKING || tab.id !== 'marketing');
+  .filter((tab) => tab.id !== 'marketing');
 
 const ANALYTICS_DETAIL_TAB_STORAGE_KEY = 'analytics_detail_tab';
 const ANALYTICS_TIMEFRAME_STORAGE_KEY = 'analytics_timeframe';
@@ -3843,7 +3574,7 @@ const COMPLETED_TASK_CATEGORIES: Array<{
   { key: 'cash', zh: '现金', en: 'Cash', ms: 'Tunai', tone: 'bg-emerald-50 text-emerald-700' },
   { key: 'bank', zh: '银行', en: 'Bank', ms: 'Bank', tone: 'bg-indigo-50 text-indigo-700' },
   { key: 'reminder', zh: '提醒', en: 'Reminder', ms: 'Peringatan', tone: 'bg-orange-50 text-orange-700' },
-  { key: 'mission', zh: '任务', en: 'Mission', ms: 'Misi', tone: 'bg-red-50 text-red-700' },
+  { key: 'mission', zh: '任务', en: 'Mission', ms: 'Misi', tone: 'bg-brand-50 text-brand-ink' },
   { key: 'vehicle', zh: '车辆资料', en: 'Vehicle Info', ms: 'Maklumat Kenderaan', tone: 'bg-violet-50 text-violet-700' }
 ];
 
@@ -3930,11 +3661,11 @@ function CompletedTasksAnalytics({
   const trackedDueTasks = events.filter((event) => Boolean(event.due_at)).length;
   const comparisonDelta = secondaryEvents ? events.length - secondaryEvents.length : undefined;
   return (
-    <section data-testid="completed-tasks-analytics" className="mb-5 overflow-hidden rounded-xl border border-slate-100 bg-white shadow-sm">
+    <section data-testid="completed-tasks-analytics" className="mb-5 overflow-hidden rounded-card border border-slate-100 bg-white shadow-e1">
       <div className="flex flex-col gap-2 border-b border-slate-100 px-5 py-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h3 className="text-sm font-bold text-slate-900">{tr('已完成任务', 'Completed Tasks', 'Tugasan Selesai')}</h3>
-          <p className="mt-0.5 text-xs text-slate-500">
+          <h3 className="text-headline text-slate-900">{tr('已完成任务', 'Completed Tasks', 'Tugasan Selesai')}</h3>
+          <p className="mt-0.5 text-footnote text-slate-500">
             {tr(
               '按实际完成时间统计员工处理的新申请、补件、名单、现金、银行、提醒、任务和车辆资料。',
               'Counts New Application, Missing Info, Lead, Cash, Bank, Reminder, Mission, and Vehicle Info work by actual completion time.',
@@ -3942,58 +3673,58 @@ function CompletedTasksAnalytics({
             )}
           </p>
         </div>
-        <span className="shrink-0 rounded-lg bg-slate-100 px-3 py-2 text-[11px] font-bold text-slate-500">{tra(timeframeLabel)}</span>
+        <span className="shrink-0 rounded-control bg-slate-100 px-3 py-2 text-caption font-semibold text-slate-500">{tra(timeframeLabel)}</span>
       </div>
 
       <div className="grid grid-cols-2 gap-3 p-5 lg:grid-cols-4">
-        <div className="rounded-xl bg-slate-50 p-4">
-          <p className="inline-flex rounded-md bg-red-50 px-1.5 py-0.5 text-[11px] font-bold uppercase tracking-wider text-red-700">{tr('已完成', 'Completed', 'Selesai')}</p>
-          <p data-testid="completed-tasks-total" className="mt-2 text-2xl font-bold text-slate-900">{events.length}</p>
+        <div className="rounded-card bg-slate-50 p-4">
+          <p className="inline-flex rounded-chip bg-brand-50 px-1.5 py-0.5 text-micro uppercase text-brand-ink">{tr('已完成', 'Completed', 'Selesai')}</p>
+          <p data-testid="completed-tasks-total" className="mt-2 text-title-2 text-slate-900">{events.length}</p>
           {comparisonDelta !== undefined && (
-            <p className={`mt-1 text-[11px] font-bold ${comparisonDelta >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+            <p className={`mt-1 text-caption font-semibold ${comparisonDelta >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
               {comparisonDelta >= 0 ? '+' : ''}{comparisonDelta} {tr('对比上期', 'vs comparison', 'berbanding perbandingan')}
             </p>
           )}
         </div>
-        <div className="rounded-xl bg-slate-50 p-4">
-          <p className="inline-flex rounded-md bg-indigo-50 px-1.5 py-0.5 text-[11px] font-bold uppercase tracking-wider text-indigo-700">{tr('完成员工', 'Staff Completed', 'Kakitangan Selesai')}</p>
-          <p className="mt-2 text-2xl font-bold text-slate-900">{staffRows.size}</p>
-          <p className="mt-1 text-[11px] font-semibold text-slate-500">{tr('有完成记录的员工', 'Staff with completion records', 'Kakitangan dengan rekod selesai')}</p>
+        <div className="rounded-card bg-slate-50 p-4">
+          <p className="inline-flex rounded-chip bg-indigo-50 px-1.5 py-0.5 text-micro uppercase text-indigo-700">{tr('完成员工', 'Staff Completed', 'Kakitangan Selesai')}</p>
+          <p className="mt-2 text-title-2 text-slate-900">{staffRows.size}</p>
+          <p className="mt-1 text-caption text-slate-500">{tr('有完成记录的员工', 'Staff with completion records', 'Kakitangan dengan rekod selesai')}</p>
         </div>
-        <div className="rounded-xl bg-slate-50 p-4">
-          <p className="inline-flex rounded-md bg-emerald-50 px-1.5 py-0.5 text-[11px] font-bold uppercase tracking-wider text-emerald-700">{tr('任务种类', 'Task Types', 'Jenis Tugasan')}</p>
-          <p className="mt-2 text-2xl font-bold text-slate-900">{typeRows.size}</p>
-          <p className="mt-1 text-[11px] font-semibold text-slate-500">{tr('这段时间实际完成', 'Actually completed in this period', 'Sebenarnya selesai dalam tempoh ini')}</p>
+        <div className="rounded-card bg-slate-50 p-4">
+          <p className="inline-flex rounded-chip bg-emerald-50 px-1.5 py-0.5 text-micro uppercase text-emerald-700">{tr('任务种类', 'Task Types', 'Jenis Tugasan')}</p>
+          <p className="mt-2 text-title-2 text-slate-900">{typeRows.size}</p>
+          <p className="mt-1 text-caption text-slate-500">{tr('这段时间实际完成', 'Actually completed in this period', 'Sebenarnya selesai dalam tempoh ini')}</p>
         </div>
-        <div className="rounded-xl bg-slate-50 p-4">
-          <p className="inline-flex rounded-md bg-rose-50 px-1.5 py-0.5 text-[11px] font-bold uppercase tracking-wider text-rose-700">{tr('逾期后完成', 'Completed Overdue', 'Selesai Lewat')}</p>
-          <p className="mt-2 text-2xl font-bold text-slate-900">{overdueCompleted}</p>
-          <p className="mt-1 text-[11px] font-semibold text-slate-500">{tr(`有截止时间记录：${trackedDueTasks}`, `Due dates tracked: ${trackedDueTasks}`, `Tarikh akhir dijejak: ${trackedDueTasks}`)}</p>
+        <div className="rounded-card bg-slate-50 p-4">
+          <p className="inline-flex rounded-chip bg-rose-50 px-1.5 py-0.5 text-micro uppercase text-rose-700">{tr('逾期后完成', 'Completed Overdue', 'Selesai Lewat')}</p>
+          <p className="mt-2 text-title-2 text-slate-900">{overdueCompleted}</p>
+          <p className="mt-1 text-caption text-slate-500">{tr(`有截止时间记录：${trackedDueTasks}`, `Due dates tracked: ${trackedDueTasks}`, `Tarikh akhir dijejak: ${trackedDueTasks}`)}</p>
         </div>
       </div>
 
       <div className="grid grid-cols-2 gap-2 px-5 pb-5 sm:grid-cols-4 xl:grid-cols-8">
         {COMPLETED_TASK_CATEGORIES.map((category) => (
-          <div key={category.key} className="rounded-xl border border-slate-100 bg-white px-3 py-3">
-            <span className={`inline-flex rounded-md px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${category.tone}`}>
+          <div key={category.key} className="rounded-card border border-slate-100 bg-white px-3 py-3">
+            <span className={`inline-flex rounded-chip px-1.5 py-0.5 text-micro uppercase ${category.tone}`}>
               {tr(category.zh, category.en, category.ms)}
             </span>
-            <p className="mt-2 font-mono text-xl font-bold text-slate-900">{categoryCounts.get(category.key) || 0}</p>
+            <p className="mt-2 font-mono text-title-3 text-slate-900">{categoryCounts.get(category.key) || 0}</p>
           </div>
         ))}
       </div>
 
       {events.length === 0 ? (
-        <div className="border-t border-slate-100 px-5 py-10 text-center text-xs text-slate-500">
-          {tr('所选时间段还没有完成记录。新完成的 Task Inbox 动作会自动进入这里。', 'No completion records in this timeframe yet. Newly completed Task Inbox actions will appear here automatically.', 'Belum ada rekod selesai dalam tempoh ini. Tindakan Peti Masuk Tugasan yang baru selesai akan muncul di sini secara automatik.')}
+        <div className="border-t border-slate-100 px-5 py-10 text-center text-footnote text-slate-500">
+          {tr('所选时间段还没有完成记录。新完成的首页动作会自动进入这里。', 'No completion records in this timeframe yet. Newly completed Home actions will appear here automatically.', 'Belum ada rekod selesai dalam tempoh ini. Tindakan Laman Utama yang baru selesai akan muncul di sini secara automatik.')}
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-5 border-t border-slate-100 p-5 2xl:grid-cols-2">
           <div className="min-w-0">
-            <h4 className="text-xs font-bold text-slate-800">{tr('员工完成数量', 'Completed by Staff', 'Selesai mengikut Kakitangan')}</h4>
+            <h4 className="text-footnote font-bold text-slate-800">{tr('员工完成数量', 'Completed by Staff', 'Selesai mengikut Kakitangan')}</h4>
             <div className="mt-3 overflow-x-auto">
-              <table className="w-full min-w-[760px] text-left text-xs">
-                <thead className="bg-slate-50 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+              <table className="w-full min-w-[760px] text-left text-footnote">
+                <thead className="bg-slate-50 text-micro uppercase text-slate-500">
                   <tr>
                     <th className="px-3 py-2">{tr('员工', 'Staff', 'Kakitangan')}</th>
                     <th className="px-3 py-2 text-right">{tr('总数', 'Total', 'Jumlah')}</th>
@@ -4018,10 +3749,10 @@ function CompletedTasksAnalytics({
           </div>
 
           <div className="min-w-0">
-            <h4 className="text-xs font-bold text-slate-800">{tr('任务种类明细', 'Task Type Detail', 'Butiran Jenis Tugasan')}</h4>
-            <div className="mt-3 overflow-hidden rounded-xl border border-slate-100">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-slate-50 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+            <h4 className="text-footnote font-bold text-slate-800">{tr('任务种类明细', 'Task Type Detail', 'Butiran Jenis Tugasan')}</h4>
+            <div className="mt-3 overflow-hidden rounded-card border border-slate-100">
+              <table className="w-full text-left text-footnote">
+                <thead className="bg-slate-50 text-micro uppercase text-slate-500">
                   <tr>
                     <th className="px-3 py-2">{tr('任务种类', 'Task Type', 'Jenis Tugasan')}</th>
                     <th className="px-3 py-2">{tr('分类', 'Category', 'Kategori')}</th>
@@ -4036,7 +3767,7 @@ function CompletedTasksAnalytics({
                       <tr key={row.taskType}>
                         <td className="px-3 py-3 font-bold text-slate-700">{trCompletedTaskType(row.taskType)}</td>
                         <td className="px-3 py-3">
-                          {category && <span className={`rounded-md px-1.5 py-0.5 text-[10px] font-bold ${category.tone}`}>{tr(category.zh, category.en, category.ms)}</span>}
+                          {category && <span className={`rounded-chip px-1.5 py-0.5 text-micro tracking-normal ${category.tone}`}>{tr(category.zh, category.en, category.ms)}</span>}
                         </td>
                         <td className="px-3 py-3 text-right font-mono text-slate-500">{row.staff.size}</td>
                         <td className="px-3 py-3 text-right font-mono font-bold text-slate-900">{row.total}</td>
@@ -4599,10 +4330,6 @@ function AnalyticsDashboard({
     setVehicleDemandSortState((current) => getNextSortState(current, key, defaultDirection));
   };
 
-  const handleMarketingSort = (key: MarketingSortKey, defaultDirection: SortDirection = key === 'value' || key === 'percentage' ? 'desc' : 'asc') => {
-    setMarketingSortState((current) => getNextSortState(current, key, defaultDirection));
-  };
-
   const handleOperationsSort = (key: OperationsSortKey, defaultDirection: SortDirection = key === 'value' || key === 'percentage' ? 'desc' : 'asc') => {
     setOperationsSortState((current) => getNextSortState(current, key, defaultDirection));
   };
@@ -4977,34 +4704,36 @@ function AnalyticsDashboard({
     <div id="analytics-page" className="space-y-6">
       <section className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div className="space-y-1">
-          <h2 className="text-3xl font-bold tracking-tight text-slate-900">{tr('数据分析', 'Analytics', "Analitik")}</h2>
-          <p className="max-w-2xl text-xs font-light leading-relaxed text-slate-500">
+          {/* Analytics used a bigger page title than every other page; the whole
+              point of a named scale is that a page title is one decision. */}
+          <h2 className="text-title-2 text-slate-900">{tr('数据分析', 'Analytics', "Analitik")}</h2>
+          <p className="max-w-2xl text-footnote font-normal leading-relaxed text-slate-500">
             {tr('生意数据总览。', 'Business data at a glance.', "Data perniagaan sepintas lalu.")}
           </p>
         </div>
         <div className="flex flex-col gap-2 md:flex-row md:items-center">
-          <div className="rounded-xl border border-indigo-100 bg-indigo-50 px-4 py-3 text-xs font-bold text-indigo-700 shadow-sm">
+          <div className="rounded-card border border-indigo-100 bg-indigo-50 px-4 py-3 text-footnote font-bold text-indigo-700 shadow-e1">
             {scopeLabel}
           </div>
-          <div className="rounded-xl border border-slate-100 bg-white px-4 py-3 text-xs text-slate-500 shadow-sm">
-            {tr('最后点击', 'Last click', "klik terakhir")}: <span className="font-mono font-semibold text-slate-700">{latestClickTime(whatsAppTrackingClicks)}</span>
+          <div className="rounded-card border border-slate-100 bg-white px-4 py-3 text-footnote text-slate-500 shadow-e1">
+            {tr('最近访客', 'Latest visitor', "Pelawat terkini")}: <span className="font-mono font-semibold text-slate-700">{latestClickTime(whatsAppTrackingClicks)}</span>
           </div>
         </div>
       </section>
 
-      <section className="rounded-2xl bg-white/90 p-4 shadow-sm backdrop-blur">
+      <section className="rounded-panel bg-white/90 p-4 shadow-e1 backdrop-blur">
         <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="mr-1 text-[11px] font-bold uppercase tracking-widest text-slate-500">{tr('报表模式', 'Report mode', 'Mod laporan')}</span>
-            <div className="flex items-center gap-1 rounded-xl bg-slate-100 p-1" aria-label={tr('报表模式', 'Report mode', 'Mod laporan')}>
+            <span className="mr-1 text-micro uppercase text-slate-500">{tr('报表模式', 'Report mode', 'Mod laporan')}</span>
+            <div className="flex items-center gap-1 rounded-card bg-slate-100 p-1" aria-label={tr('报表模式', 'Report mode', 'Mod laporan')}>
               {REPORT_MODE_OPTIONS.map((mode) => (
                 <button
                   key={mode.value}
                   type="button"
                   onClick={() => handleReportModeChange(mode.value)}
                   aria-pressed={reportMode === mode.value}
-                  className={`rounded-lg px-4 py-2 text-xs font-bold transition-colors ${
-                    reportMode === mode.value ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-500 hover:bg-white hover:text-slate-900'
+                  className={`rounded-control px-4 py-2 text-footnote font-bold transition-colors ${
+                    reportMode === mode.value ? 'bg-indigo-600 text-white shadow-e1' : 'text-slate-500 hover:bg-white hover:text-slate-900'
                   }`}
                 >
                   {tr(mode.zh, mode.en, mode.ms)}
@@ -5012,15 +4741,15 @@ function AnalyticsDashboard({
               ))}
             </div>
           </div>
-          <div className="flex items-center gap-1 rounded-xl bg-slate-100 p-1" aria-label={tr('对比模式', 'Comparison mode', 'Mod perbandingan')}>
-            <button type="button" onClick={() => { setComparePreset('none'); setShowComparisonSetup(false); }} aria-pressed={!showComparisonSetup && comparePreset === 'none'} className={`rounded-lg px-4 py-2 text-xs font-bold transition-colors ${!showComparisonSetup && comparePreset === 'none' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-900'}`}>{tr('标准', 'Standard', 'Standard')}</button>
-            <button type="button" onClick={() => setShowComparisonSetup(true)} aria-pressed={showComparisonSetup || comparePreset !== 'none'} className={`rounded-lg px-4 py-2 text-xs font-bold transition-colors ${showComparisonSetup || comparePreset !== 'none' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-500 hover:bg-white hover:text-slate-900'}`}>{tr('对比设定', 'Compare setup', 'Tetapan perbandingan')}</button>
+          <div className="flex items-center gap-1 rounded-card bg-slate-100 p-1" aria-label={tr('对比模式', 'Comparison mode', 'Mod perbandingan')}>
+            <button type="button" onClick={() => { setComparePreset('none'); setShowComparisonSetup(false); }} aria-pressed={!showComparisonSetup && comparePreset === 'none'} className={`rounded-control px-4 py-2 text-footnote font-bold transition-colors ${!showComparisonSetup && comparePreset === 'none' ? 'bg-white text-slate-900 shadow-e1' : 'text-slate-500 hover:text-slate-900'}`}>{tr('标准', 'Standard', 'Standard')}</button>
+            <button type="button" onClick={() => setShowComparisonSetup(true)} aria-pressed={showComparisonSetup || comparePreset !== 'none'} className={`rounded-control px-4 py-2 text-footnote font-bold transition-colors ${showComparisonSetup || comparePreset !== 'none' ? 'bg-indigo-600 text-white shadow-e1' : 'text-slate-500 hover:bg-white hover:text-slate-900'}`}>{tr('对比设定', 'Compare setup', 'Tetapan perbandingan')}</button>
           </div>
         </div>
 
         <div className="mt-4 flex flex-col gap-3 border-t border-slate-100 pt-4 xl:flex-row xl:items-center xl:justify-between">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="mr-1 text-[11px] font-bold uppercase tracking-widest text-slate-500">{tr('申请日期', 'Application date', 'Tarikh permohonan')}</span>
+            <span className="mr-1 text-micro uppercase text-slate-500">{tr('申请日期', 'Application date', 'Tarikh permohonan')}</span>
             {visibleTimeframeOptions.map((option) => (
               <button
                 key={option.value}
@@ -5031,7 +4760,7 @@ function AnalyticsDashboard({
                   setTimeframe(option.value);
                   if (option.value === 'monthly') setVehicleDemandBreakdown('model');
                 }}
-                className={`rounded-lg px-3 py-2 text-[11px] font-bold transition-colors ${
+                className={`rounded-control px-3 py-2 text-caption font-semibold transition-colors ${
                   timeframe === option.value ? 'bg-indigo-600 text-white' : 'bg-slate-50 text-slate-500 hover:bg-slate-100 hover:text-slate-900'
                 }`}
               >
@@ -5039,26 +4768,26 @@ function AnalyticsDashboard({
               </button>
             ))}
           </div>
-          <div className="flex shrink-0 items-center gap-2 rounded-xl bg-indigo-50 px-3 py-2 text-[11px] font-semibold text-indigo-700">
+          <div className="flex shrink-0 items-center gap-2 rounded-card bg-indigo-50 px-3 py-2 text-caption text-indigo-700">
             <CalendarDays className="h-3.5 w-3.5" />
             <span>{tr('统计范围', 'Data range', 'Julat data')}:</span>
             <span className="font-mono font-bold">{resolvedDateRangeLabel}</span>
           </div>
         </div>
         {timeframe === 'custom' && comparePreset === 'none' && (
-          <div className="mt-3 grid gap-3 rounded-xl bg-slate-50 p-3 sm:grid-cols-2">
+          <div className="mt-3 grid gap-3 rounded-card bg-slate-50 p-3 sm:grid-cols-2">
             <label>
-              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">{tra('Start date')}</span>
-              <input type="date" value={customStartDate} onChange={(event) => setCustomStartDate(event.target.value)} aria-label={tra('Start date')} className="mt-1.5 w-full rounded-lg bg-white px-3 py-2.5 text-xs font-semibold text-slate-700 outline-none ring-indigo-100 focus:ring-2" />
+              <span className="text-micro uppercase text-slate-500">{tra('Start date')}</span>
+              <input type="date" value={customStartDate} onChange={(event) => setCustomStartDate(event.target.value)} aria-label={tra('Start date')} className="mt-1.5 w-full rounded-control bg-white px-3 py-2.5 text-footnote text-slate-700 outline-none ring-indigo-100 focus:ring-2" />
             </label>
             <label>
-              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">{tra('End date')}</span>
-              <input type="date" value={customEndDate} onChange={(event) => setCustomEndDate(event.target.value)} aria-label={tra('End date')} className="mt-1.5 w-full rounded-lg bg-white px-3 py-2.5 text-xs font-semibold text-slate-700 outline-none ring-indigo-100 focus:ring-2" />
+              <span className="text-micro uppercase text-slate-500">{tra('End date')}</span>
+              <input type="date" value={customEndDate} onChange={(event) => setCustomEndDate(event.target.value)} aria-label={tra('End date')} className="mt-1.5 w-full rounded-control bg-white px-3 py-2.5 text-footnote text-slate-700 outline-none ring-indigo-100 focus:ring-2" />
             </label>
           </div>
         )}
         {showComparisonSetup && (
-          <div className="mt-3 space-y-3 rounded-xl bg-slate-50 p-3">
+          <div className="mt-3 space-y-3 rounded-card bg-slate-50 p-3">
             <div className="flex flex-wrap gap-2" role="group" aria-label={tr('对比时段', 'Comparison range', 'Julat perbandingan')}>
               {visibleComparePresetOptions.map((option) => (
                 <button
@@ -5066,7 +4795,7 @@ function AnalyticsDashboard({
                   type="button"
                   onClick={() => handleComparePresetChange(option.value)}
                   aria-pressed={comparePreset === option.value}
-                  className={`rounded-lg px-3 py-2 text-[11px] font-bold transition-colors ${comparePreset === option.value ? 'bg-indigo-600 text-white' : 'bg-white text-slate-500 hover:text-slate-900'}`}
+                  className={`rounded-control px-3 py-2 text-caption font-semibold transition-colors ${comparePreset === option.value ? 'bg-indigo-600 text-white' : 'bg-white text-slate-500 hover:text-slate-900'}`}
                 >
                   {tra(option.label)}
                 </button>
@@ -5081,21 +4810,21 @@ function AnalyticsDashboard({
                   { label: 'Compare End', value: compareSecondaryEndDate, onChange: setCompareSecondaryEndDate }
                 ].map((field) => (
                   <label key={field.label}>
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">{tra(field.label)}</span>
-                    <input type="date" value={field.value} onChange={(event) => field.onChange(event.target.value)} aria-label={tra(field.label)} className="mt-1.5 w-full rounded-lg bg-white px-3 py-2.5 text-xs font-semibold text-slate-700 outline-none ring-indigo-100 focus:ring-2" />
+                    <span className="text-micro uppercase text-slate-500">{tra(field.label)}</span>
+                    <input type="date" value={field.value} onChange={(event) => field.onChange(event.target.value)} aria-label={tra(field.label)} className="mt-1.5 w-full rounded-control bg-white px-3 py-2.5 text-footnote text-slate-700 outline-none ring-indigo-100 focus:ring-2" />
                   </label>
                 ))}
               </div>
             )}
             {comparisonRanges && (
               <div className="grid gap-2 sm:grid-cols-2">
-                <div className="rounded-lg bg-white px-3 py-2">
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">{tr('基准', 'Baseline', 'Asas')}</span>
-                  <p className="mt-1 font-mono text-xs font-bold text-slate-800">{comparisonRanges.primary.label}</p>
+                <div className="rounded-control bg-white px-3 py-2">
+                  <span className="text-micro uppercase text-slate-500">{tr('基准', 'Baseline', 'Asas')}</span>
+                  <p className="mt-1 font-mono text-footnote font-bold text-slate-800">{comparisonRanges.primary.label}</p>
                 </div>
-                <div className="rounded-lg bg-white px-3 py-2">
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">{tr('对比', 'Comparison', 'Perbandingan')}</span>
-                  <p className="mt-1 font-mono text-xs font-bold text-slate-800">{comparisonRanges.secondary.label}</p>
+                <div className="rounded-control bg-white px-3 py-2">
+                  <span className="text-micro uppercase text-slate-500">{tr('对比', 'Comparison', 'Perbandingan')}</span>
+                  <p className="mt-1 font-mono text-footnote font-bold text-slate-800">{comparisonRanges.secondary.label}</p>
                 </div>
               </div>
             )}
@@ -5120,21 +4849,21 @@ function AnalyticsDashboard({
       />
 
       {comparisonRanges && (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-indigo-100 bg-indigo-50/60 px-4 py-2.5">
-          <p className="text-xs font-bold text-indigo-700">
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-card border border-indigo-100 bg-indigo-50/60 px-4 py-2.5">
+          <p className="text-footnote font-bold text-indigo-700">
             {tr('对比中：', 'Comparing: ', "Membandingkan:")}{comparisonRanges.primary.label} vs {comparisonRanges.secondary.label}{tr(' — 展开的深入分析卡会显示与上期的差值', ' — expanded detail cards show the delta vs the previous period', "— kad analisis terperinci yang dibuka menunjukkan delta berbanding tempoh sebelumnya")}
           </p>
           <button
             type="button"
             onClick={() => { setComparePreset('none'); setShowComparisonSetup(false); }}
-            className="rounded-lg bg-white px-3 py-1.5 text-xs font-bold text-indigo-600 ring-1 ring-indigo-100 transition-colors hover:bg-indigo-100"
+            className="rounded-control bg-white px-3 py-1.5 text-footnote font-bold text-indigo-600 ring-1 ring-indigo-100 transition-colors hover:bg-indigo-100"
           >
             {tr('取消对比', 'Clear compare', "Jelas perbandingan")}
           </button>
         </div>
       )}
 
-      <section id="analytics-detail-tabs" className="sticky top-16 z-20 rounded-2xl bg-white/90 p-2 shadow-sm backdrop-blur">
+      <section id="analytics-detail-tabs" className="sticky top-16 z-20 rounded-panel bg-white/90 p-2 shadow-e1 backdrop-blur">
         <div className="flex gap-1 overflow-x-auto" role="tablist" aria-label={tr('深入分析', 'Detailed analysis', 'Analisis terperinci')}>
           {ANALYTICS_DETAIL_TABS.map((tab) => (
             <button
@@ -5143,13 +4872,13 @@ function AnalyticsDashboard({
               role="tab"
               aria-selected={activeAnalysisTab === tab.id}
               onClick={() => setActiveAnalysisTab(tab.id)}
-              className={`inline-flex shrink-0 items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-bold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 ${
+              className={`inline-flex shrink-0 items-center gap-2 rounded-card px-4 py-2.5 text-footnote font-bold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 ${
                 activeAnalysisTab === tab.id
-                  ? 'bg-indigo-600 text-white shadow-sm'
+                  ? 'bg-indigo-600 text-white shadow-e1'
                   : 'text-slate-500 hover:bg-slate-100 hover:text-slate-900'
               }`}
             >
-              <img src={tab.icon} alt="" aria-hidden="true" className="h-5 w-5 object-contain" />
+              <tab.icon aria-hidden="true" className="h-5 w-5" strokeWidth={1.75} />
               {tr(tab.zh, tab.en, tab.ms)}
             </button>
           ))}
@@ -5325,17 +5054,17 @@ function AnalyticsDashboard({
         }}
       />
       {activeAnalysisTab === 'rawCustomer' && (
-        <section className="mt-3 rounded-xl border border-slate-100 bg-white p-4 shadow-sm">
+        <section className="mt-3 rounded-card border border-slate-100 bg-white p-4 shadow-e1">
           <div className="mb-3">
-            <h3 className="text-sm font-bold text-slate-900">{tr('转化来源分析', 'Conversion by Source', "Penukaran mengikut Sumber")}</h3>
-            <p className="mt-0.5 text-xs text-slate-500">{tr('各来源潜在客户数、转成贷款申请数与转化率。', 'Leads, converted applications and conversion rate per source.', "prospek, permohonan ditukar dan kadar penukaran bagi setiap sumber.")}</p>
+            <h3 className="text-headline text-slate-900">{tr('转化来源分析', 'Conversion by Source', "Penukaran mengikut Sumber")}</h3>
+            <p className="mt-0.5 text-footnote text-slate-500">{tr('各来源潜在客户数、转成贷款申请数与转化率。', 'Leads, converted applications and conversion rate per source.', "prospek, permohonan ditukar dan kadar penukaran bagi setiap sumber.")}</p>
           </div>
           {conversionBySource.length === 0 ? (
-            <p className="py-6 text-center text-xs text-slate-500">{tr('当前时间段没有名单数据', 'No lead data in this timeframe', "Tiada data prospek dalam jangka masa ini")}</p>
+            <p className="py-6 text-center text-footnote text-slate-500">{tr('当前时间段没有名单数据', 'No lead data in this timeframe', "Tiada data prospek dalam jangka masa ini")}</p>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+              <table className="w-full text-left text-footnote">
+                <thead className="text-micro uppercase text-slate-500">
                   <tr>
                     <th className="py-2 pr-3">{tr('来源', 'Source', "Sumber")}</th>
                     <th className="py-2 pr-3 text-right">{tr('潜在客户', 'Leads', "Prospek")}</th>
@@ -5366,51 +5095,6 @@ function AnalyticsDashboard({
         </section>
       )}
       </div>
-      {SHOW_MARKETING_WHATSAPP_TRACKING && (
-      <div className={activeAnalysisTab === 'marketing' ? 'block' : 'hidden'}>
-      <MarketingSection
-        isOpen
-        onToggle={() => undefined}
-        totalClicks={analytics.totalClicks}
-        activeLinks={analytics.activeLinks}
-        totalLinks={whatsAppTrackingLinks.length}
-        campaignsCount={analytics.clicksByCampaign.length}
-        sourcesCount={analytics.clicksBySource.length}
-        salesSourcesCount={analytics.clicksBySales.length}
-        marketingBreakdown={marketingBreakdown}
-        onMarketingBreakdownChange={setMarketingBreakdown}
-        selectedMarketingBreakdownLabel={selectedMarketingBreakdownLabel}
-        rows={analytics.marketingPerformanceRows}
-        visual={(
-          <MarketingPerformanceVisual
-            rows={analytics.marketingPerformanceRows}
-            visualMode={chartTypeBySection.marketing}
-            breakdown={marketingBreakdown}
-            staffColorMap={staffColorMap}
-            trendSeries={marketingTrendSeries}
-            comparisonRows={secondaryAnalytics?.marketingPerformanceRows}
-            comparisonTrendSeries={secondaryMarketingTrendSeries}
-            primaryLabel={comparisonRanges?.primary.label}
-            comparisonLabel={comparisonRanges?.secondary.label}
-            monthlyView={timeframe === 'monthly'}
-          />
-        )}
-        showDetails={showMarketingDetails}
-        onToggleDetails={() => setShowMarketingDetails((current) => !current)}
-        sortState={marketingSortState}
-        onSort={handleMarketingSort}
-        comparisons={{
-          totalClicks: getStatComparison(secondaryAnalytics?.totalClicks, secondaryAnalytics ? analytics.totalClicks - secondaryAnalytics.totalClicks : undefined),
-          campaignsCount: getStatComparison(secondaryAnalytics?.clicksByCampaign.length, secondaryAnalytics ? analytics.clicksByCampaign.length - secondaryAnalytics.clicksByCampaign.length : undefined),
-          activeLinks: getStatComparison(analytics.activeLinks, 0),
-          salesSourcesCount: getStatComparison(secondaryAnalytics?.clicksBySales.length, secondaryAnalytics ? analytics.clicksBySales.length - secondaryAnalytics.clicksBySales.length : undefined),
-          rowsCount: getStatComparison(secondaryAnalytics?.marketingPerformanceRows.length, secondaryAnalytics ? analytics.marketingPerformanceRows.length - secondaryAnalytics.marketingPerformanceRows.length : undefined),
-          topRowLabel: getStatComparison(secondaryAnalytics?.marketingTopRow?.label || '-'),
-          topRowShare: getStatComparison(secondaryAnalytics?.marketingTopRow?.percentage || 0, secondaryAnalytics ? (analytics.marketingPerformanceRows[0]?.percentage || 0) - (secondaryAnalytics.marketingTopRow?.percentage || 0) : undefined, '%')
-        }}
-      />
-      </div>
-      )}
       <div className={activeAnalysisTab === 'operations' ? 'block' : 'hidden'}>
       <CompletedTasksAnalytics
         events={filteredCompletedTaskEvents}

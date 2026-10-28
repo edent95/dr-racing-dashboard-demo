@@ -8,7 +8,9 @@ import { ArrowRight, BadgeCheck, Check, Languages, MapPin } from 'lucide-react';
 import {
   BUSINESS_MAP_URL,
   STOCK,
+  STOCK_INDEX_PATH,
   USP,
+  WHATSAPP_URL,
   findStockBySlug,
   stockImage,
   stockImageSmall,
@@ -16,6 +18,7 @@ import {
 } from '../../shared/seoContent.mjs';
 import drRacingLogo from '../assets/dr-racing-logo-256.png';
 import {
+  PublicSeoFooter,
   WhatsAppGlyph,
   applyDocumentSeo,
   readStoredSeoLanguage,
@@ -28,7 +31,9 @@ const copy = {
   ms: {
     home: 'Utama', stock: 'Stok', terpakai: 'Terpakai', boleh: 'Boleh Loan',
     tahun: 'Tahun', plate: 'No Plate', warna: 'Warna', model: 'Model', deposit: 'Deposit',
-    lokasi: 'Lokasi', status: 'Status', sedia: 'Sedia untuk loan',
+    lokasi: 'Lokasi', status: 'Status', sedia: 'Sedia untuk loan', sold: 'Telah dijual',
+    soldLede: (m: string, y: number, p: string) =>
+      `${m} tahun ${y}, no plate ${p}, telah dijual. Hubungi kami di WhatsApp untuk unit serupa yang boleh buat loan.`,
     wa: 'Tanya di WhatsApp', apply: 'Mula permohonan', map: 'Lihat lokasi showroom', detail: 'Lihat butiran',
     lede: (m: string, y: number, p: string) =>
       `${m} tahun ${y}, no plate ${p}, tersedia di showroom DR Racing Simpang Ampat. Unit ini boleh buat loan — kami uruskan permohonan, dokumen dan tukar nama untuk anda.`,
@@ -39,7 +44,9 @@ const copy = {
   zh: {
     home: '首页', stock: '现车', terpakai: '二手', boleh: '可做 Loan',
     tahun: '年份', plate: '车牌', warna: '颜色', model: '车型', deposit: '头期',
-    lokasi: '地点', status: '状态', sedia: '可申请分期',
+    lokasi: '地点', status: '状态', sedia: '可申请分期', sold: '已售出',
+    soldLede: (m: string, y: number, p: string) =>
+      `${m}，${y} 年份，车牌 ${p}，这台已售出。WhatsApp 联系我们，看看其他可做分期的同款现车。`,
     wa: 'WhatsApp 询问', apply: '开始申请', map: '查看展示厅位置', detail: '查看详情',
     lede: (m: string, y: number, p: string) =>
       `${m}，${y} 年份，车牌 ${p}，现车在 DR Racing Simpang Ampat 展示厅。这台可以做 loan（分期）—— 申请、文件、过户我们全程帮你处理。`,
@@ -50,7 +57,9 @@ const copy = {
   en: {
     home: 'Home', stock: 'Stock', terpakai: 'Second hand', boleh: 'Loan OK',
     tahun: 'Year', plate: 'Plate no.', warna: 'Colour', model: 'Model', deposit: 'Deposit',
-    lokasi: 'Location', status: 'Status', sedia: 'Ready for financing',
+    lokasi: 'Location', status: 'Status', sedia: 'Ready for financing', sold: 'Sold',
+    soldLede: (m: string, y: number, p: string) =>
+      `${m}, year ${y}, plate ${p}, has been sold. Message us on WhatsApp for a similar loan-ready unit.`,
     wa: 'Enquire on WhatsApp', apply: 'Start application', map: 'View showroom location', detail: 'View details',
     lede: (m: string, y: number, p: string) =>
       `${m}, year ${y}, plate ${p}, available at the DR Racing showroom in Simpang Ampat. This unit is loan-ready — we handle the application, paperwork and ownership transfer for you.`,
@@ -60,7 +69,7 @@ const copy = {
   }
 } as const;
 
-const applicationHref = '/customer-intake?utm_source=website&utm_medium=organic&utm_campaign=seo_stock';
+const applicationHref = WHATSAPP_URL;
 
 type Props = { slug: string };
 
@@ -90,7 +99,7 @@ export default function PublicStockDetailPage({ slug }: Props) {
           <p className="seo-detail-lede">
             Unit ini tiada dalam senarai — mungkin sudah terjual. Lihat stok terkini kami.
           </p>
-          <a className="seo-button" href="/">{t.back}<ArrowRight aria-hidden="true" /></a>
+          <a className="seo-button" href={STOCK_INDEX_PATH}>{t.back}<ArrowRight aria-hidden="true" /></a>
         </div>
       </div>
     );
@@ -98,7 +107,7 @@ export default function PublicStockDetailPage({ slug }: Props) {
 
   const seo = stockSeo(item, language);
   const agent = agentFor(0);
-  const others = STOCK.filter((entry) => entry.slug !== item.slug).slice(0, 3);
+  const others = STOCK.filter((entry) => entry.available && entry.slug !== item.slug).slice(0, 3);
 
   return (
     <div className="seo-page">
@@ -110,14 +119,14 @@ export default function PublicStockDetailPage({ slug }: Props) {
           <button className="seo-language" type="button" onClick={cycleLanguage}>
             <Languages aria-hidden="true" /> {language === 'ms' ? '中文' : language === 'zh' ? 'EN' : 'BM'}
           </button>
-          <a className="seo-button seo-button-small" href={applicationHref}>{t.apply}</a>
+          <a className="seo-button seo-button-small" href={applicationHref} target="_blank" rel="noopener noreferrer">{t.apply}</a>
         </div>
       </header>
 
       <main className="seo-shell seo-detail">
         <nav className="seo-crumbs" aria-label="Breadcrumb">
           <a href="/">{t.home}</a><span>/</span>
-          <a href="/#stok">{t.stock}</a><span>/</span>
+          <a href={STOCK_INDEX_PATH}>{t.stock}</a><span>/</span>
           <span style={{ color: '#3c3f44' }}>{item.model} {item.plate}</span>
         </nav>
 
@@ -138,9 +147,9 @@ export default function PublicStockDetailPage({ slug }: Props) {
           </div>
 
           <div>
-            <p className="seo-eyebrow"><BadgeCheck aria-hidden="true" /> {t.boleh}</p>
+            {item.available ? <p className="seo-eyebrow"><BadgeCheck aria-hidden="true" /> {t.boleh}</p> : null}
             <h1>{item.model} <span style={{ color: 'var(--seo-red)' }}>{item.year}</span></h1>
-            <p className="seo-detail-lede">{t.lede(item.model, item.year, item.plate)}</p>
+            <p className="seo-detail-lede">{item.available ? t.lede(item.model, item.year, item.plate) : t.soldLede(item.model, item.year, item.plate)}</p>
 
             <ul className="seo-spec">
               <li><b>{t.model}</b><span>{item.model}</span></li>
@@ -149,7 +158,7 @@ export default function PublicStockDetailPage({ slug }: Props) {
               <li><b>{t.warna}</b><span>{item.colour[language]}</span></li>
               {item.deposit ? <li><b>{t.deposit}</b><span>{item.deposit}</span></li> : null}
               <li><b>{t.lokasi}</b><span>Simpang Ampat, Pulau Pinang</span></li>
-              <li><b>{t.status}</b><span style={{ color: '#10803f' }}>{t.sedia}</span></li>
+              <li><b>{t.status}</b>{item.available ? <span style={{ color: '#10803f' }}>{t.sedia}</span> : <span style={{ color: '#6b7078' }}>{t.sold}</span>}</li>
             </ul>
 
             <ul className="seo-usp" style={{ margin: '0 0 24px' }}>
@@ -217,23 +226,7 @@ export default function PublicStockDetailPage({ slug }: Props) {
         </section>
       </main>
 
-      <footer className="seo-footer">
-        <div className="seo-shell seo-footer-main">
-          <div>
-            <img src={drRacingLogo} alt="DR Racing" width="256" height="201" />
-            <p>Loan motor Simpang Ampat, Pulau Pinang.</p>
-          </div>
-          <div className="seo-footer-links">
-            <a href="/">{t.home}</a>
-            <a href="/blog">Blog</a>
-            <a href="https://bo.dr-racing.com/">Staff</a>
-          </div>
-        </div>
-        <div className="seo-shell seo-footer-bottom">
-          <p>© {new Date().getFullYear()} DR Racing. All rights reserved.</p>
-          <p>{t.note}</p>
-        </div>
-      </footer>
+      <PublicSeoFooter language={language} disclaimer={t.note} />
     </div>
   );
 }

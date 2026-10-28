@@ -237,7 +237,7 @@ export default function ToggleOptionGroup({
           }
         }}
         title={activationClicks === 3 ? 'Triple-click to change' : activationClicks === 2 ? 'Double-click to change' : undefined}
-        className={`inline-flex min-h-8 w-full items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-left text-[11px] font-bold text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 ${optionClassName} ${
+        className={`inline-flex min-h-8 w-full items-center gap-2 rounded-control border border-slate-200 bg-white px-3 py-1.5 ${isPlainCollapsed ? '' : 'form-control-box'} text-left text-footnote font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 ${optionClassName} ${
           isPlainCollapsed ? '!border-transparent !bg-transparent !px-0 !ring-0 hover:!bg-transparent' : ''
         }`}
       >
@@ -250,7 +250,7 @@ export default function ToggleOptionGroup({
       {isExpanded && menuPosition && typeof document !== 'undefined' && createPortal(
         <div
           ref={menuRef}
-          className="toggle-pop fixed z-50 flex max-h-[60vh] w-max min-w-44 flex-col items-stretch gap-0.5 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg shadow-slate-300/50"
+          className="toggle-pop fixed z-50 flex max-h-[60vh] w-max min-w-44 flex-col items-stretch gap-0.5 overflow-y-auto rounded-card bg-white p-1.5 shadow-e2"
           style={menuPosition}
           role="listbox"
           id={optionListId}
@@ -287,7 +287,7 @@ export default function ToggleOptionGroup({
 
                   setIsExpanded(false);
                 }}
-                className={`flex min-h-8 w-full items-center gap-2 rounded-lg px-3 py-1.5 text-left text-[11px] font-bold transition-colors ${
+                className={`flex min-h-8 w-full items-center gap-2 rounded-control px-3 py-1.5 text-left text-footnote font-semibold transition-colors ${
                   isActive
                     ? 'bg-emerald-50 text-emerald-700'
                     : isHighlighted ? 'bg-slate-50 text-slate-800' : 'text-slate-600 hover:bg-slate-50'

@@ -21,7 +21,10 @@ interface WhatsAppTrackingAdminProps {
   onAddLink: (link: WhatsAppTrackingLink) => void;
   onUpdateLink: (id: string, updates: Partial<WhatsAppTrackingLink>) => void;
   onDeleteLink: (id: string) => void;
-  onCreateShortLink: (fullUrl: string, link: WhatsAppTrackingLink) => string;
+  onCreateShortLink: (fullUrl: string, link: WhatsAppTrackingLink) => Promise<string>;
+  // Role Access → WhatsApp Tools page details.
+  canManageLinks?: boolean;
+  canCreateShortLinks?: boolean;
 }
 
 function buildTrackingUrl(link: WhatsAppTrackingLink) {
@@ -63,7 +66,9 @@ export default function WhatsAppTrackingAdmin({
   onAddLink,
   onUpdateLink,
   onDeleteLink,
-  onCreateShortLink
+  onCreateShortLink,
+  canManageLinks = true,
+  canCreateShortLinks = true
 }: WhatsAppTrackingAdminProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [newLabel, setNewLabel] = useState('');
@@ -76,6 +81,7 @@ export default function WhatsAppTrackingAdmin({
   const [defaultMessageSaved, setDefaultMessageSaved] = useState('');
   const [expandedLinkIds, setExpandedLinkIds] = useState<Record<string, boolean>>({});
   const [shortLinksByLinkId, setShortLinksByLinkId] = useState<Record<string, string>>({});
+  const [shortLinkFailedLinkId, setShortLinkFailedLinkId] = useState('');
   const [linkSortState, setLinkSortState] = useState<SortState<TrackingLinkSortKey>>({
     key: 'click_count',
     direction: 'desc'
@@ -199,7 +205,15 @@ export default function WhatsAppTrackingAdmin({
   };
 
   const handleCopyShortLink = async (trackingUrl: string, link: WhatsAppTrackingLink) => {
-    const shortLink = onCreateShortLink(trackingUrl, link);
+    let shortLink = '';
+    setShortLinkFailedLinkId('');
+    try {
+      shortLink = await onCreateShortLink(trackingUrl, link);
+    } catch (error) {
+      console.warn('WhatsApp short link save failed.', error);
+      setShortLinkFailedLinkId(link.id);
+      return;
+    }
 
     setShortLinksByLinkId((current) => ({
       ...current,
@@ -219,7 +233,7 @@ export default function WhatsAppTrackingAdmin({
     <div id="whatsapp-tracking-page" className="space-y-6">
       <section className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div className="space-y-1">
-          <h2 className="text-xl font-bold tracking-tight text-slate-900">
+          <h2 className="text-title-2 text-slate-900">
             {tr('WhatsApp 工具', 'WhatsApp Tools', "Alat WhatsApp")}
           </h2>
         </div>
@@ -234,23 +248,23 @@ export default function WhatsAppTrackingAdmin({
             placeholder={tr('搜索链接、电话、来源、活动...', 'Search link, phone, channel, campaign...', "Pautan carian, telefon, saluran, kempen...")}
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="pl-9 pr-4 py-2 bg-white border border-slate-100 rounded-lg text-xs w-80 focus:bg-slate-50 focus:ring-1 focus:ring-red-100 outline-none transition-all"
+            className="pl-9 pr-4 py-2 bg-white border border-slate-100 rounded-control text-footnote w-80 focus:bg-slate-50 focus:ring-1 focus:ring-brand-100 outline-none transition-all"
           />
         </div>
       </section>
 
-      <section className="rounded-xl border border-slate-100 bg-white p-5 shadow-sm">
+      <section className="rounded-card border border-slate-100 bg-white p-5 shadow-e1">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="flex gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-red-50 text-red-700">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-card bg-brand-50 text-brand-ink">
               <MessageCircle className="h-5 w-5" />
             </div>
             <div>
-              <h3 className="text-sm font-bold text-slate-900">{tr('潜在客户默认 WhatsApp 讯息', 'Default WhatsApp Message for Leads', "Mesej WhatsApp lalai untuk prospek")}</h3>
-              <p className="mt-1 max-w-2xl text-xs leading-relaxed text-slate-500">
+              <h3 className="text-headline text-slate-900">{tr('潜在客户默认 WhatsApp 讯息', 'Default WhatsApp Message for Leads', "Mesej WhatsApp lalai untuk prospek")}</h3>
+              <p className="mt-1 max-w-2xl text-footnote leading-relaxed text-slate-500">
                 {tr('可用变量：', 'Variables: ', "Pembolehubah:")}{'{name}'} {'{phone}'} {'{channel}'} {'{lead_id}'}
               </p>
-              <p className="mt-1 max-w-2xl text-[11px] font-semibold text-slate-400">
+              <p className="mt-1 max-w-2xl text-caption text-slate-400">
                 {tr(
                   `只为 ${currentStaffName} 保存在此装置，不会修改其他员工的话术。`,
                   `Saved for ${currentStaffName} on this device only; other staff messages are unchanged.`,
@@ -262,7 +276,7 @@ export default function WhatsAppTrackingAdmin({
           <button
             type="button"
             onClick={handleSaveDefaultMessage}
-            className="inline-flex items-center justify-center gap-2 rounded-lg bg-red-800 px-4 py-2 text-xs font-bold text-white transition-colors hover:bg-red-900"
+            className="inline-flex items-center justify-center gap-2 rounded-control bg-brand px-4 py-2 text-footnote font-bold text-white transition-colors hover:bg-brand-deep"
           >
             {tr('保存讯息', 'Save Message', "Simpan Mesej")}
           </button>
@@ -270,25 +284,27 @@ export default function WhatsAppTrackingAdmin({
         <textarea
           value={defaultMessageDraft}
           onChange={(event) => setDefaultMessageDraft(event.target.value)}
-          className="mt-4 min-h-24 w-full rounded-xl border border-slate-100 bg-slate-50 px-3 py-3 text-xs font-semibold leading-relaxed text-slate-700 outline-none transition-all focus:border-red-100 focus:bg-white focus:ring-2 focus:ring-red-50"
+          className="mt-4 min-h-24 w-full rounded-card border border-slate-100 bg-slate-50 px-3 py-3 text-footnote leading-relaxed text-slate-700 outline-none transition-all focus:border-brand-100 focus:bg-white focus:ring-2 focus:ring-brand-50"
           placeholder={tr('潜在客户默认 WhatsApp 讯息', 'Default WhatsApp message for leads', "Mesej WhatsApp lalai untuk prospek")}
         />
-        <div className="mt-2 flex items-center justify-between gap-3 text-[11px]">
+        <div className="mt-2 flex items-center justify-between gap-3 text-caption">
           <span className="text-slate-400">{tr('例子：Hi ', 'Example: Hi ', "Contoh: Hai")}{'{name}'}, saya dari Dr Racing...</span>
-          <span className="font-bold text-red-700">{defaultMessageSaved}</span>
+          <span className="font-bold text-brand-ink">{defaultMessageSaved}</span>
         </div>
       </section>
 
-      <section className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
+      <section className="bg-white rounded-card border border-slate-100 shadow-e1 overflow-hidden">
         <div className="px-6 py-5 border-b border-slate-100/70">
           <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div>
-              <h3 className="text-sm font-bold text-slate-900">{tr('追踪链接', 'Tracking Links', "Pautan Penjejakan")}</h3>
+              <h3 className="text-headline text-slate-900">{tr('追踪链接', 'Tracking Links', "Pautan Penjejakan")}</h3>
             </div>
-            <span className="inline-flex self-start rounded-full bg-red-50 px-3 py-1 text-[10px] font-bold uppercase tracking-wide text-red-700">
+            <span className="inline-flex self-start rounded-full bg-brand-50 px-3 py-1 text-micro uppercase text-brand-ink">
               {tr('链接追踪工具', 'Link Tracking Tool', "Alat Penjejakan Pautan")}
             </span>
           </div>
+          {canManageLinks && (
+          <>
           <div className="grid grid-cols-1 lg:grid-cols-[1fr_170px_130px_130px_160px_auto] gap-3">
             <input
               id="new-tracking-label-input"
@@ -296,7 +312,7 @@ export default function WhatsAppTrackingAdmin({
               value={newLabel}
               onChange={(e) => setNewLabel(e.target.value)}
               placeholder={tr('链接名称', 'Link label', "Label pautan")}
-              className="px-3 py-2.5 rounded-xl bg-slate-50 border border-transparent text-xs text-slate-700 outline-none focus:bg-white focus:border-red-100 focus:ring-2 focus:ring-red-50"
+              className="px-3 py-2.5 rounded-card bg-slate-50 border border-transparent text-footnote text-slate-700 outline-none focus:bg-white focus:border-brand-100 focus:ring-2 focus:ring-brand-50"
             />
             <input
               id="new-tracking-phone-input"
@@ -304,7 +320,7 @@ export default function WhatsAppTrackingAdmin({
               value={newPhoneNumber}
               onChange={(e) => setNewPhoneNumber(e.target.value)}
               placeholder="60123456789"
-              className="px-3 py-2.5 rounded-xl bg-slate-50 border border-transparent text-xs font-mono text-slate-700 outline-none focus:bg-white focus:border-red-100 focus:ring-2 focus:ring-red-50"
+              className="px-3 py-2.5 rounded-card bg-slate-50 border border-transparent text-footnote font-mono text-slate-700 outline-none focus:bg-white focus:border-brand-100 focus:ring-2 focus:ring-brand-50"
             />
             <input
               id="new-tracking-channel-input"
@@ -312,7 +328,7 @@ export default function WhatsAppTrackingAdmin({
               value={newChannel}
               onChange={(e) => setNewChannel(e.target.value)}
               placeholder={tr('来源，例如 facebook', 'facebook', "facebook")}
-              className="px-3 py-2.5 rounded-xl bg-slate-50 border border-transparent text-xs text-slate-700 outline-none focus:bg-white focus:border-red-100 focus:ring-2 focus:ring-red-50"
+              className="px-3 py-2.5 rounded-card bg-slate-50 border border-transparent text-footnote text-slate-700 outline-none focus:bg-white focus:border-brand-100 focus:ring-2 focus:ring-brand-50"
             />
             <input
               id="new-tracking-medium-input"
@@ -320,7 +336,7 @@ export default function WhatsAppTrackingAdmin({
               value={newMedium}
               onChange={(e) => setNewMedium(e.target.value)}
               placeholder={tr('媒介，例如 social', 'social', "sosial")}
-              className="px-3 py-2.5 rounded-xl bg-slate-50 border border-transparent text-xs text-slate-700 outline-none focus:bg-white focus:border-red-100 focus:ring-2 focus:ring-red-50"
+              className="px-3 py-2.5 rounded-card bg-slate-50 border border-transparent text-footnote text-slate-700 outline-none focus:bg-white focus:border-brand-100 focus:ring-2 focus:ring-brand-50"
             />
             <input
               id="new-tracking-campaign-input"
@@ -328,14 +344,14 @@ export default function WhatsAppTrackingAdmin({
               value={newCampaign}
               onChange={(e) => setNewCampaign(e.target.value)}
               placeholder={tr('活动名称', 'campaign', "kempen")}
-              className="px-3 py-2.5 rounded-xl bg-slate-50 border border-transparent text-xs text-slate-700 outline-none focus:bg-white focus:border-red-100 focus:ring-2 focus:ring-red-50"
+              className="px-3 py-2.5 rounded-card bg-slate-50 border border-transparent text-footnote text-slate-700 outline-none focus:bg-white focus:border-brand-100 focus:ring-2 focus:ring-brand-50"
             />
             <button
               id="add-tracking-link-btn"
               type="button"
               onClick={handleAdd}
               disabled={!newLabel.trim() || !newPhoneNumber.trim() || !newChannel.trim() || !newMedium.trim()}
-              className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-red-800 text-white text-xs font-bold disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed hover:bg-red-900 transition-colors cursor-pointer"
+              className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-card bg-brand text-white text-footnote font-bold disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed hover:bg-brand-deep transition-colors cursor-pointer"
             >
               <Plus className="w-4 h-4" />
               {tr('新增链接', 'Add Link', "Tambah Pautan")}
@@ -347,16 +363,18 @@ export default function WhatsAppTrackingAdmin({
             value={newMessage}
             onChange={(e) => setNewMessage(e.target.value)}
             placeholder={tr('这个追踪链接用的 WhatsApp 讯息', 'Tracking link WhatsApp message', "Menjejaki pautan mesej WhatsApp")}
-            className="mt-3 w-full px-3 py-2.5 rounded-xl bg-slate-50 border border-transparent text-xs text-slate-700 outline-none focus:bg-white focus:border-red-100 focus:ring-2 focus:ring-red-50"
+            className="mt-3 w-full px-3 py-2.5 rounded-card bg-slate-50 border border-transparent text-footnote text-slate-700 outline-none focus:bg-white focus:border-brand-100 focus:ring-2 focus:ring-brand-50"
           />
-          <p className="mt-2 text-[10px] font-medium text-slate-400">
+          </>
+          )}
+          <p className="mt-2 text-micro tracking-normal font-medium text-slate-400">
             {tr('这里的讯息只用于这个追踪链接；上面的默认讯息会用于潜在客户名单。', 'This message belongs to the tracking link being created. The default message above is used for leads.', "Mesej ini tergolong dalam pautan penjejakan yang sedang dibuat. Mesej lalai di atas digunakan untuk prospek.")}
           </p>
         </div>
 
         <div className="overflow-x-auto">
           <table className="w-full text-left">
-            <thead className="bg-slate-200/95 text-[10px] font-bold text-slate-700 uppercase tracking-wider border-b border-slate-300">
+            <thead className="bg-slate-200/95 text-micro tracking-normal text-slate-700 uppercase tracking-wider border-b border-slate-300">
               <tr>
                 <th className="px-6 py-3.5">
                   <SortableHeader sortKey="label" label={tr('链接', 'Link', "Pautan")} sortState={linkSortState} onSort={handleLinkSort} />
@@ -368,7 +386,7 @@ export default function WhatsAppTrackingAdmin({
                   <SortableHeader sortKey="utm" label="UTM" sortState={linkSortState} onSort={handleLinkSort} />
                 </th>
                 <th className="px-6 py-3.5">
-                  <SortableHeader sortKey="click_count" label={tr('点击', 'Clicks', "Klik")} sortState={linkSortState} onSort={handleLinkSort} defaultDirection="desc" />
+                  <SortableHeader sortKey="click_count" label={tr('独立访客', 'Unique visitors', "Pelawat unik")} sortState={linkSortState} onSort={handleLinkSort} defaultDirection="desc" />
                 </th>
                 <th className="px-6 py-3.5">
                   <SortableHeader sortKey="active" label={tr('状态', 'Status', "Status")} sortState={linkSortState} onSort={handleLinkSort} defaultDirection="desc" />
@@ -376,7 +394,7 @@ export default function WhatsAppTrackingAdmin({
                 <th className="pr-6 py-3.5 text-right">{tr('操作', 'Action', "Tindakan")}</th>
               </tr>
             </thead>
-            <tbody className="text-sm divide-y divide-slate-50">
+            <tbody className="text-body divide-y divide-slate-50">
               {sortedLinks.map((link) => {
                 const trackingUrl = buildTrackingUrl(link);
                 const shortLink = shortLinksByLinkId[link.id];
@@ -386,21 +404,22 @@ export default function WhatsAppTrackingAdmin({
                 const lastClick = lastClickByLink[link.id];
 
                 return (
-                  <tr key={link.id} id={`tracking-row-${link.id}`} className="hover:bg-red-50/20 transition-colors">
+                  <tr key={link.id} id={`tracking-row-${link.id}`} className="hover:bg-brand-50/20 transition-colors">
                     <td className="px-6 py-4 align-top">
                       <div className="flex flex-col gap-1 min-w-80">
                         <DoubleClickEditField
                           type="text"
                           value={link.label}
+                          copyOnly={!canManageLinks}
                           onCommit={(value) => onUpdateLink(link.id, { label: value })}
-                          displayClassName="block rounded-lg bg-slate-50 px-3 py-2 text-left text-xs font-semibold text-slate-700 transition-colors hover:bg-red-50 hover:text-red-700"
-                          inputClassName="rounded-lg border border-transparent bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 outline-none focus:border-red-100 focus:bg-white focus:ring-2 focus:ring-red-50"
+                          displayClassName="block rounded-control bg-slate-50 px-3 py-2 text-left text-footnote text-slate-700 transition-colors hover:bg-brand-50 hover:text-brand-ink"
+                          inputClassName="rounded-control border border-transparent bg-slate-50 px-3 py-2 text-footnote text-slate-700 outline-none focus:border-brand-100 focus:bg-white focus:ring-2 focus:ring-brand-50"
                           ariaLabel={tr(`更新追踪链接名称 ${link.id}`, `Update tracking label for ${link.id}`, `Kemas kini label penjejakan untuk ${link.id}`)}
                         />
                         <div className="flex items-center gap-2">
                           <Link2 className="w-3.5 h-3.5 text-slate-300 shrink-0" />
                           <span
-                            className={`text-[10px] text-slate-400 ${isExpanded ? 'break-all' : 'truncate'}`}
+                            className={`text-micro tracking-normal text-slate-400 ${isExpanded ? 'break-all' : 'truncate'}`}
                             title={displayTrackingUrl}
                           >
                             {visibleTrackingUrl}
@@ -408,7 +427,7 @@ export default function WhatsAppTrackingAdmin({
                           <button
                             type="button"
                             onClick={() => toggleExpandedLink(link.id)}
-                            className="shrink-0 rounded-md bg-slate-50 px-2 py-1 text-[9px] font-bold text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+                            className="shrink-0 rounded-chip bg-slate-50 px-2 py-1 text-micro tracking-normal text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
                             aria-label={tr(`${isExpanded ? '收起' : '显示完整'}追踪链接 ${link.id}`, `${isExpanded ? 'Hide' : 'Show all'} tracking link ${link.id}`, `${isExpanded ? 'Hide' : 'Show all'} pautan penjejakan ${link.id}`)}
                           >
                             {isExpanded ? tr('收起', 'Hide', "Sembunyi") : tr('显示完整', 'Show all', "Tunjukkan semua")}
@@ -416,8 +435,8 @@ export default function WhatsAppTrackingAdmin({
                         </div>
                         {shortLink && (
                           <div className="flex items-center gap-2">
-                            <Link2 className="w-3.5 h-3.5 text-red-400 shrink-0" />
-                            <span className="truncate text-[10px] font-semibold text-red-700" title={shortLink}>
+                            <Link2 className="w-3.5 h-3.5 text-brand-ink shrink-0" />
+                            <span className="truncate text-caption text-brand-ink" title={shortLink}>
                               {shortLink}
                             </span>
                           </div>
@@ -428,23 +447,24 @@ export default function WhatsAppTrackingAdmin({
                       <DoubleClickEditField
                         type="tel"
                         value={link.phone_number}
+                        copyOnly={!canManageLinks}
                         onCommit={(value) => onUpdateLink(link.id, { phone_number: normalizePhoneNumber(value) })}
                         normalizeValue={normalizePhoneNumber}
-                        displayClassName="block w-40 truncate rounded-lg bg-slate-50 px-3 py-2 text-left font-mono text-xs text-slate-600 transition-colors hover:bg-red-50 hover:text-red-700"
-                        inputClassName="w-40 rounded-lg border border-transparent bg-slate-50 px-3 py-2 font-mono text-xs text-slate-600 outline-none focus:border-red-100 focus:bg-white focus:ring-2 focus:ring-red-50"
+                        displayClassName="block w-40 truncate rounded-control bg-slate-50 px-3 py-2 text-left font-mono text-footnote text-slate-600 transition-colors hover:bg-brand-50 hover:text-brand-ink"
+                        inputClassName="w-40 rounded-control border border-transparent bg-slate-50 px-3 py-2 font-mono text-footnote text-slate-600 outline-none focus:border-brand-100 focus:bg-white focus:ring-2 focus:ring-brand-50"
                         ariaLabel={tr(`更新电话 ${link.id}`, `Update phone for ${link.id}`, `Kemas kini telefon untuk ${link.id}`)}
                       />
                     </td>
                     <td className="px-6 py-4 align-top">
                       <div className="grid grid-cols-1 gap-1.5 min-w-44">
-                        <span className="text-[10px] text-slate-500">{tr('来源', 'source', "sumber")}: <b>{link.channel}</b></span>
-                        <span className="text-[10px] text-slate-500">{tr('媒介', 'medium', "sederhana")}: <b>{link.medium}</b></span>
-                        <span className="text-[10px] text-slate-500">{tr('活动', 'campaign', "kempen")}: <b>{link.campaign}</b></span>
+                        <span className="text-micro tracking-normal text-slate-500">{tr('来源', 'source', "sumber")}: <b>{link.channel}</b></span>
+                        <span className="text-micro tracking-normal text-slate-500">{tr('媒介', 'medium', "sederhana")}: <b>{link.medium}</b></span>
+                        <span className="text-micro tracking-normal text-slate-500">{tr('活动', 'campaign', "kempen")}: <b>{link.campaign}</b></span>
                       </div>
                     </td>
                     <td className="px-6 py-4 align-top">
-                      <span className="text-sm font-bold text-slate-800">{clickCountByLink[link.id] || 0}</span>
-                      <p className="mt-1 text-[10px] text-slate-400">
+                      <span className="text-headline text-slate-800">{clickCountByLink[link.id] || 0}</span>
+                      <p className="mt-1 text-micro tracking-normal text-slate-400">
                         {lastClick
                           ? new Date(lastClick.clicked_at).toLocaleString(getAppLocale(), {
                             month: '2-digit',
@@ -453,7 +473,7 @@ export default function WhatsAppTrackingAdmin({
                             minute: '2-digit',
                             hour12: false
                           })
-                          : tr('还没有点击', 'No clicks yet', "Tiada klik lagi")}
+                          : tr('还没有访客', 'No visitors yet', "Tiada pelawat lagi")}
                       </p>
                     </td>
                     <td className="px-6 py-4 align-top">
@@ -464,15 +484,16 @@ export default function WhatsAppTrackingAdmin({
                           { value: 'active', label: tr('启用', 'Active', "Aktif") },
                           { value: 'inactive', label: tr('停用', 'Inactive', "Tidak Aktif") }
                         ]}
+                        copyOnly={!canManageLinks}
                         onCommit={(value) => onUpdateLink(link.id, { active: value === 'active' })}
-                        displayClassName={`block w-28 rounded-lg border px-3 py-2 text-left text-xs font-bold transition-colors ${
+                        displayClassName={`block w-28 rounded-control border px-3 py-2 text-left text-footnote font-bold transition-colors ${
                           link.active
-                            ? 'border-red-100 bg-red-50/70 text-red-700'
+                            ? 'border-brand-100 bg-brand-50/70 text-brand-ink'
                             : 'border-slate-100 bg-slate-50 text-slate-500'
                         }`}
-                        inputClassName={`w-28 rounded-lg border px-3 py-2 text-xs font-bold outline-none ${
+                        inputClassName={`w-28 rounded-control border px-3 py-2 text-footnote font-bold outline-none ${
                           link.active
-                            ? 'bg-red-50/70 border-red-100 text-red-700'
+                            ? 'bg-brand-50/70 border-brand-100 text-brand-ink'
                             : 'bg-slate-50 border-slate-100 text-slate-500'
                         }`}
                         formatDisplay={() => (link.active ? tr('启用', 'Active', "Aktif") : tr('停用', 'Inactive', "Tidak Aktif"))}
@@ -484,28 +505,37 @@ export default function WhatsAppTrackingAdmin({
                         <button
                           type="button"
                           onClick={() => handleCopy(trackingUrl)}
-                          className="inline-flex items-center justify-center w-8 h-8 rounded-lg text-slate-400 hover:text-red-700 hover:bg-red-50 transition-colors cursor-pointer"
+                          className="inline-flex items-center justify-center w-8 h-8 rounded-control text-slate-400 hover:text-brand-ink hover:bg-brand-50 transition-colors cursor-pointer"
                           aria-label={tr(`复制完整追踪链接 ${link.id}`, `Copy full tracking link ${link.id}`, `Salin pautan penjejakan penuh ${link.id}`)}
                         >
                           <Copy className="w-4 h-4" />
                         </button>
+                        {canCreateShortLinks && (
                         <button
                           type="button"
                           onClick={() => handleCopyShortLink(trackingUrl, link)}
-                          className="inline-flex items-center justify-center w-8 h-8 rounded-lg text-slate-400 hover:text-red-700 hover:bg-red-50 transition-colors cursor-pointer"
+                          className="inline-flex items-center justify-center w-8 h-8 rounded-control text-slate-400 hover:text-brand-ink hover:bg-brand-50 transition-colors cursor-pointer"
                           aria-label={tr(`复制短链接 ${link.id}`, `Copy short tracking link ${link.id}`, `Salin pautan penjejakan pendek ${link.id}`)}
                         >
                           <Link2 className="w-4 h-4" />
                         </button>
+                        )}
+                        {canManageLinks && (
                         <button
                           type="button"
                           onClick={() => onDeleteLink(link.id)}
-                          className="inline-flex items-center justify-center w-8 h-8 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                          className="inline-flex items-center justify-center w-8 h-8 rounded-control text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
                           aria-label={tr(`删除追踪链接 ${link.id}`, `Delete tracking link ${link.id}`, `Padamkan pautan penjejakan ${link.id}`)}
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
+                        )}
                       </div>
+                      {shortLinkFailedLinkId === link.id && (
+                        <p role="alert" className="mt-1 text-caption text-rose-600">
+                          {tr('短链接保存失败，请再试一次', 'Short link not saved. Try again', 'Pautan pendek tidak disimpan. Cuba lagi')}
+                        </p>
+                      )}
                     </td>
                   </tr>
                 );
@@ -513,7 +543,7 @@ export default function WhatsAppTrackingAdmin({
 
               {sortedLinks.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="py-14 text-center text-sm text-slate-400">
+                  <td colSpan={6} className="py-14 text-center text-body text-slate-400">
                     {tr('没有找到 WhatsApp 追踪链接', 'No WhatsApp tracking links found', "Tiada pautan penjejakan WhatsApp ditemui")}
                   </td>
                 </tr>
@@ -523,13 +553,14 @@ export default function WhatsAppTrackingAdmin({
         </div>
       </section>
 
-      <section className="bg-white rounded-xl border border-slate-100 shadow-sm overflow-hidden">
+      <section className="bg-white rounded-card border border-slate-100 shadow-e1 overflow-hidden">
         <div className="px-6 py-4 border-b border-slate-100">
-          <h3 className="text-sm font-bold text-slate-900">{tr('最近点击', 'Recent Clicks', "Klik Terkini")}</h3>
+          <h3 className="text-headline text-slate-900">{tr('最近访客', 'Recent Visitors', "Pelawat Terkini")}</h3>
+          <p className="mt-1 text-caption text-slate-400">{tr('同一浏览器访问同一链接只计一次（记录首次访问）。', 'Each browser is counted once per link (first visit recorded).', 'Setiap pelayar dikira sekali bagi setiap pautan (lawatan pertama direkodkan).')}</p>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-left">
-            <thead className="border-b border-slate-300 bg-slate-200/95 text-[10px] font-bold uppercase tracking-wider text-slate-700">
+            <thead className="border-b border-slate-300 bg-slate-200/95 text-micro uppercase text-slate-700">
               <tr>
                 <th className="px-6 py-3.5">
                   <SortableHeader sortKey="label" label={tr('名称', 'Label', "Label")} sortState={clickSortState} onSort={handleClickSort} />
@@ -544,13 +575,13 @@ export default function WhatsAppTrackingAdmin({
                   <SortableHeader sortKey="campaign" label={tr('活动', 'Campaign', "Kempen")} sortState={clickSortState} onSort={handleClickSort} />
                 </th>
                 <th className="px-6 py-3.5">
-                  <SortableHeader sortKey="clicked_at" label={tr('点击时间', 'Clicked At', "Diklik Pada")} sortState={clickSortState} onSort={handleClickSort} defaultDirection="desc" />
+                  <SortableHeader sortKey="clicked_at" label={tr('首次访问', 'First visit', "Lawatan pertama")} sortState={clickSortState} onSort={handleClickSort} defaultDirection="desc" />
                 </th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-50 text-xs">
+            <tbody className="divide-y divide-slate-50 text-footnote">
               {sortedRecentClicks.map((click) => (
-                <tr key={click.id} className="hover:bg-red-50/20">
+                <tr key={click.id} className="hover:bg-brand-50/20">
                   <td className="px-6 py-3 font-semibold text-slate-700">{click.label}</td>
                   <td className="px-6 py-3 text-slate-500">{click.channel}</td>
                   <td className="px-6 py-3 text-slate-500">{click.medium}</td>
@@ -568,8 +599,8 @@ export default function WhatsAppTrackingAdmin({
               ))}
               {sortedRecentClicks.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="px-6 py-10 text-center text-sm text-slate-400">
-                    {tr('还没有点击记录', 'No clicks recorded yet', "Tiada klik direkodkan lagi")}
+                  <td colSpan={5} className="px-6 py-10 text-center text-body text-slate-400">
+                    {tr('还没有访客记录', 'No visitors recorded yet', "Tiada pelawat direkodkan lagi")}
                   </td>
                 </tr>
               )}

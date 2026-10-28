@@ -5,7 +5,7 @@
 
 import { useState } from 'react';
 import { ArrowRight, BadgeCheck, Check, ChevronDown } from 'lucide-react';
-import { FAQ, STOCK, USP, stockImage, stockImageSmall, stockSeo } from '../../shared/seoContent.mjs';
+import { FAQ, STOCK, STOCK_INDEX_SEO, USP, stockImage, stockImageSmall, stockSeo } from '../../shared/seoContent.mjs';
 import { WhatsAppGlyph, useRotatingAgents } from './publicSeoShared';
 import type { SeoLanguage } from './publicSeoShared';
 
@@ -21,7 +21,8 @@ const copy = {
     detail: 'Lihat butiran',
     wa: 'Tanya di WhatsApp',
     faqEyebrow: 'Soalan lazim · Loan motor',
-    faqTitle: 'Loan kedai · senang lulus · tanpa slip gaji pun boleh cuba'
+    faqTitle: 'Loan kedai · senang lulus · tanpa slip gaji pun boleh cuba',
+    sold: 'telah dijual'
   },
   zh: {
     eyebrow: '近期现车 · Simpang Ampat',
@@ -34,7 +35,8 @@ const copy = {
     detail: '查看详情',
     wa: 'WhatsApp 询问',
     faqEyebrow: '常见问题 · 摩托分期',
-    faqTitle: '店家分期 · 容易批 · 没 payslip 也能谈'
+    faqTitle: '店家分期 · 容易批 · 没 payslip 也能谈',
+    sold: '已售出'
   },
   en: {
     eyebrow: 'Latest stock · Simpang Ampat',
@@ -47,7 +49,8 @@ const copy = {
     detail: 'View details',
     wa: 'Enquire on WhatsApp',
     faqEyebrow: 'FAQ · Motorcycle loan',
-    faqTitle: 'In-house loan · easy approval · no payslip? still ask us'
+    faqTitle: 'In-house loan · easy approval · no payslip? still ask us',
+    sold: 'sold'
   }
 } as const;
 
@@ -56,6 +59,10 @@ type Props = { language: SeoLanguage };
 export default function PublicStockSection({ language }: Props) {
   const t = copy[language];
   const agentFor = useRotatingAgents();
+  // Same split as the server-rendered shell: sold units leave the grid but keep
+  // their detail URL, listed below with a sold label.
+  const availableStock = STOCK.filter((item) => item.available);
+  const soldStock = STOCK.filter((item) => !item.available);
   const [openFaq, setOpenFaq] = useState(-1);
   const faqs = FAQ[language] as [string, string][];
 
@@ -70,7 +77,7 @@ export default function PublicStockSection({ language }: Props) {
           </div>
 
           <div className="seo-stock-grid">
-            {STOCK.map((item, index) => {
+            {availableStock.map((item, index) => {
               const seo = stockSeo(item, language);
               const agent = agentFor(index);
               return (
@@ -110,6 +117,18 @@ export default function PublicStockSection({ language }: Props) {
               );
             })}
           </div>
+          {soldStock.length > 0 && (
+            <div className="seo-stock-sold">
+              <h3>{STOCK_INDEX_SEO[language].soldHeading}</h3>
+              <ul>
+                {soldStock.map((item) => (
+                  <li key={item.slug}>
+                    <a href={`/stok/${item.slug}`}>{item.model} {item.year} ({item.plate})</a> — {t.sold}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       </section>
 

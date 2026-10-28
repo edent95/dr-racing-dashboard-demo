@@ -286,11 +286,11 @@ export default function RawCustomerFollowUpPage({
           <p className="truncate font-bold text-slate-800" title={lead.name || lead.username}>
             {lead.name || tr('未命名名单', 'Unnamed lead', "Prospek yang tidak dinamakan")}
           </p>
-          <p className="mt-1 truncate text-[10px] font-semibold text-slate-400">
+          <p className="mt-1 truncate text-caption text-slate-400">
             {lead.channel} / {lead.lead_id || lead.id}
           </p>
         </div>
-        <div className="overflow-hidden px-5 py-2.5 align-top font-mono text-xs text-slate-600">
+        <div className="overflow-hidden px-5 py-2.5 align-top font-mono text-footnote text-slate-600">
           {lead.phone_no || '--'}
         </div>
         <div className="overflow-hidden px-5 py-2.5 align-top">
@@ -300,7 +300,7 @@ export default function RawCustomerFollowUpPage({
             roleAccounts={roleAccounts}
             avatarClassName="h-8 w-8"
           />
-          <p className="mt-2 text-[10px] font-medium text-slate-400">{formatShortDate(lead.taken_at)}</p>
+          <p className="mt-2 text-micro tracking-normal font-medium text-slate-400">{formatShortDate(lead.taken_at)}</p>
         </div>
         <div className="overflow-visible px-5 py-2.5 align-top">
           <ToggleOptionGroup
@@ -315,7 +315,7 @@ export default function RawCustomerFollowUpPage({
           />
         </div>
         <div className="overflow-hidden px-5 py-2.5 align-top">
-          <span className="font-mono text-[11px] text-slate-400">{formatShortDate(lead.last_follow_up_at)}</span>
+          <span className="font-mono text-caption text-slate-400">{formatShortDate(lead.last_follow_up_at)}</span>
         </div>
         <div className="overflow-visible px-5 py-2.5 align-top">
           <div className="space-y-2">
@@ -352,11 +352,11 @@ export default function RawCustomerFollowUpPage({
                     setCustomDateLeadId(null);
                   }
                 }}
-                className="w-full rounded-lg border border-slate-100 bg-white px-2.5 py-1.5 font-mono text-[10px] font-semibold text-slate-600 outline-none focus:ring-1 focus:ring-indigo-100"
+                className="w-full rounded-control border border-slate-100 bg-white px-2.5 py-1.5 font-mono text-caption text-slate-600 outline-none focus:ring-1 focus:ring-indigo-100"
                 aria-label={`Choose next follow up date for ${lead.name || lead.id}`}
               />
             ) : (
-              <p className="font-mono text-[10px] font-semibold text-slate-400">
+              <p className="font-mono text-caption text-slate-400">
                 {formatShortDate(resolvedNextFollowUpAt)}
               </p>
             )}
@@ -375,7 +375,7 @@ export default function RawCustomerFollowUpPage({
                     follow_up_note: lead.follow_up_note ? `${lead.follow_up_note} / ${phrase}` : phrase,
                     last_follow_up_at: new Date().toISOString()
                   })}
-                  className="rounded-full bg-slate-50 px-2 py-0.5 text-[10px] font-bold text-slate-500 ring-1 ring-slate-100 transition-colors hover:bg-indigo-50 hover:text-indigo-600"
+                  className="rounded-full bg-slate-50 px-2 py-0.5 text-micro tracking-normal text-slate-500 ring-1 ring-slate-100 transition-colors hover:bg-indigo-50 hover:text-indigo-600"
                   title={tr('点一下写入备注并记录跟进时间', 'One tap writes the note and stamps the follow-up time', "Satu ketikan menulis nota dan mengecap masa susulan")}
                 >
                   {phrase}
@@ -387,7 +387,7 @@ export default function RawCustomerFollowUpPage({
             value={lead.follow_up_note || ''}
             onCommit={(next) => onUpdateLead(lead.id, { follow_up_note: next })}
             placeholder={tr('跟进备注', 'Follow up note', "nota susulan")}
-            className="w-full resize-none rounded-lg border border-slate-100 bg-white px-3 py-2 text-xs text-slate-600 outline-none focus:ring-1 focus:ring-indigo-100"
+            className="w-full resize-none rounded-control border border-slate-100 bg-white px-3 py-2 text-footnote text-slate-600 outline-none focus:ring-1 focus:ring-indigo-100"
           />
         </div>
         <div className="overflow-hidden px-5 py-2.5 align-top">
@@ -396,7 +396,7 @@ export default function RawCustomerFollowUpPage({
               type="button"
               onClick={() => onOpenWhatsApp(lead, 'web')}
               disabled={!phoneNumber}
-              className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white transition-colors hover:bg-emerald-700 disabled:bg-slate-200 disabled:text-slate-400"
+              className="inline-flex items-center gap-2 rounded-control bg-emerald-600 px-3 py-2 text-footnote font-bold text-white transition-colors hover:bg-emerald-700 disabled:bg-slate-200 disabled:text-slate-400"
             >
               <MessageCircle className="h-4 w-4" />
               Web
@@ -405,7 +405,7 @@ export default function RawCustomerFollowUpPage({
               <button
                 type="button"
                 onClick={() => onReleaseLead(lead)}
-                className="inline-flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-xs font-bold text-slate-500 ring-1 ring-slate-100 transition-colors hover:bg-slate-100 hover:text-slate-700"
+                className="inline-flex items-center gap-2 rounded-control bg-slate-50 px-3 py-2 text-footnote font-bold text-slate-500 ring-1 ring-slate-100 transition-colors hover:bg-slate-100 hover:text-slate-700"
                 title={tr('放回未分配，让其他同事可以跟进', 'Return to unassigned so others can follow up', "Kembalikan ke senarai belum ditugaskan supaya orang lain boleh membuat susulan")}
               >
                 <Undo2 className="h-4 w-4" />
@@ -422,8 +422,8 @@ export default function RawCustomerFollowUpPage({
     <div id="raw-customer-follow-up-page" className="space-y-6">
       <section className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div className="space-y-1">
-          <h2 className="text-xl font-bold tracking-tight text-slate-900">{tr('跟进', 'Follow Up', "Susulan")}</h2>
-          <p className="max-w-3xl text-xs font-light leading-relaxed text-slate-500">
+          <h2 className="text-title-2 text-slate-900">{tr('跟进', 'Follow Up', "Susulan")}</h2>
+          <p className="max-w-3xl text-footnote font-normal leading-relaxed text-slate-500">
             {tr('你负责跟进的客户会在这里。', 'Follow up your assigned leads here.', "Buat susulan bagi prospek yang ditugaskan kepada anda di sini.")}
           </p>
         </div>
@@ -437,7 +437,7 @@ export default function RawCustomerFollowUpPage({
             value={searchTerm}
             onChange={(event) => setSearchTerm(event.target.value)}
             placeholder={tr('搜索跟进名单...', 'Search follow up...', "Carian susulan...")}
-            className="w-80 rounded-lg border border-slate-100 bg-white py-2 pl-9 pr-4 text-xs outline-none transition-all focus:bg-slate-50 focus:ring-1 focus:ring-indigo-100"
+            className="w-80 rounded-control border border-slate-100 bg-white py-2 pl-9 pr-4 text-footnote outline-none transition-all focus:bg-slate-50 focus:ring-1 focus:ring-indigo-100"
           />
         </div>
       </section>
@@ -451,14 +451,14 @@ export default function RawCustomerFollowUpPage({
               key={item.key}
               type="button"
               onClick={() => setFilter(item.key)}
-              className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-bold transition-colors ${
+              className={`inline-flex items-center gap-2 rounded-control px-3 py-2 text-footnote font-bold transition-colors ${
                 filter === item.key
-                  ? 'bg-red-800 text-white'
+                  ? 'bg-brand text-white'
                   : 'border border-slate-100 bg-white text-slate-500 hover:bg-slate-50'
               }`}
             >
               <span>{item.label}</span>
-              <span className={`rounded-full px-1.5 py-0.5 text-[10px] ${
+              <span className={`rounded-full px-1.5 py-0.5 text-micro tracking-normal ${
                 filter === item.key
                   ? 'bg-white/15 text-white'
                   : item.key === 'overdue' && Number(item.value) > 0
@@ -474,11 +474,11 @@ export default function RawCustomerFollowUpPage({
           ))}
       </section>
 
-      <section className="rounded-xl border border-slate-100 bg-white shadow-sm">
+      <section className="rounded-card border border-slate-100 bg-white shadow-e1">
         <div className="overflow-x-auto">
           <div className="min-w-[1560px] text-left">
             <div
-              className="grid border-b border-slate-300 bg-slate-200/95 text-[10px] font-bold uppercase tracking-wider text-slate-700"
+              className="grid border-b border-slate-300 bg-slate-200/95 text-micro uppercase text-slate-700"
               style={{ gridTemplateColumns: FOLLOW_UP_GRID_COLUMNS }}
             >
               <div className="px-5 py-3.5">{tr('名单', 'Lead', "Prospek")}</div>
@@ -492,7 +492,7 @@ export default function RawCustomerFollowUpPage({
             </div>
 
             {visibleLeads.length === 0 ? (
-              <div className="py-14 text-center text-sm text-slate-400">
+              <div className="py-14 text-center text-body text-slate-400">
                 {takenLeads.length === 0
                   ? tr('还没有要跟进的客户。去「潜在客户名单」双击电话后，客户就会出现在这里。', 'No assigned leads yet. Double-click a phone number in Lead Pool and it will show up here.', "Belum ada prospek yang ditugaskan. Klik dua kali nombor telefon dalam Kumpulan Prospek dan nombor itu akan dipaparkan di sini.")
                   : tr('当前筛选没有要跟进的名单。Admin 可切 All Staff，Sales 默认只看 Mine。', 'No leads in this filter. Admins can switch to All Staff; Sales defaults to Mine.', "Tiada prospek dalam penapis ini. Pentadbir boleh bertukar kepada Semua Kakitangan; Jualan lalai kepada Milik.")}
@@ -508,7 +508,7 @@ export default function RawCustomerFollowUpPage({
                   {virtualWindow.visibleRows.map((lead, index) => (
                     <div
                       key={lead.id}
-                      className="absolute left-0 right-0 grid border-b border-slate-50 text-sm transition-colors hover:bg-indigo-50/30"
+                      className="absolute left-0 right-0 grid border-b border-slate-50 text-body transition-colors hover:bg-indigo-50/30"
                       style={{
                         gridTemplateColumns: FOLLOW_UP_GRID_COLUMNS,
                         height: FOLLOW_UP_ROW_HEIGHT,

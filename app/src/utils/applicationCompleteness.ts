@@ -4,6 +4,7 @@
  */
 
 import type { LoanApplication } from '../types';
+import { getEffectiveNumberOfChildren, hasChildrenQuestion } from './customerApplicationForm';
 
 const hasValue = (value: unknown) => String(value ?? '').trim().length > 0;
 
@@ -48,6 +49,9 @@ export function getMissingApplicationInformationLabels(
   requireValue(personalInfo?.gender, 'Gender');
   requireValue(personalInfo?.race, 'Race');
   requireValue(personalInfo?.marital_status, 'Marital Status');
+  if (hasChildrenQuestion(personalInfo?.marital_status)) {
+    requireValue(getEffectiveNumberOfChildren(personalInfo), 'Number of Children');
+  }
   requireValue(personalInfo?.full_address, 'Permanent Address (IC)');
   requireValue(personalInfo?.resident_address, 'Resident Address');
   requireValue(personalInfo?.years_at_residence, 'Years at Residence');
@@ -75,10 +79,9 @@ export function getMissingApplicationInformationLabels(
   const preferences = application.preferences;
   requireValue(preferences?.available_to_receive_calls, 'Available Call Time');
   requireValue(preferences?.salary_payment_method, 'Salary Paid By');
-  if (preferences?.salary_payment_method === 'Bank') {
-    requireValue(personalInfo?.bank_name, 'Salary Bank');
-    requireValue(personalInfo?.account_number, 'Bank Account Number');
-  }
+  // Every loan needs a bank account, cash salary too (owner 2026-10-20).
+  requireValue(personalInfo?.bank_name, 'Bank');
+  requireValue(personalInfo?.account_number, 'Bank Account Number');
   requireValue(preferences?.preferred_motorcycle || application.vehicle_model, 'Preferred Motorcycle');
   requireValue(preferences?.loan_tenure, 'Loan Tenure');
 

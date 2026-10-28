@@ -34,6 +34,7 @@ export type LoanWorkflowAction =
   | 'DOCUMENTS_READY'
   | 'CLOSE_REJECTED'
   | 'COMPLETE_APPROVED_CONTACT'
+  | 'CANCEL_APPLICATION'
   | 'UNDO_LAST_ACTION';
 
 export const DEFAULT_VEHICLE_TAGS = ['Motorcycle'];
@@ -69,7 +70,36 @@ export interface FinanceProfile {
   terms: FinanceProfileTerm[];
 }
 
+// Frozen legacy configuration. The Commission Rules panel was removed on
+// 2026-08-27 and no code turns these numbers into money any more: a deal's
+// commission is typed by hand in Task Inbox Quick Add Stock. The fields stay
+// declared so `normalizeCommissionRules` keeps round-tripping whatever is
+// already stored (including the `staff_experience_points` EXP weights that
+// share this document field) instead of stripping it on the next save.
+/** One band of the progressive Sales commission: from this monthly sales amount up to the next band. */
+export interface CommissionTier {
+  from: number;
+  percent: number;
+}
+
+/** One named commission structure; each Sales follows one (Roles & Accounts, owner 2026-10-24). */
+export interface CommissionTierPlan {
+  id: string;
+  name: string;
+  tiers: CommissionTier[];
+}
+
 export interface CommissionRules {
+  /**
+   * Progressive Sales commission bands (owner 2026-10-21), edited by Super
+   * Admin; live, unlike the frozen fields here. See src/utils/commissionTiers.ts.
+   */
+  commission_tiers?: CommissionTier[];
+  /**
+   * The commission structures (owner 2026-10-24). The first is the default for
+   * staff without one; `commission_tiers` keeps a copy of its bands.
+   */
+  commission_tier_plans?: CommissionTierPlan[];
   deal_commission_percent?: number;
   per_approved_loan: number;
   leaderboard_first: number;
@@ -82,24 +112,6 @@ export const DEFAULT_COMMISSION_RULES: CommissionRules = {
   leaderboard_first: 500,
   leaderboard_second: 300,
   leaderboard_third: 150
-};
-
-export const getDealCommissionQuote = (
-  sellingPrice: number,
-  rules: CommissionRules
-): { percent?: number; amount: number } => {
-  const rawPercent = rules.deal_commission_percent;
-  const percent = typeof rawPercent === 'number' && Number.isFinite(rawPercent) && rawPercent >= 0
-    ? Math.min(rawPercent, 100)
-    : undefined;
-  const normalizedPrice = Math.max(Number(sellingPrice) || 0, 0);
-
-  return percent === undefined
-    ? { amount: Math.max(Number(rules.per_approved_loan) || 0, 0) }
-    : {
-        percent,
-        amount: Math.round(normalizedPrice * percent) / 100
-      };
 };
 
 export interface AttendanceLatePenaltyRule {
@@ -117,7 +129,25 @@ export interface AttendancePolicy {
   late_penalty_rules: AttendanceLatePenaltyRule[];
   require_office_wifi_for_check_in: boolean;
   office_network_ips: string[];
+  // The top-level times and Wi-Fi fields are the main team. Extra teams (another
+  // shop) override only their own shift and office network; grace and penalty
+  // tiers stay shared. Assignments are keyed by RoleAccount.id so renames keep them.
+  main_team_name: string;
+  teams: AttendanceTeam[];
+  staff_team_assignments: Record<string, string>;
 }
+
+export interface AttendanceTeam {
+  id: string;
+  name: string;
+  work_start_time: string;
+  work_end_time: string;
+  overtime_next_day_start_time: string;
+  require_office_wifi_for_check_in: boolean;
+  office_network_ips: string[];
+}
+
+export const ATTENDANCE_MAIN_TEAM_ID = 'main';
 
 export const DEFAULT_ATTENDANCE_POLICY: AttendancePolicy = {
   work_start_time: '10:00',
@@ -129,7 +159,10 @@ export const DEFAULT_ATTENDANCE_POLICY: AttendancePolicy = {
     { threshold_minutes: 60, penalty_type: 'salary_days', amount: 0.5, deduction_days: 0.5 }
   ],
   require_office_wifi_for_check_in: false,
-  office_network_ips: []
+  office_network_ips: [],
+  main_team_name: '',
+  teams: [],
+  staff_team_assignments: {}
 };
 
 export type AttendanceScheduleStatus = 'Working' | 'Off Day';
@@ -146,6 +179,7 @@ export interface AttendanceWeeklySchedule {
   staff_role: RoleAccountRole;
   monthly_salary: number;
   days: AttendanceScheduleDay[];
+  team_id?: string;
   updated_by: string;
   updated_role: RoleAccountRole;
   updated_at: string;
@@ -156,6 +190,45 @@ export const normalizeAttendanceNetworkIp = (value: unknown) => {
   if (!normalized) return '';
   if (normalized === '::1') return '127.0.0.1';
   return normalized.startsWith('::ffff:') ? normalized.slice(7) : normalized;
+};
+
+const ATTENDANCE_CLOCK_TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+const normalizeAttendanceClockTime = (value: unknown, fallback: string) => (
+  typeof value === 'string' && ATTENDANCE_CLOCK_TIME.test(value) ? value : fallback
+);
+
+const normalizeAttendanceNetworkIps = (value: unknown, fallback: string[]) => (
+  Array.isArray(value)
+    ? [...new Set(value
+      .slice(0, 20)
+      .map(normalizeAttendanceNetworkIp)
+      .filter((ip) => ip && ip.length <= 64))]
+    : fallback
+);
+
+const normalizeAttendanceTeams = (value: unknown): AttendanceTeam[] => {
+  if (!Array.isArray(value)) return [];
+  const seenIds = new Set<string>([ATTENDANCE_MAIN_TEAM_ID]);
+  return value.slice(0, 10).flatMap((item) => {
+    const source = item && typeof item === 'object' ? item as Partial<AttendanceTeam> : {};
+    const id = String(source.id || '').trim().slice(0, 64);
+    const name = String(source.name || '').trim().slice(0, 60);
+    if (!id || !name || seenIds.has(id)) return [];
+    seenIds.add(id);
+    return [{
+      id,
+      name,
+      work_start_time: normalizeAttendanceClockTime(source.work_start_time, DEFAULT_ATTENDANCE_POLICY.work_start_time),
+      work_end_time: normalizeAttendanceClockTime(source.work_end_time, DEFAULT_ATTENDANCE_POLICY.work_end_time),
+      overtime_next_day_start_time: normalizeAttendanceClockTime(
+        source.overtime_next_day_start_time,
+        DEFAULT_ATTENDANCE_POLICY.overtime_next_day_start_time
+      ),
+      require_office_wifi_for_check_in: Boolean(source.require_office_wifi_for_check_in),
+      office_network_ips: normalizeAttendanceNetworkIps(source.office_network_ips, [])
+    }];
+  });
 };
 
 export const normalizeAttendancePolicy = (value: unknown): AttendancePolicy => {
@@ -188,6 +261,15 @@ export const normalizeAttendancePolicy = (value: unknown): AttendancePolicy => {
       .filter((ip) => ip && ip.length <= 64))]
     : DEFAULT_ATTENDANCE_POLICY.office_network_ips;
   const uniqueRules = new Map<number, AttendanceLatePenaltyRule>();
+  const teams = normalizeAttendanceTeams(source.teams);
+  const teamIds = new Set(teams.map((team) => team.id));
+  const rawAssignments = source.staff_team_assignments && typeof source.staff_team_assignments === 'object'
+    ? source.staff_team_assignments as Record<string, unknown>
+    : {};
+  const staffTeamAssignments = Object.fromEntries(Object.entries(rawAssignments)
+    .slice(0, 500)
+    .map(([accountId, teamId]) => [String(accountId).trim().slice(0, 128), String(teamId || '').trim()])
+    .filter(([accountId, teamId]) => accountId && teamIds.has(teamId)));
 
   rawRules.slice(0, 10).forEach((rule) => {
     const threshold = Number(rule?.threshold_minutes);
@@ -216,7 +298,45 @@ export const normalizeAttendancePolicy = (value: unknown): AttendancePolicy => {
     late_penalty_rules: [...uniqueRules.values()]
       .sort((left, right) => left.threshold_minutes - right.threshold_minutes),
     require_office_wifi_for_check_in: Boolean(source.require_office_wifi_for_check_in),
-    office_network_ips: officeNetworkIps
+    office_network_ips: officeNetworkIps,
+    main_team_name: String(source.main_team_name || '').trim().slice(0, 60),
+    teams,
+    staff_team_assignments: staffTeamAssignments
+  };
+};
+
+export const getAttendanceTeamIdForAccount = (policy: AttendancePolicy, accountId: string | undefined) => {
+  const teamId = accountId ? policy.staff_team_assignments?.[accountId] : undefined;
+  return teamId && (policy.teams || []).some((team) => team.id === teamId)
+    ? teamId
+    : ATTENDANCE_MAIN_TEAM_ID;
+};
+
+// Staff browsers (Admin / Sales) read the policy from public_config, which must
+// not carry any shop's office IPs; the server answers the Wi-Fi check instead.
+export const withoutAttendanceNetworkIps = (policy: AttendancePolicy): AttendancePolicy => ({
+  ...policy,
+  office_network_ips: [],
+  teams: policy.teams.map((team) => ({ ...team, office_network_ips: [] }))
+});
+
+// The effective rules for one staff member: the main policy with their team's
+// shift and office network applied on top.
+export const resolveAttendancePolicyForAccount = (
+  policy: AttendancePolicy,
+  accountId: string | undefined
+): AttendancePolicy => {
+  const normalized = normalizeAttendancePolicy(policy);
+  const teamId = getAttendanceTeamIdForAccount(normalized, accountId);
+  const team = normalized.teams.find((item) => item.id === teamId);
+  if (!team) return normalized;
+  return {
+    ...normalized,
+    work_start_time: team.work_start_time,
+    work_end_time: team.work_end_time,
+    overtime_next_day_start_time: team.overtime_next_day_start_time,
+    require_office_wifi_for_check_in: team.require_office_wifi_for_check_in,
+    office_network_ips: team.office_network_ips
   };
 };
 
@@ -238,12 +358,8 @@ export interface MonthlySettlementSnapshot {
     paid?: number;
     reversed?: number;
   }>;
-  team_battle: {
-    teams: Array<{ name: string; approved_count: number }>;
-    winner_name: string;
-    is_tie: boolean;
-  };
-  commission_rules: CommissionRules;
+  // Older snapshots archived the then-current rules; nothing writes this now.
+  commission_rules?: CommissionRules;
 }
 
 const STANDARD_FINANCE_TERMS: FinanceProfileTerm[] = [
@@ -467,6 +583,13 @@ export interface BankDefinition {
   name: string;
   icon_data_url: string;
   active: boolean;
+  /** Column in the Loan Applications table; unset follows `active`. */
+  show_in_loan_table?: boolean;
+  /**
+   * Banks this lender can auto-debit the instalment from (owner 2026-10-25,
+   * AEON). Unset or empty means any bank; AEON starts from its own list.
+   */
+  auto_debit_banks?: string[];
   created_at: string;
 }
 
@@ -597,6 +720,10 @@ export interface LoanApplication {
   employment_details?: CustomerEmploymentDetails;
   preferences?: CustomerPreferences;
   deal_finance?: DealFinance;
+  /** Post-approval delivery checklist (meeting 2026-10-13); see src/utils/deliveryChecklist.ts. */
+  delivery_checklist?: DeliveryChecklist;
+  /** Unit changes after approval, newest last. */
+  unit_exchanges?: UnitExchange[];
   workflow_undo?: LoanWorkflowUndoCheckpoint;
   customer_intake_tracking?: CustomerIntakeTracking;
   activity_thread?: CustomerActivityEntry[];
@@ -604,7 +731,7 @@ export interface LoanApplication {
 
 export type ReversibleLoanWorkflowAction = Exclude<
   LoanWorkflowAction,
-  'SUBMIT_TO_BANK' | 'UNDO_LAST_ACTION'
+  'SUBMIT_TO_BANK' | 'CANCEL_APPLICATION' | 'UNDO_LAST_ACTION'
 >;
 
 export interface LoanWorkflowSnapshot {
@@ -680,6 +807,10 @@ export interface CustomerIntakeShortLink {
   staff_utm: string;
   active: boolean;
   created_at: string;
+  // Firebase Auth uid of the staff member who created the link. Public intake
+  // routes to the staff-link queue when this uid is no longer an Active,
+  // matching staff_access row. Absent on links created before 2026-09-29.
+  owner_uid?: string;
 }
 
 export type RawCustomerChannel =
@@ -770,6 +901,8 @@ export interface CustomerPersonalInfo {
   gender?: string;
   race?: string;
   marital_status: string;
+  /** Collected for Married, Divorced and Widowed customers (see hasChildrenQuestion). */
+  number_of_children?: string;
   bank_name: string;
   account_number: string;
   email: string;
@@ -777,6 +910,10 @@ export interface CustomerPersonalInfo {
   full_address: string;
   resident_address?: string;
   years_at_residence: string;
+  /** Year the customer moved to the current address; years_at_residence is derived from it. Staff forms only. */
+  residence_start_year?: string;
+  /** Month the customer moved in, "1"-"12". Staff forms only. */
+  residence_start_month?: string;
   housing_status: string;
 }
 
@@ -788,9 +925,15 @@ export interface EmergencyContact {
 }
 
 export interface CustomerEmploymentDetails {
+  /** Employee or Self-employed. */
+  occupation_type?: string;
   company_name: string;
   position: string;
   years_employed: string;
+  /** Year the customer started this job (e.g. "2019"); years_employed is derived from it. */
+  employment_start_year?: string;
+  /** Month the customer started this job, "1"-"12". */
+  employment_start_month?: string;
   company_address: string;
   office_phone_no: string;
   /** @deprecated Legacy stored field. Current customer application forms do not collect it. */
@@ -804,6 +947,94 @@ export interface CustomerPreferences {
   salary_payment_method: string;
   preferred_motorcycle: string;
   loan_tenure: string;
+}
+
+/**
+ * Steps an approved deal walks through before and after delivery. The order is
+ * the order on the Delivery page; who may record each one lives in
+ * DELIVERY_STEPS (src/utils/deliveryChecklist.ts) and in firestore.rules.
+ * Bank disbursement and settlement are read from deal_finance, not stored here.
+ */
+export type DeliveryStepKey =
+  | 'full_loan_check'
+  | 'collect_payment'
+  | 'motor_order'
+  | 'arrival_check'
+  | 'k1'
+  | 'insurance'
+  | 'jpj_registration'
+  | 'print_agreement'
+  | 'customer_contact'
+  | 'customer_sign'
+  | 'ops_check'
+  | 'sales_claim'
+  | 'documentation'
+  | 'invoice';
+
+export interface DeliveryStepRecord {
+  /** ISO time the step was completed; '' while it is open. */
+  done_at: string;
+  /** Staff name that completed the step; '' while it is open. */
+  done_by: string;
+  done_by_role: RoleAccountRole | '';
+  note: string;
+  /** application_documents ids attached to this step (HP PDF, K1, policy, signed agreement...). */
+  document_ids: string[];
+  /** Step-specific values, all strings: e.g. insurer / policy_no / amount for insurance. */
+  data: Record<string, string>;
+}
+
+export interface DeliveryChecklist {
+  steps: Partial<Record<DeliveryStepKey, DeliveryStepRecord>>;
+  updated_at: string;
+  updated_by: string;
+}
+
+export type DeliveryPaymentMethod = 'Cash' | 'Bank Transfer' | 'Card' | 'Other';
+
+/**
+ * One payment Sales collected from the customer (meeting 2026-10-13: every
+ * payment on its own line). Stored in the delivery_payments collection; a
+ * payment is never deleted, a mistake is voided with a reason.
+ */
+export interface DeliveryPayment {
+  id: string;
+  application_id: string;
+  amount: number;
+  method: DeliveryPaymentMethod;
+  received_at: string;
+  recorded_by: string;
+  recorded_by_role: RoleAccountRole;
+  recorded_at: string;
+  note: string;
+  /** application_documents id of the receipt photo, '' when none. */
+  receipt_document_id: string;
+  voided_at: string;
+  voided_by: string;
+  void_reason: string;
+}
+
+export type StockOrderStatus = 'Ordered' | 'Arrived' | 'Cancelled';
+
+/**
+ * A bike the Operations Manager is sourcing for an approved deal (owner
+ * 2026-10-18): ordered from a supplier when no stock unit fits. One per
+ * application, kept in stock_orders/{application_id}.
+ */
+export interface StockOrder {
+  application_id: string;
+  vehicle_model: string;
+  colour: string;
+  condition: string;
+  supplier: string;
+  /** Expected arrival, YYYY-MM-DD, '' when not known. */
+  eta: string;
+  note: string;
+  status: StockOrderStatus;
+  ordered_at: string;
+  ordered_by: string;
+  updated_at: string;
+  updated_by: string;
 }
 
 export type DealSaleStatus = 'Pending Acceptance' | 'Customer Accepted' | 'Bike Delivered' | 'Cancelled';
@@ -824,6 +1055,11 @@ export interface DealFinance {
   approved_discount: number;
   final_selling_price: number;
   customer_deposit_received: number;
+  /**
+   * Malaysia day (YYYY-MM-DD) the deposit counts from. Set to a later day when the money arrives after
+   * delivery: the ledger sync books it on that day, not before. Absent = already received.
+   */
+  customer_deposit_date?: string;
   customer_cash_payment: number;
   bank_disbursement: number;
   other_income: number;
@@ -836,6 +1072,8 @@ export interface DealFinance {
   account_verified_at: string;
   account_verified_by: string;
   commission_status: DealCommissionStatus;
+  /** 'tier': follows the progressive commission tiers; 'manual': a typed amount. Absent on older deals. */
+  commission_source?: 'tier' | 'manual';
   commission_percent?: number;
   commission_amount: number;
   commission_paid_at: string;
@@ -949,6 +1187,39 @@ export interface BankApplication {
   reject_next_step?: RejectNextStepType;
   next_follow_up_at?: string;
   notes: string;
+  /**
+   * Finance details Admin adds once the bank approved (owner meeting 2026-10-13,
+   * "Bank Applications -> add finance"). Loan amount, interest, tenure and the
+   * monthly installment are the offer fields above.
+   */
+  deposit_amount?: string;
+  /** Selling price the approved loan is measured against (owner meeting 2026-10-20). */
+  selling_price?: string;
+  /** Plate of a used bike financed by this bank. */
+  number_plate?: string;
+  engine_number?: string;
+  chassis_number?: string;
+}
+
+/**
+ * The customer changes to another unit after approval (owner meeting
+ * 2026-10-13, Sales "Bank Applications -> add exchange"). One record per
+ * change, newest last; Admin then updates the bank's finance details.
+ */
+export interface UnitExchange {
+  id: string;
+  bank_application_id: string;
+  from_model: string;
+  vehicle_model: string;
+  loan_amount: string;
+  installment_years: string;
+  /** Used bike only. */
+  number_plate: string;
+  /** Used bike only. */
+  mileage: string;
+  recorded_by: string;
+  recorded_by_role: RoleAccountRole;
+  recorded_at: string;
 }
 
 export interface ErrorCodeDefinition {
@@ -996,15 +1267,10 @@ export interface RoleAccount {
   avatar_data_url?: string;
   default_avatar_id?: string;
   password_hash?: string;
-}
-
-export interface RolePermissionSetting {
-  role: RoleAccountRole;
-  page_id: string;
-  section_id: string;
-  enabled: boolean;
-  updated_at?: string;
-  updated_by?: string;
+  /** CommissionTierPlan id; empty or unknown = the first plan. */
+  commission_tier_plan_id?: string;
+  /** Admin only: other shops (attendance team ids) this Admin also works in, like their own shop. Attendance is unchanged. */
+  extra_shop_ids?: string[];
 }
 
 // Super-Admin-configurable page and inside-page detail access for Admin / Sales.
@@ -1063,19 +1329,6 @@ export interface CustomMission {
   created_by: string;
 }
 
-export type RewardTeamStatus = 'Active' | 'Archived';
-
-export interface RewardTeam {
-  id: string;
-  name: string;
-  member_names: string[];
-  bonus_amount: number;
-  status: RewardTeamStatus;
-  created_at: string;
-  created_by: string;
-  updated_at?: string;
-}
-
 export type ApprovalRequestType =
   | 'sales_discount_request'
   | 'special_loan_case'
@@ -1088,6 +1341,8 @@ export type ApprovalRequestStatus = 'Pending' | 'Approved' | 'Rejected' | 'Cance
 
 export interface ApprovalRequest {
   id: string;
+  // Attendance team for staff Leave / MC / OT requests; unused by other approvals.
+  team_id?: string;
   type: ApprovalRequestType;
   status: ApprovalRequestStatus;
   requester_name: string;
@@ -1214,7 +1469,8 @@ export type NotificationType =
   | 'customer_call_back_due'
   | 'custom_mission_target_reached'
   | 'rejected_loan_missing_code'
-  | 'internal_comment_tagged';
+  | 'internal_comment_tagged'
+  | 'delivery_step_due';
 
 export type NotificationSeverity = 'info' | 'warning' | 'success' | 'critical';
 
